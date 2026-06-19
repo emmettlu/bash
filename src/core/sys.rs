@@ -7,7 +7,9 @@ pub(crate) use windows as platform;
 
 pub(crate) mod hostname;
 
-pub mod fs;
+pub(crate) mod traits;
+
+pub use platform::fs::{self, DisplayPath};
 
 pub use platform::async_pipe;
 pub use platform::commands;

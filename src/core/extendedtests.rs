@@ -4,10 +4,7 @@ use std::path::Path;
 use crate::core::{
     ExecutionParameters, Shell, ShellFd, arithmetic, env, error, escape, expansion, extensions,
     namedoptions, patterns,
-    sys::{
-        fs::{MetadataExt, PathExt},
-        users,
-    },
+    sys::{fs::MetadataExt, traits::PathExt, users},
     variables::{self, ArrayLiteral},
 };
 

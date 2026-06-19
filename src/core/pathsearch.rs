@@ -6,7 +6,7 @@ use std::{
 };
 
 use crate::core::sys;
-use crate::core::sys::fs::PathExt;
+use crate::core::sys::traits::PathExt;
 
 /// Encapsulates the result of a path search.
 pub struct ExecutablePathSearch<PI, N> {

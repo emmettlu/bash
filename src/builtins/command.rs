@@ -3,7 +3,7 @@ use std::{fmt::Display, io::Write, path::Path};
 
 use crate::core::{
     ExecutionResult, builtins, commands, pathsearch,
-    sys::{self, fs::PathExt},
+    sys::{self, traits::PathExt},
 };
 
 /// Directly invokes an external command, without going through typical search order.
@@ -100,9 +100,9 @@ impl CommandCommand {
         if sys::fs::contains_path_separator(command_name) {
             let candidate_path = shell.absolute_path(Path::new(command_name));
             if candidate_path.executable() {
-                Some(FoundCommand::External(
-                    candidate_path.to_string_lossy().to_string(),
-                ))
+                Some(FoundCommand::External(sys::fs::display_path(
+                    &candidate_path,
+                )))
             } else {
                 None
             }
@@ -118,11 +118,11 @@ impl CommandCommand {
 
                 pathsearch::search_for_executable(dirs.iter(), command_name)
                     .next()
-                    .map(|path| FoundCommand::External(path.to_string_lossy().to_string()))
+                    .map(|path| FoundCommand::External(sys::fs::display_path(&path)))
             } else {
                 shell
                     .find_first_executable_in_path_using_cache(command_name)
-                    .map(|path| FoundCommand::External(path.to_string_lossy().to_string()))
+                    .map(|path| FoundCommand::External(sys::fs::display_path(&path)))
             }
         }
     }

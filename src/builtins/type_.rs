@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use clap::Parser;
 
-use crate::core::sys::{self, fs::PathExt};
+use crate::core::sys::{self, traits::PathExt};
 use crate::core::{ExecutionResult, Shell, builtins, parser::ast};
 
 /// Inspect the type of a named shell item.
@@ -82,7 +82,7 @@ impl builtins::Command for TypeCommand {
                         }
                         ResolvedType::File { path, .. } => {
                             if self.show_path_only || self.force_path_search {
-                                writeln!(context.stdout(), "{}", path.to_string_lossy())?;
+                                writeln!(context.stdout(), "{}", sys::fs::display_path(&path))?;
                             } else {
                                 writeln!(context.stdout(), "file")?;
                             }
@@ -105,23 +105,20 @@ impl builtins::Command for TypeCommand {
                         }
                         ResolvedType::File { path, hashed } => {
                             if hashed && self.all_locations && !self.force_path_search {
-                                // Do nothing. When we're displaying all locations, then
-                                // we don't show hashed paths.
+                                // Do nothing.
                             } else if self.show_path_only || self.force_path_search {
-                                writeln!(context.stdout(), "{}", path.to_string_lossy())?;
+                                writeln!(context.stdout(), "{}", sys::fs::display_path(&path))?;
                             } else if hashed {
                                 writeln!(
                                     context.stdout(),
-                                    "{name} is hashed ({path})",
-                                    name = name,
-                                    path = path.to_string_lossy()
+                                    "{name} is hashed ({})",
+                                    sys::fs::display_path(&path)
                                 )?;
                             } else {
                                 writeln!(
                                     context.stdout(),
-                                    "{name} is {path}",
-                                    name = name,
-                                    path = path.to_string_lossy()
+                                    "{name} is {}",
+                                    sys::fs::display_path(&path)
                                 )?;
                             }
                         }

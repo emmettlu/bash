@@ -1,3 +1,4 @@
+use crate::core::sys;
 use clap::Parser;
 use std::{io::Write, path::PathBuf};
 
@@ -54,7 +55,7 @@ impl builtins::Command for HashCommand {
                         writeln!(
                             context.stdout(),
                             "builtin hash -p {} {name}",
-                            path.to_string_lossy()
+                            sys::fs::display_path(path.as_path())
                         )?;
                     } else {
                         let mut prefix = String::new();
@@ -67,7 +68,7 @@ impl builtins::Command for HashCommand {
                         writeln!(
                             context.stdout(),
                             "{prefix}{}",
-                            path.to_string_lossy().as_ref()
+                            sys::fs::display_path(path.as_path())
                         )?;
                     }
                 } else {

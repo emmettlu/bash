@@ -2,7 +2,7 @@ pub use crate::core::sys::stubs::async_pipe;
 pub use crate::core::sys::stubs::commands;
 pub(crate) mod env;
 pub use crate::core::sys::stubs::fd;
-pub(crate) mod fs;
+pub mod fs;
 pub use crate::core::sys::stubs::input;
 pub(crate) mod network;
 pub use crate::core::sys::stubs::poll;

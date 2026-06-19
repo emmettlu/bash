@@ -9,6 +9,9 @@ use crate::core::error;
 // Selectively re-export items from stubs that we don't override.
 pub(crate) use crate::core::sys::stubs::fs::MetadataExt;
 
+// Re-export PathExt so it's accessible via platform::fs::PathExt.
+pub use crate::core::sys::traits::PathExt;
+
 /// Cached list of executable extensions from the `PATHEXT` environment
 /// variable. Each entry retains its leading dot (e.g. `".exe"`) and is stored
 /// lowercased so case-insensitive comparisons can be done without allocating.
@@ -74,7 +77,7 @@ pub fn resolve_executable(path: PathBuf) -> Option<PathBuf> {
     None
 }
 
-impl crate::core::sys::fs::PathExt for Path {
+impl crate::core::sys::traits::PathExt for Path {
     fn readable(&self) -> bool {
         self.exists()
     }
@@ -305,6 +308,21 @@ pub fn normalize_path_separators(s: &str) -> std::borrow::Cow<'_, str> {
         std::borrow::Cow::Owned(s.replace('\\', "/"))
     } else {
         std::borrow::Cow::Borrowed(s)
+    }
+}
+
+/// Converts a `Path` to a Unix-style string for shell UI output.
+/// Replaces `\` with `/` so paths look like Unix.
+pub fn display_path(path: &std::path::Path) -> String {
+    path.to_string_lossy().replace('\\', "/")
+}
+
+/// Wrapper that displays a `PathBuf` with Unix-style forward slashes on Windows.
+pub struct DisplayPath(pub std::path::PathBuf);
+
+impl std::fmt::Display for DisplayPath {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", display_path(&self.0))
     }
 }
 

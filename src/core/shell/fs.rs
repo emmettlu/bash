@@ -8,7 +8,7 @@ use crate::core::{
     ExecutionParameters, ShellFd,
     env::{EnvironmentLookup, EnvironmentScope},
     error, openfiles, pathsearch,
-    sys::{fs::PathExt as _, users},
+    sys::{traits::PathExt as _, users},
     variables,
 };
 

@@ -1,4 +1,4 @@
-use crate::core::{ExecutionResult, builtins};
+use crate::core::{ExecutionResult, builtins, sys};
 use clap::Parser;
 use std::{borrow::Cow, io::Write, path::Path};
 
@@ -33,7 +33,11 @@ impl builtins::Command for PwdCommand {
             cwd = cwd.canonicalize()?.into();
         }
 
-        writeln!(context.stdout(), "{}", cwd.to_string_lossy())?;
+        writeln!(
+            context.stdout(),
+            "{}",
+            sys::fs::DisplayPath(cwd.into_owned())
+        )?;
 
         Ok(ExecutionResult::success())
     }

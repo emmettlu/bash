@@ -2,6 +2,21 @@
 
 use crate::core::error;
 
+/// Stub: converts a `Path` to a Unix-style string for shell UI output.
+/// On Unix, paths already use forward slashes, so this is a no-op.
+pub fn display_path(path: &std::path::Path) -> String {
+    path.to_string_lossy().to_string()
+}
+
+/// Stub: wrapper that displays a `PathBuf` with forward slashes.
+pub struct DisplayPath(pub std::path::PathBuf);
+
+impl std::fmt::Display for DisplayPath {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}", display_path(&self.0))
+    }
+}
+
 pub(crate) trait MetadataExt {
     fn gid(&self) -> u32 {
         0
@@ -127,7 +142,7 @@ pub const fn normalize_path_separators(s: &str) -> std::borrow::Cow<'_, str> {
 /// executable (per the stub `PathExt`, which considers every path
 /// executable).
 pub fn resolve_executable(path: std::path::PathBuf) -> Option<std::path::PathBuf> {
-    use crate::core::sys::fs::PathExt;
+    use crate::core::sys::traits::PathExt;
     if path.as_path().executable() {
         Some(path)
     } else {

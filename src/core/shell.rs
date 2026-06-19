@@ -55,7 +55,6 @@ pub use state::ShellState;
 /// * `SE` - The shell extensions implementation to use. These extensions are statically injected
 ///   into the shell at compile time to provide custom behavior. When unspecified, defaults to
 ///   `DefaultShellExtensions`, which provide standard behavior.
-
 pub struct Shell<SE: extensions::ShellExtensions = extensions::DefaultShellExtensions> {
     /// Injected error behavior.
     error_formatter: SE::ErrorFormatter,

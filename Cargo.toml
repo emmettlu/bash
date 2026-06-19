@@ -1,0 +1,230 @@
+[package]
+name = "bash"
+version = "0.4.0"
+edition = "2024"
+description = "Rust-implemented shell focused on bash compatibility"
+readme = "README.md"
+repository = "https://github.com/reubeno/brush"
+license = "MIT"
+keywords = ["bash", "cli", "script", "sh", "shell"]
+categories = ["command-line-utilities", "development-tools"]
+
+[package.metadata.binstall]
+pkg-url = "{ repo }/releases/download/brush-shell-v{ version }/brush-{ target }{ archive-suffix }"
+
+[dependencies]
+anyhow = "1"
+arbitrary = { version = "1", features = ["derive"], optional = true }
+assert_cmd = "2"
+assert_fs = "1"
+async-recursion = "1"
+async-trait = "0"
+bon = "3"
+cached = "0"
+check_elevation = "0"
+chrono = "0"
+clap = { version = "4", features = ["derive", "env", "wrap_help"] }
+clap_complete = "4"
+clap_mangen = "0"
+clap-markdown = "0"
+color-print = "0"
+colored = "3"
+compio = { version = "0.19", default-features = false, features = [
+  "macros",
+  "process",
+  "runtime",
+  "signal",
+  "time"
+] }
+const_format = "0"
+descape = "3"
+diff = "0"
+etcetera = "0"
+fancy-regex = "0"
+futures = "0"
+git-version = "0"
+glob = "0"
+hostname = "0"
+indent = "0"
+indenter = "0"
+indexmap = "2"
+inherent = "1"
+insta = { version = "1", features = ["glob", "redactions", "ron", "yaml"] }
+itertools = "0"
+junit-report = "0"
+libfuzzer-sys = { version = "0.4", optional = true }
+miette = { version = "7", default-features = false, features = [
+  "derive",
+  "fancy"
+], optional = true }
+normalize-path = "0"
+num_cpus = "1"
+os-release = "0"
+peg = "0"
+predicates = "3"
+pretty_assertions = { version = "1", features = ["unstable"] }
+radix_trie = "0"
+rand = "0.10.0"
+regex = "1"
+rpds = { version = "1", features = ["serde"] }
+serde = { version = "1", features = ["derive", "rc"] }
+serde_json = "1"
+serde_yaml = "0"
+strip-ansi-escapes = "0"
+strum = "0"
+strum_macros = "0"
+tempfile = "3"
+test-with = { version = "0", default-features = false, features = ["executable"] }
+thiserror = "2"
+toml = "1"
+tracing = "0"
+tracing-subscriber = "0"
+utf8-chars = "3"
+version-compare = "0"
+walkdir = "2"
+which = "8"
+whoami = "2"
+windows-sys = { version = "0", features = [
+  "Win32_System_Console",
+  "Win32_UI_Input_KeyboardAndMouse"
+] }
+winnow = { version = "1", optional = true }
+xshell = "0"
+
+[features]
+default = [
+  "basic",
+  "builtin.alias",
+  "builtin.bg",
+  "builtin.bind",
+  "builtin.break",
+  "builtin.builtin",
+  "builtin.caller",
+  "builtin.cd",
+  "builtin.clear",
+  "builtin.colon",
+  "builtin.command",
+  "builtin.compgen",
+  "builtin.complete",
+  "builtin.compopt",
+  "builtin.continue",
+  "builtin.declare",
+  "builtin.dirs",
+  "builtin.dot",
+  "builtin.echo",
+  "builtin.enable",
+  "builtin.eval",
+  "builtin.exec",
+  "builtin.exit",
+  "builtin.export",
+  "builtin.false",
+  "builtin.fc",
+  "builtin.fg",
+  "builtin.getopts",
+  "builtin.hash",
+  "builtin.help",
+  "builtin.history",
+  "builtin.jobs",
+  "builtin.kill",
+  "builtin.let",
+  "builtin.mapfile",
+  "builtin.popd",
+  "builtin.printf",
+  "builtin.pushd",
+  "builtin.pwd",
+  "builtin.read",
+  "builtin.return",
+  "builtin.set",
+  "builtin.shift",
+  "builtin.shopt",
+  "builtin.suspend",
+  "builtin.test",
+  "builtin.times",
+  "builtin.trap",
+  "builtin.true",
+  "builtin.type",
+  "builtin.ulimit",
+  "builtin.umask",
+  "builtin.unalias",
+  "builtin.unset",
+  "builtin.wait",
+  "minimal"
+]
+arbitrary = ["dep:arbitrary"]
+basic = ["completion"]
+completion = []
+debug-tracing = ["peg/trace"]
+diagnostics = ["dep:miette"]
+experimental = ["experimental-builtins", "experimental-parser"]
+experimental-builtins = []
+experimental-load = []
+experimental-parser = ["winnow-parser"]
+highlighting = []
+minimal = []
+schema = []
+serde = []
+winnow-parser = ["dep:winnow"]
+
+"builtin.alias" = []
+"builtin.bg" = []
+"builtin.bind" = []
+"builtin.break" = []
+"builtin.builtin" = []
+"builtin.caller" = []
+"builtin.cd" = []
+"builtin.clear" = []
+"builtin.colon" = []
+"builtin.command" = []
+"builtin.compgen" = []
+"builtin.complete" = []
+"builtin.compopt" = []
+"builtin.continue" = []
+"builtin.declare" = []
+"builtin.dirs" = []
+"builtin.dot" = []
+"builtin.echo" = []
+"builtin.enable" = []
+"builtin.eval" = []
+"builtin.exec" = []
+"builtin.exit" = []
+"builtin.export" = []
+"builtin.false" = []
+"builtin.fc" = []
+"builtin.fg" = []
+"builtin.getopts" = []
+"builtin.hash" = []
+"builtin.help" = []
+"builtin.history" = []
+"builtin.jobs" = []
+"builtin.kill" = []
+"builtin.let" = []
+"builtin.mapfile" = []
+"builtin.popd" = []
+"builtin.printf" = []
+"builtin.pushd" = []
+"builtin.pwd" = []
+"builtin.read" = []
+"builtin.return" = []
+"builtin.save" = []
+"builtin.set" = []
+"builtin.shift" = []
+"builtin.shopt" = []
+"builtin.suspend" = []
+"builtin.test" = []
+"builtin.times" = []
+"builtin.trap" = []
+"builtin.true" = []
+"builtin.type" = []
+"builtin.ulimit" = []
+"builtin.umask" = []
+"builtin.unalias" = []
+"builtin.unset" = []
+"builtin.wait" = []
+
+[profile.release]
+opt-level = "s"
+debug = false
+strip = true
+lto = true
+panic = "abort"
+codegen-units = 1

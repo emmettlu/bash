@@ -55,9 +55,37 @@ pub struct SourcePositionOffset {
 #[cfg_attr(test, derive(PartialEq, Eq, serde::Serialize, serde::Deserialize))]
 pub struct SourceSpan {
     /// The start position.
+    #[cfg_attr(test, serde(with = "source_position_arc_serde"))]
     pub start: Arc<SourcePosition>,
     /// The end position of the span (exclusive).
+    #[cfg_attr(test, serde(with = "source_position_arc_serde"))]
     pub end: Arc<SourcePosition>,
+}
+
+#[cfg(test)]
+mod source_position_arc_serde {
+    use std::sync::Arc;
+
+    use serde::{Deserialize as _, Serialize as _};
+
+    use super::SourcePosition;
+
+    pub(super) fn serialize<S>(
+        value: &Arc<SourcePosition>,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        value.as_ref().serialize(serializer)
+    }
+
+    pub(super) fn deserialize<'de, D>(deserializer: D) -> Result<Arc<SourcePosition>, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        SourcePosition::deserialize(deserializer).map(Arc::new)
+    }
 }
 
 impl SourceSpan {

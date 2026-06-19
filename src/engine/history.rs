@@ -2,6 +2,7 @@
 
 use chrono::Utc;
 use std::{
+    collections::HashMap,
     io::{BufRead, Read, Write},
     path::Path,
 };
@@ -15,8 +16,8 @@ type ItemId = i64;
 // TODO(history): support maximum item count
 #[derive(Clone, Default)]
 pub struct History {
-    items: rpds::VectorSync<ItemId>,
-    id_map: rpds::HashTrieMapSync<ItemId, Item>,
+    items: Vec<ItemId>,
+    id_map: HashMap<ItemId, Item>,
     next_id: ItemId,
 }
 
@@ -105,21 +106,13 @@ impl History {
     /// Removes the nth item from the history. Returns the removed item, or `None` if no such item
     /// exists (i.e., because it was out of range).
     pub fn remove_nth_item(&mut self, n: usize) -> bool {
-        if let Some(id) = self.items.get(n).copied() {
-            self.items = self
-                .items
-                .into_iter()
-                .enumerate()
-                .filter_map(|(i, id)| if i != n { Some(id) } else { None })
-                .copied()
-                .collect();
-
-            self.id_map.remove_mut(&id);
-
-            true
-        } else {
-            false
+        if n >= self.items.len() {
+            return false;
         }
+
+        let id = self.items.remove(n);
+        self.id_map.remove(&id);
+        true
     }
 
     /// Adds a new history item. Returns the unique identifier of the newly added item.
@@ -133,8 +126,8 @@ impl History {
         item.id = id;
         self.next_id += 1;
 
-        self.items.push_back_mut(item.id);
-        self.id_map.insert_mut(item.id, item);
+        self.items.push(item.id);
+        self.id_map.insert(item.id, item);
 
         Ok(id)
     }
@@ -146,21 +139,16 @@ impl History {
     ///
     /// * `id` - The unique identifier of the history item to delete.
     pub fn delete_item_by_id(&mut self, id: ItemId) -> Result<(), error::Error> {
-        self.id_map.remove_mut(&id);
-        self.items = self
-            .items
-            .into_iter()
-            .filter(|&item_id| *item_id != id)
-            .copied()
-            .collect();
+        self.id_map.remove(&id);
+        self.items.retain(|item_id| *item_id != id);
 
         Ok(())
     }
 
     /// Clears all history items.
     pub fn clear(&mut self) -> Result<(), error::Error> {
-        self.id_map = rpds::HashTrieMapSync::new_sync();
-        self.items = rpds::VectorSync::new_sync();
+        self.id_map.clear();
+        self.items.clear();
         Ok(())
     }
 

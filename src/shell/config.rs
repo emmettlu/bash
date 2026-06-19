@@ -280,7 +280,6 @@ pub fn load_config(disabled: bool, explicit_path: Option<&Path>) -> ConfigLoadRe
 #[cfg(test)]
 mod tests {
     use super::*;
-    use clap::Parser;
 
     #[test]
     fn empty_config() {
@@ -411,7 +410,7 @@ mod tests {
 
         // Simulate CLI explicitly setting values different from defaults
         // by parsing with the flags enabled
-        let args = CommandLineArgs::try_parse_from([
+        let args = <CommandLineArgs as clap::Parser>::try_parse_from([
             "brush",
             "--enable-highlighting",
             "--enable-zsh-hooks",
@@ -428,7 +427,7 @@ mod tests {
     #[test]
     fn to_ui_options_cli_only_settings() {
         let config = Config::default();
-        let args = CommandLineArgs::try_parse_from([
+        let args = <CommandLineArgs as clap::Parser>::try_parse_from([
             "brush",
             "--disable-bracketed-paste",
             "--disable-color",

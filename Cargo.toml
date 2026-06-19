@@ -11,9 +11,8 @@ categories = ["command-line-utilities", "development-tools"]
 async-recursion = "1"
 async-trait = "0"
 bon = "3"
-cached = "0"
 chrono = "0"
-clap = { version = "4", features = ["derive", "env", "wrap_help"] }
+clap = { version = "4", features = ["derive", "wrap_help"] }
 compio = { version = "0", default-features = false, features = [
   "macros",
   "process",
@@ -31,18 +30,22 @@ itertools = "0"
 
 normalize-path = "0"
 peg = "0"
-radix_trie = "0"
-rand = "0"
-regex = "1"
-rpds = "1"
-serde = { version = "1", features = ["derive", "rc"] }
+serde = { version = "1", features = ["derive"] }
 
 strum = "0"
 strum_macros = "0"
 thiserror = "2"
-toml = "1"
-tracing = "0"
-tracing-subscriber = "0"
+toml = { version = "1", default-features = false, features = [
+  "parse",
+  "serde",
+  "std"
+] }
+tracing = { version = "0", default-features = false, features = ["std"] }
+tracing-subscriber = { version = "0", default-features = false, features = [
+  "fmt",
+  "registry",
+  "std"
+] }
 utf8-chars = "3"
 windows-sys = { version = "0", features = [
   "Win32_Foundation",

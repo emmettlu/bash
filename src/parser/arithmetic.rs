@@ -1,7 +1,14 @@
 //! Parser for shell arithmetic expressions.
 
+use std::cell::RefCell;
+
 use crate::parser::ast;
 use crate::parser::error;
+
+thread_local! {
+    static ARITHMETIC_PARSE_CACHE: RefCell<crate::engine::cache::FixedCache<String, ast::ArithmeticExpr>> =
+        RefCell::new(crate::engine::cache::FixedCache::new(64));
+}
 
 /// Parses a shell arithmetic expression.
 ///
@@ -12,11 +19,14 @@ pub fn parse(input: &str) -> Result<ast::ArithmeticExpr, error::WordParseError> 
     cacheable_parse(input.to_owned())
 }
 
-#[cached::proc_macro::cached(size = 64, result = true)]
 fn cacheable_parse(input: String) -> Result<ast::ArithmeticExpr, error::WordParseError> {
-    tracing::debug!(target: "arithmetic", "parsing arithmetic expression: '{input}'");
-    arithmetic::full_expression(input.as_str())
-        .map_err(|e| error::WordParseError::ArithmeticExpression(e.into()))
+    ARITHMETIC_PARSE_CACHE.with(|cache| {
+        crate::engine::cache::get_or_try_insert_with(cache, input, |input| {
+            tracing::debug!(target: "arithmetic", "parsing arithmetic expression: '{input}'");
+            arithmetic::full_expression(input.as_str())
+                .map_err(|e| error::WordParseError::ArithmeticExpression(e.into()))
+        })
+    })
 }
 
 peg::parser! {

@@ -3,7 +3,12 @@ use crate::engine::{
     shell::Shell,
     sys::{self, users},
 };
-use std::path::Path;
+use std::{cell::RefCell, path::Path};
+
+thread_local! {
+    static PROMPT_PARSE_CACHE: RefCell<crate::engine::cache::FixedCache<String, Vec<crate::parser::prompt::PromptPiece>>> =
+        RefCell::new(crate::engine::cache::FixedCache::new(64));
+}
 
 const VERSION_MAJOR: &str = env!("CARGO_PKG_VERSION_MAJOR");
 const VERSION_MINOR: &str = env!("CARGO_PKG_VERSION_MINOR");
@@ -49,11 +54,14 @@ pub(crate) async fn expand_prompt(
     Ok(formatted_prompt)
 }
 
-#[cached::proc_macro::cached(size = 64, result = true)]
 fn parse_prompt(
     spec: String,
 ) -> Result<Vec<crate::parser::prompt::PromptPiece>, crate::parser::WordParseError> {
-    crate::parser::prompt::parse(spec.as_str())
+    PROMPT_PARSE_CACHE.with(|cache| {
+        crate::engine::cache::get_or_try_insert_with(cache, spec, |spec| {
+            crate::parser::prompt::parse(spec.as_str())
+        })
+    })
 }
 
 fn format_prompt_piece(

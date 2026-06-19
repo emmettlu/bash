@@ -4,11 +4,12 @@ use std::borrow::Cow;
 use std::cell::RefCell;
 
 use crate::engine::error;
-use cached::Cached;
+
+type RegexCacheKey = (String, bool, bool);
 
 thread_local! {
-    static REGEX_CACHE: RefCell<cached::SizedCache<(String, bool, bool), fancy_regex::Regex>> =
-        RefCell::new(cached::SizedCache::with_size(64));
+    static REGEX_CACHE: RefCell<crate::engine::cache::FixedCache<RegexCacheKey, fancy_regex::Regex>> =
+        RefCell::new(crate::engine::cache::FixedCache::new(64));
 }
 
 /// Represents a piece of a regular expression.
@@ -100,43 +101,36 @@ pub(crate) fn compile_regex(
     case_insensitive: bool,
     multiline: bool,
 ) -> Result<fancy_regex::Regex, error::Error> {
-    // Move regex_str into the key to avoid cloning on cache-hit path.
-    let key = (regex_str, case_insensitive, multiline);
-
-    let cached_regex = REGEX_CACHE.with(|cache| cache.borrow_mut().cache_get(&key).cloned());
-    if let Some(re) = cached_regex {
-        return Ok(re);
-    }
-
-    // Handle identified cases where a shell-supported regex isn't supported directly by
-    // `fancy_regex` -- specifically, adding missing escape characters.
-    let mut regex_str = add_missing_escape_chars_to_regex(key.0.as_str());
-
-    // Handle multiline enablement.
-    if multiline {
-        // The fancy_regex crate internally seems to have flags that can be used
-        // to enable multiline support, but they're not exposed via its
-        // RegexBuilder. We instead just prefix with the right flags.
-        let updated_str = std::format!("(?ms){regex_str}");
-        regex_str = updated_str.into();
-    }
-
-    let mut builder = fancy_regex::RegexBuilder::new(regex_str.as_ref());
-    builder.case_insensitive(case_insensitive);
-
-    let re = match builder.build() {
-        Ok(re) => re,
-        Err(e) => return Err(error::ErrorKind::InvalidRegexError(e, regex_str.to_string()).into()),
-    };
-
-    // Release borrow on key.0 before moving key into cache_set.
-    drop(regex_str);
-
     REGEX_CACHE.with(|cache| {
-        cache.borrow_mut().cache_set(key, re.clone());
-    });
+        crate::engine::cache::get_or_try_insert_with(
+            cache,
+            (regex_str, case_insensitive, multiline),
+            |(regex_str, case_insensitive, multiline)| {
+                // Handle identified cases where a shell-supported regex isn't supported directly by
+                // `fancy_regex` -- specifically, adding missing escape characters.
+                let mut regex_str = add_missing_escape_chars_to_regex(regex_str.as_str());
 
-    Ok(re)
+                // Handle multiline enablement.
+                if *multiline {
+                    // The fancy_regex crate internally seems to have flags that can be used
+                    // to enable multiline support, but they're not exposed via its
+                    // RegexBuilder. We instead just prefix with the right flags.
+                    let updated_str = std::format!("(?ms){regex_str}");
+                    regex_str = updated_str.into();
+                }
+
+                let mut builder = fancy_regex::RegexBuilder::new(regex_str.as_ref());
+                builder.case_insensitive(*case_insensitive);
+
+                builder.build().map_err(|e| {
+                    error::Error::from(error::ErrorKind::InvalidRegexError(
+                        e,
+                        regex_str.to_string(),
+                    ))
+                })
+            },
+        )
+    })
 }
 
 fn add_missing_escape_chars_to_regex(s: &str) -> Cow<'_, str> {

@@ -1,8 +1,16 @@
 use std::borrow::Cow;
+use std::cell::RefCell;
 use std::sync::Arc;
 use utf8_chars::BufReadCharsExt;
 
 use crate::parser::{SourcePosition, SourceSpan};
+
+type TokenizeCacheKey = (String, TokenizerOptions);
+
+thread_local! {
+    static TOKENIZE_CACHE: RefCell<crate::engine::cache::FixedCache<TokenizeCacheKey, Vec<Token>>> =
+        RefCell::new(crate::engine::cache::FixedCache::new(64));
+}
 
 #[derive(Clone, Debug)]
 pub(crate) enum TokenEndReason {
@@ -476,12 +484,16 @@ pub fn tokenize_str_with_options(
     uncached_tokenize_string(input.to_owned(), options.to_owned())
 }
 
-#[cached::proc_macro::cached(name = "TOKENIZE_CACHE", size = 64, result = true)]
 fn uncached_tokenize_string(
     input: String,
     options: TokenizerOptions,
 ) -> Result<Vec<Token>, TokenizerError> {
-    uncached_tokenize_str(input.as_str(), &options)
+    TOKENIZE_CACHE.with(|cache| {
+        crate::engine::cache::get_or_try_insert_with(cache, (input, options), |key| {
+            let (input, options) = key;
+            uncached_tokenize_str(input.as_str(), options)
+        })
+    })
 }
 
 /// Break the given input shell script string into tokens, returning the tokens.

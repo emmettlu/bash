@@ -1,6 +1,6 @@
 use clap::Parser;
 use itertools::Itertools;
-use std::{io::Write, sync::LazyLock};
+use std::io::Write;
 
 use crate::engine::{
     ErrorKind, ExecutionResult, builtins,
@@ -353,26 +353,11 @@ impl DeclareCommand {
                 // We need to handle the case of someone invoking `declare array[index]`.
                 // In such case, we ignore the index and treat it as a declaration of
                 // the array.
-                #[allow(
-                    clippy::unwrap_in_result,
-                    clippy::unwrap_used,
-                    reason = "regex is valid and should not fail"
-                )]
-                static ARRAY_AND_INDEX_RE: LazyLock<fancy_regex::Regex> =
-                    LazyLock::new(|| fancy_regex::Regex::new(r"^(.*?)\[(.*?)\]$").unwrap());
-
-                if let Some(captures) = ARRAY_AND_INDEX_RE.captures(s)? {
-                    name = captures
-                        .get(1)
-                        .ok_or_else(|| {
-                            crate::engine::ErrorKind::InternalError(
-                                "declaration parse error".into(),
-                            )
-                        })?
-                        .as_str()
-                        .to_owned();
-
-                    assigned_index = captures.get(2).map(|m| m.as_str().to_owned());
+                if let Some(without_closing_bracket) = s.strip_suffix(']')
+                    && let Some(open_bracket) = without_closing_bracket.find('[')
+                {
+                    name = without_closing_bracket[..open_bracket].to_owned();
+                    assigned_index = Some(without_closing_bracket[open_bracket + 1..].to_owned());
                     name_is_array = true;
                 } else {
                     name = s.clone();

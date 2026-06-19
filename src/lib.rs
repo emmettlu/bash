@@ -8,8 +8,6 @@ pub mod shell;
 
 /// Main entry point for the `brush` shell.
 pub fn run() {
-    shell::entry::install_panic_handlers();
-
     let mut args: Vec<_> = std::env::args().collect();
 
     // Work around clap's limitations handling +O options.

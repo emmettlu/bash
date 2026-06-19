@@ -9,6 +9,7 @@
 //! - Command substitution expressions.
 //! - Arithmetic expansion expressions.
 
+use std::cell::RefCell;
 use std::fmt::Debug;
 use std::fmt::Display;
 
@@ -16,6 +17,13 @@ use crate::parser::ParserOptions;
 use crate::parser::SourceSpan;
 use crate::parser::ast;
 use crate::parser::error;
+
+type WordParseCacheKey = (String, ParserOptions);
+
+thread_local! {
+    static WORD_PARSE_CACHE: RefCell<crate::engine::cache::FixedCache<WordParseCacheKey, Vec<WordPieceWithSource>>> =
+        RefCell::new(crate::engine::cache::FixedCache::new(64));
+}
 
 /// Encapsulates a `WordPiece` together with its position in the string it came from.
 #[derive(Clone, Debug)]
@@ -498,19 +506,23 @@ pub fn parse(
     cacheable_parse(word.to_owned(), options.to_owned())
 }
 
-#[cached::proc_macro::cached(size = 64, result = true)]
 fn cacheable_parse(
     word: String,
     options: ParserOptions,
 ) -> Result<Vec<WordPieceWithSource>, error::WordParseError> {
-    tracing::debug!(target: "expansion", "Parsing word '{}'", word);
+    WORD_PARSE_CACHE.with(|cache| {
+        crate::engine::cache::get_or_try_insert_with(cache, (word, options), |key| {
+            let (word, options) = key;
+            tracing::debug!(target: "expansion", "Parsing word '{}'", word);
 
-    let pieces = expansion_parser::unexpanded_word(word.as_str(), &options)
-        .map_err(|err| error::WordParseError::Word(word.clone(), err.into()))?;
+            let pieces = expansion_parser::unexpanded_word(word.as_str(), options)
+                .map_err(|err| error::WordParseError::Word(word.clone(), err.into()))?;
 
-    tracing::debug!(target: "expansion", "Parsed word '{}' => {{{:?}}}", word, pieces);
+            tracing::debug!(target: "expansion", "Parsed word '{}' => {{{:?}}}", word, pieces);
 
-    Ok(pieces)
+            Ok(pieces)
+        })
+    })
 }
 
 /// Parse a heredoc body, treating `"` and `'` as literal characters.

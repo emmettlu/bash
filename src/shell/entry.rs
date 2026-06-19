@@ -117,24 +117,6 @@ impl CommandLineArgs {
     }
 }
 
-/// Installs panic handlers to report our panic and cleanly exit on panic.
-pub(crate) fn install_panic_handlers() {
-    //
-    // If stdout is connected to a terminal, then register a new panic handler that
-    // resets the terminal and then invokes the default handler.
-    //
-    if std::io::stdout().is_terminal() {
-        let original_panic_handler = std::panic::take_hook();
-        std::panic::set_hook(Box::new(move |panic_info| {
-            // Best-effort attempt to reset the terminal to defaults.
-            let _ = try_reset_terminal_to_defaults();
-
-            // Invoke the original handler
-            original_panic_handler(panic_info);
-        }));
-    }
-}
-
 pub(crate) const DEFAULT_ENABLE_HIGHLIGHTING: bool = false;
 
 /// Run the brush shell. Returns the exit code.

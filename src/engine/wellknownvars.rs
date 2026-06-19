@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-
-use rand::RngExt as _;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::engine::shell::ShellState;
 use crate::engine::{Shell, ShellValue, ShellVariable, error, extensions, sys, variables};
@@ -14,6 +14,10 @@ const BASH_RELEASE: &str = "release";
 const BASH_MACHINE: &str = "unknown";
 
 const DEFAULT_LINENO: usize = 1;
+const RANDOM_MULTIPLIER: u64 = 6_364_136_223_846_793_005;
+const RANDOM_INCREMENT: u64 = 1_442_695_040_888_963_407;
+
+static RANDOM_STATE: AtomicU64 = AtomicU64::new(0);
 
 /// Inherit environment variables from the host process into the shell's environment.
 ///
@@ -544,17 +548,44 @@ fn get_current_user_gids() -> Vec<u32> {
 }
 
 fn get_random_value(_shell: &dyn ShellState) -> ShellValue {
-    let mut rng = rand::rng();
-    let num = rng.random_range(0..32768);
-    let str = num.to_string();
-    str.into()
+    let num = next_random_u64() % 32_768;
+    num.to_string().into()
 }
 
 fn get_srandom_value(_shell: &dyn ShellState) -> ShellValue {
-    let mut rng = rand::rng();
-    let num: u32 = rng.random();
-    let str = num.to_string();
-    str.into()
+    let num = next_random_u64() as u32;
+    num.to_string().into()
+}
+
+fn next_random_u64() -> u64 {
+    loop {
+        let state = RANDOM_STATE.load(Ordering::Relaxed);
+        let current = if state == 0 {
+            initial_random_seed()
+        } else {
+            state
+        };
+        let next = current
+            .wrapping_mul(RANDOM_MULTIPLIER)
+            .wrapping_add(RANDOM_INCREMENT);
+
+        if RANDOM_STATE
+            .compare_exchange(state, next, Ordering::Relaxed, Ordering::Relaxed)
+            .is_ok()
+        {
+            return next;
+        }
+    }
+}
+
+fn initial_random_seed() -> u64 {
+    let time_seed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| {
+            duration.as_secs() ^ u64::from(duration.subsec_nanos()).rotate_left(32)
+        });
+
+    (time_seed ^ u64::from(std::process::id())).max(1)
 }
 
 fn get_funcname_value(shell: &dyn ShellState) -> variables::ShellValue {

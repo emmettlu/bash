@@ -1,6 +1,13 @@
 //! Parsing for shell instances.
 
-use std::io::Read;
+use std::{cell::RefCell, io::Read};
+
+type ParseStringCacheKey = (String, crate::parser::ParserOptions);
+
+thread_local! {
+    static PARSE_STRING_CACHE: RefCell<crate::engine::cache::FixedCache<ParseStringCacheKey, crate::parser::ast::Program>> =
+        RefCell::new(crate::engine::cache::FixedCache::new(64));
+}
 
 use crate::engine::{Shell, extensions, trace_categories};
 
@@ -42,15 +49,19 @@ impl<SE: extensions::ShellExtensions> Shell<SE> {
     }
 }
 
-#[cached::proc_macro::cached(size = 64, result = true)]
 fn parse_string_impl(
     s: String,
     parser_options: crate::parser::ParserOptions,
 ) -> Result<crate::parser::ast::Program, crate::parser::ParseError> {
-    let mut parser = create_parser(s.as_bytes(), &parser_options);
+    PARSE_STRING_CACHE.with(|cache| {
+        crate::engine::cache::get_or_try_insert_with(cache, (s, parser_options), |key| {
+            let (s, parser_options) = key;
+            let mut parser = create_parser(s.as_bytes(), parser_options);
 
-    tracing::debug!(target: trace_categories::PARSE, "Parsing string as program...");
-    parser.parse_program()
+            tracing::debug!(target: trace_categories::PARSE, "Parsing string as program...");
+            parser.parse_program()
+        })
+    })
 }
 
 pub(super) fn create_parser<R: Read>(

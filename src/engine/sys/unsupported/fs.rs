@@ -7,10 +7,6 @@ pub fn display_path(path: &std::path::Path) -> String {
     path.to_string_lossy().to_string()
 }
 
-pub fn has_executable_extension(_path: &std::path::Path) -> bool {
-    true
-}
-
 /// Wrapper that displays a `PathBuf` for shell UI output.
 pub struct DisplayPath(pub std::path::PathBuf);
 

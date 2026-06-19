@@ -17,9 +17,12 @@ impl Signal {
     pub const fn as_str(self) -> &'static str {
         ""
     }
+}
 
-    /// Creates a `Signal` from a string representation.
-    pub fn from_str(s: &str) -> Result<Self, error::Error> {
+impl std::str::FromStr for Signal {
+    type Err = error::Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
         Err(error::ErrorKind::InvalidSignal(s.into()).into())
     }
 }

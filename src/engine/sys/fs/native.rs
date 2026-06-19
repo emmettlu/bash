@@ -9,8 +9,6 @@ use crate::engine::error;
 // Selectively re-export unsupported fallbacks that we don't override.
 pub(crate) use crate::engine::sys::unsupported::fs::MetadataExt;
 
-pub use crate::engine::sys::traits::PathExt;
-
 /// Cached list of executable extensions from the `PATHEXT` environment
 /// variable. Each entry retains its leading dot (e.g. `".exe"`) and is stored
 /// lowercased so case-insensitive comparisons can be done without allocating.

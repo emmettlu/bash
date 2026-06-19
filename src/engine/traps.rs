@@ -116,7 +116,7 @@ impl TryFrom<&str> for TrapSignal {
                 if !s.starts_with("SIG") {
                     s.insert_str(0, "SIG");
                 }
-                sys::signal::Signal::from_str(s.as_str())
+                s.parse::<sys::signal::Signal>()
                     .map(TrapSignal::Signal)
                     .map_err(|_| error::ErrorKind::InvalidSignal(value.into()))?
             }

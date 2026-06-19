@@ -40,7 +40,7 @@ fn pathext_entry_stem(entry: &str) -> &str {
 ///
 /// Performs case-insensitive comparison against the cached PATHEXT entries
 /// without allocating.
-fn has_executable_extension(path: &Path) -> bool {
+pub fn has_executable_extension(path: &Path) -> bool {
     path.extension().is_some_and(|ext| {
         PATHEXT_EXTENSIONS
             .iter()

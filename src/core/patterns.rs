@@ -272,35 +272,36 @@ impl Pattern {
             }
 
             let current_paths = std::mem::take(&mut paths_so_far);
+            let subpattern = Self::from(&component)
+                .set_extended_globbing(self.enable_extended_globbing)
+                .set_case_insensitive(self.case_insensitive);
+
+            let subpattern_starts_with_dot = subpattern
+                .pieces
+                .first()
+                .is_some_and(|piece| piece.as_str().starts_with('.'));
+
+            let allow_dot_files =
+                !options.require_dot_in_pattern_to_match_dot_files || subpattern_starts_with_dot;
+
+            let matches_dotfile_policy = |dir_entry: &std::fs::DirEntry| {
+                !dir_entry.file_name().to_string_lossy().starts_with('.') || allow_dot_files
+            };
+
+            let regex = subpattern.to_regex(true, true)?;
+            let matches_regex = |dir_entry: &std::fs::DirEntry| {
+                regex
+                    .is_match(dir_entry.file_name().to_string_lossy().as_ref())
+                    .unwrap_or(false)
+            };
+
             for current_path in current_paths {
-                let subpattern = Self::from(&component)
-                    .set_extended_globbing(self.enable_extended_globbing)
-                    .set_case_insensitive(self.case_insensitive);
-
-                let subpattern_starts_with_dot = subpattern
-                    .pieces
-                    .first()
-                    .is_some_and(|piece| piece.as_str().starts_with('.'));
-
-                let allow_dot_files = !options.require_dot_in_pattern_to_match_dot_files
-                    || subpattern_starts_with_dot;
-
-                let matches_dotfile_policy = |dir_entry: &std::fs::DirEntry| {
-                    !dir_entry.file_name().to_string_lossy().starts_with('.') || allow_dot_files
+                let Ok(dir_entries) = current_path.read_dir() else {
+                    continue;
                 };
 
-                let regex = subpattern.to_regex(true, true)?;
-                let matches_regex = |dir_entry: &std::fs::DirEntry| {
-                    regex
-                        .is_match(dir_entry.file_name().to_string_lossy().as_ref())
-                        .unwrap_or(false)
-                };
-
-                let mut matching_paths_in_dir: Vec<_> = current_path
-                    .read_dir()
-                    .map_or_else(|_| vec![], |dir| dir.into_iter().collect())
-                    .into_iter()
-                    .filter_map(|result| result.ok())
+                let mut matching_paths_in_dir: Vec<_> = dir_entries
+                    .filter_map(Result::ok)
                     .filter(matches_regex)
                     .filter(matches_dotfile_policy)
                     .map(|entry| entry.path())

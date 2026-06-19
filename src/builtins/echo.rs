@@ -46,9 +46,10 @@ impl builtins::Command for EchoCommand {
         context: crate::core::ExecutionContext<'_, SE>,
     ) -> Result<crate::core::ExecutionResult, Self::Error> {
         let mut trailing_newline = !self.no_trailing_newline;
-        let mut s;
+        let mut stdout = context.stdout();
+
         if self.interpret_backslash_escapes {
-            s = String::new();
+            let mut s = String::new();
             for (i, arg) in self.args.iter().enumerate() {
                 if i > 0 {
                     s.push(' ');
@@ -65,16 +66,22 @@ impl builtins::Command for EchoCommand {
                     break;
                 }
             }
+
+            write!(stdout, "{s}")?;
         } else {
-            s = self.args.join(" ");
+            for (i, arg) in self.args.iter().enumerate() {
+                if i > 0 {
+                    write!(stdout, " ")?;
+                }
+                write!(stdout, "{arg}")?;
+            }
         }
 
         if trailing_newline {
-            s.push('\n');
+            writeln!(stdout)?;
         }
 
-        write!(context.stdout(), "{s}")?;
-        context.stdout().flush()?;
+        stdout.flush()?;
 
         Ok(ExecutionResult::success())
     }

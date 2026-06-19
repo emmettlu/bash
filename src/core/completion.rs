@@ -19,7 +19,6 @@ use crate::parser::unquote_str;
 
 /// Type of action to take to generate completion candidates.
 #[derive(Clone, Debug, ValueEnum)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum CompleteAction {
     /// Complete with valid aliases.
     #[clap(name = "alias")]
@@ -126,7 +125,6 @@ pub enum CompleteOption {
 
 /// Encapsulates the shell's programmable command completion configuration.
 #[derive(Clone, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Config {
     commands: HashMap<String, Spec>,
 
@@ -149,7 +147,6 @@ pub struct Config {
 
 /// Options for fallback completions.
 #[derive(Clone, Debug)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct FallbackOptions {
     /// If true, mark directory completions with a trailing slash.
     pub mark_directories: bool,
@@ -168,7 +165,6 @@ impl Default for FallbackOptions {
 
 /// Options for generating completions.
 #[derive(Clone, Debug, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct GenerationOptions {
     //
     // Options
@@ -193,7 +189,6 @@ pub struct GenerationOptions {
 /// Encapsulates a command completion specification; provides policy for how to
 /// generate completions for a given input.
 #[derive(Clone, Debug, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Spec {
     //
     // Options
@@ -456,7 +451,7 @@ impl Spec {
     #[expect(clippy::too_many_lines)]
     async fn generate_action_completions(
         &self,
-        shell: &Shell<impl extensions::ShellExtensions>,
+        shell: &mut Shell<impl extensions::ShellExtensions>,
         context: &Context<'_>,
     ) -> Result<Vec<String>, error::Error> {
         let mut candidates = Vec::new();
@@ -1254,22 +1249,13 @@ async fn get_file_completions(
 }
 
 fn get_external_command_completions(
-    shell: &Shell<impl extensions::ShellExtensions>,
+    shell: &mut Shell<impl extensions::ShellExtensions>,
     prefix: &str,
 ) -> Vec<String> {
-    let mut candidates = Vec::new();
-
-    // Look for external commands.
-    for path in shell.find_executables_in_path_with_prefix(
+    shell.find_executable_names_in_path_with_prefix_using_cache(
         prefix,
         shell.options().case_insensitive_pathname_expansion,
-    ) {
-        if let Some(file_name) = path.file_name() {
-            candidates.push(file_name.to_string_lossy().to_string());
-        }
-    }
-
-    candidates.into_iter().collect()
+    )
 }
 
 /// Attempts to complete a variable name from the given token.
@@ -1329,7 +1315,7 @@ fn try_get_variable_completions(
 /// Adds command-position completions to candidates.
 /// This includes external commands, builtins, functions, aliases, and keywords.
 fn add_command_completions(
-    shell: &Shell<impl extensions::ShellExtensions>,
+    shell: &mut Shell<impl extensions::ShellExtensions>,
     prefix: &str,
     candidates: &mut Vec<String>,
 ) {
@@ -1367,7 +1353,7 @@ fn add_command_completions(
 }
 
 async fn get_completions_using_basic_lookup(
-    shell: &Shell<impl extensions::ShellExtensions>,
+    shell: &mut Shell<impl extensions::ShellExtensions>,
     context: &Context<'_>,
 ) -> Answer {
     let token = context.token_to_complete;

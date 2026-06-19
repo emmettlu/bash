@@ -1,6 +1,7 @@
 //! Builtin command management for shell instances.
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
 use crate::core::{builtins, extensions};
 
@@ -17,7 +18,7 @@ impl<SE: extensions::ShellExtensions> crate::core::Shell<SE> {
         name: S,
         registration: builtins::Registration<SE>,
     ) {
-        self.builtins.insert(name.into(), registration);
+        Arc::make_mut(&mut self.builtins).insert(name.into(), registration);
     }
 
     /// Register a builtin only if no builtin with that name is already registered.
@@ -31,7 +32,9 @@ impl<SE: extensions::ShellExtensions> crate::core::Shell<SE> {
         name: S,
         registration: builtins::Registration<SE>,
     ) {
-        self.builtins.entry(name.into()).or_insert(registration);
+        Arc::make_mut(&mut self.builtins)
+            .entry(name.into())
+            .or_insert(registration);
     }
 
     /// Tries to retrieve a mutable reference to an existing builtin registration.
@@ -41,11 +44,11 @@ impl<SE: extensions::ShellExtensions> crate::core::Shell<SE> {
     ///
     /// * `name` - The name of the builtin to lookup.
     pub fn builtin_mut(&mut self, name: &str) -> Option<&mut builtins::Registration<SE>> {
-        self.builtins.get_mut(name)
+        Arc::make_mut(&mut self.builtins).get_mut(name)
     }
 
     /// Returns the registered builtins for the shell.
-    pub const fn builtins(&self) -> &HashMap<String, builtins::Registration<SE>> {
-        &self.builtins
+    pub fn builtins(&self) -> &HashMap<String, builtins::Registration<SE>> {
+        self.builtins.as_ref()
     }
 }

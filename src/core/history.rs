@@ -14,7 +14,6 @@ type ItemId = i64;
 /// Interface for querying and manipulating the shell's recorded history of commands.
 // TODO(history): support maximum item count
 #[derive(Clone, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct History {
     items: rpds::VectorSync<ItemId>,
     id_map: rpds::HashTrieMapSync<ItemId, Item>,
@@ -254,7 +253,6 @@ pub type ItemTimestamp = chrono::DateTime<Utc>;
 
 /// Represents an item in the history.
 #[derive(Clone, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct Item {
     /// The unique identifier of the history item.
     pub id: ItemId,

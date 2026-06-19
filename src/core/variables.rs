@@ -10,7 +10,6 @@ use crate::core::{error, escape, extensions};
 
 /// A shell variable.
 #[derive(Clone, Debug)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct ShellVariable {
     /// The value currently associated with the variable.
     value: ShellValue,
@@ -32,7 +31,6 @@ pub struct ShellVariable {
 
 /// Kind of transformation to apply to a variable's value when it is updated.
 #[derive(Clone, Copy, Debug)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ShellVariableUpdateTransform {
     /// No transformation.
     None,
@@ -593,7 +591,6 @@ type DynamicValueSetter = fn(&dyn ShellState) -> ();
 
 /// A shell value.
 #[derive(Clone, Debug)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ShellValue {
     /// A value that has been typed but not yet set.
     Unset(ShellValueUnsetType),
@@ -606,35 +603,14 @@ pub enum ShellValue {
     /// A value that is dynamically computed.
     Dynamic {
         /// Function that can query the value.
-        /// TODO(serde): figure out how to serialize/deserialize dynamic values.
-        #[cfg_attr(
-            feature = "serde",
-            serde(skip, default = "default_dynamic_value_getter")
-        )]
         getter: DynamicValueGetter,
         /// Function that receives value update requests.
-        /// TODO(serde): figure out how to serialize/deserialize dynamic values.
-        #[cfg_attr(
-            feature = "serde",
-            serde(skip, default = "default_dynamic_value_setter")
-        )]
         setter: DynamicValueSetter,
     },
 }
 
-#[cfg(feature = "serde")]
-fn default_dynamic_value_getter() -> DynamicValueGetter {
-    |_shell: &dyn ShellState| ShellValue::String(String::new())
-}
-
-#[cfg(feature = "serde")]
-fn default_dynamic_value_setter() -> DynamicValueSetter {
-    |_shell: &dyn ShellState| {}
-}
-
 /// The type of an unset shell value.
 #[derive(Clone, Debug)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum ShellValueUnsetType {
     /// The value is untyped.
     Untyped,

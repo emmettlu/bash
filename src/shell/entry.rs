@@ -370,35 +370,7 @@ async fn instantiate_shell(
     args: &CommandLineArgs,
     cli_args: Vec<String>,
 ) -> Result<BrushShell, crate::interactive::ShellError> {
-    #[cfg(feature = "experimental-load")]
-    let shell = if let Some(load_file) = &args.load_file {
-        instantiate_shell_from_file(load_file.as_path())?
-    } else {
-        instantiate_shell_from_args(args, cli_args).await?
-    };
-
-    #[cfg(not(feature = "experimental-load"))]
-    let shell = instantiate_shell_from_args(args, cli_args).await?;
-
-    Ok(shell)
-}
-
-#[cfg(feature = "experimental-load")]
-fn instantiate_shell_from_file(
-    file_path: &Path,
-) -> Result<BrushShell, crate::interactive::ShellError> {
-    let mut shell: BrushShell = serde_json::from_reader(std::fs::File::open(file_path)?)
-        .map_err(|e| crate::interactive::ShellError::IoError(std::io::Error::other(e)))?;
-
-    // NOTE: We need to manually register builtins because we can't serialize/deserialize them.
-    // TODO(serde): we should consider whether we could/should at least track *which* are enabled.
-    let builtins = crate::builtins::default_builtins();
-
-    for (builtin_name, builtin) in builtins {
-        shell.register_builtin(&builtin_name, builtin);
-    }
-
-    Ok(shell)
+    instantiate_shell_from_args(args, cli_args).await
 }
 
 /// Instantiates a shell from command-line arguments. Does *not* run any code in the shell.
@@ -444,15 +416,6 @@ async fn instantiate_shell_from_args(
         .filter_map(|&fd| crate::core::sys::fd::try_get_file_for_open_fd(fd).map(|file| (fd, file)))
         .collect();
 
-    // Select parser implementation to use.
-    #[cfg(feature = "experimental-parser")]
-    let parser_impl = if args.experimental_parser {
-        crate::core::parser::ParserImpl::Winnow
-    } else {
-        crate::core::parser::ParserImpl::Peg
-    };
-
-    #[cfg(not(feature = "experimental-parser"))]
     let parser_impl = crate::core::parser::ParserImpl::Peg;
 
     // Set up the shell builder with the requested options.

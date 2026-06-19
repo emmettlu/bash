@@ -21,49 +21,6 @@ pub enum ParseError {
     },
 }
 
-#[cfg(feature = "diagnostics")]
-#[allow(clippy::cast_sign_loss)]
-#[allow(unused)] // Workaround unused warnings in nightly versions of the compiler
-pub mod miette {
-    use super::ParseError;
-    use miette::SourceOffset;
-
-    impl ParseError {
-        /// Convert the original error to one miette can pretty print
-        pub fn to_pretty_error(self, input: impl Into<String>) -> PrettyError {
-            let input = input.into();
-            let location = match self {
-                Self::ParsingNear(ref pos) => {
-                    Some(SourceOffset::from_location(&input, pos.line, pos.column))
-                }
-                Self::Tokenizing { ref position, .. } => position
-                    .as_ref()
-                    .map(|p| SourceOffset::from_location(&input, p.line, p.column)),
-                Self::ParsingAtEndOfInput => {
-                    Some(SourceOffset::from_location(&input, usize::MAX, usize::MAX))
-                }
-            };
-
-            PrettyError {
-                cause: self,
-                input,
-                location,
-            }
-        }
-    }
-
-    /// Represents an error that occurred while parsing tokens.
-    #[derive(thiserror::Error, Debug, miette::Diagnostic)]
-    #[error("Cannot parse the input script")]
-    pub struct PrettyError {
-        cause: ParseError,
-        #[source_code]
-        input: String,
-        #[label("{cause}")]
-        location: Option<SourceOffset>,
-    }
-}
-
 /// Represents a parsing error with its location information
 #[derive(Debug, thiserror::Error)]
 #[error(transparent)]

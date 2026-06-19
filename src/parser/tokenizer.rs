@@ -33,11 +33,7 @@ pub type TokenLocation = SourceSpan;
 
 /// Represents a token extracted from a shell script.
 #[derive(Clone, Debug)]
-#[cfg_attr(feature = "arbitrary", derive(arbitrary::Arbitrary))]
-#[cfg_attr(
-    any(test, feature = "serde"),
-    derive(PartialEq, Eq, serde::Serialize, serde::Deserialize)
-)]
+#[cfg_attr(test, derive(PartialEq, Eq, serde::Serialize, serde::Deserialize))]
 pub enum Token {
     /// An operator token.
     Operator(String, SourceSpan),
@@ -60,14 +56,6 @@ impl Token {
             Self::Operator(_, l) => l,
             Self::Word(_, l) => l,
         }
-    }
-}
-
-#[cfg(feature = "diagnostics")]
-impl From<&Token> for miette::SourceSpan {
-    fn from(token: &Token) -> Self {
-        let start = token.location().start.as_ref();
-        Self::new(start.into(), token.location().length())
     }
 }
 

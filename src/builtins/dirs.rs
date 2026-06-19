@@ -58,27 +58,24 @@ impl builtins::Command for DirsCommand {
         if self.clear {
             context.shell.directory_stack_mut().clear();
         } else {
-            let dirs = vec![context.shell.working_dir()]
-                .into_iter()
-                .chain(
-                    context
-                        .shell
-                        .directory_stack()
-                        .iter()
-                        .rev()
-                        .map(|p| p.as_path()),
-                )
-                .collect::<Vec<_>>();
-
             let one_per_line = self.print_one_per_line || self.print_one_per_line_with_index;
+            let mut stdout = context.stdout();
+            let dirs = std::iter::once(context.shell.working_dir()).chain(
+                context
+                    .shell
+                    .directory_stack()
+                    .iter()
+                    .rev()
+                    .map(|p| p.as_path()),
+            );
 
-            for (i, dir) in dirs.iter().enumerate() {
+            for (i, dir) in dirs.enumerate() {
                 if !one_per_line && i > 0 {
-                    write!(context.stdout(), " ")?;
+                    write!(stdout, " ")?;
                 }
 
                 if self.print_one_per_line_with_index {
-                    write!(context.stdout(), "{i:2}  ")?;
+                    write!(stdout, "{i:2}  ")?;
                 }
 
                 let mut dir_str = sys::fs::display_path(dir);
@@ -87,11 +84,15 @@ impl builtins::Command for DirsCommand {
                     dir_str = context.shell.tilde_shorten(dir_str);
                 }
 
-                write!(context.stdout(), "{dir_str}")?;
+                write!(stdout, "{dir_str}")?;
 
-                if one_per_line || i == dirs.len() - 1 {
-                    writeln!(context.stdout())?;
+                if one_per_line {
+                    writeln!(stdout)?;
                 }
+            }
+
+            if !one_per_line {
+                writeln!(stdout)?;
             }
 
             return Ok(ExecutionResult::success());

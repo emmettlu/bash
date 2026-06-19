@@ -76,7 +76,9 @@ where
 
                     let entry_path = entry.path();
                     if let Ok(file_type) = entry.file_type() {
-                        if file_type.is_file() && entry_path.executable() {
+                        if file_type.is_file()
+                            && sys::fs::has_executable_extension(entry_path.as_path())
+                        {
                             self.queued_items.push_back(entry_path);
                             continue;
                         }

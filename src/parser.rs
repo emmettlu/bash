@@ -20,11 +20,6 @@ pub use error::{
     BindingParseError, ParseError, ParseErrorLocation, TestCommandParseError, WordParseError,
 };
 
-#[cfg(feature = "diagnostics")]
-pub use error::miette::PrettyError;
-
-#[cfg(feature = "winnow-parser")]
-pub use parse_impl::winnow_str;
 pub use parse_impl::{Parser, ParserBuilder, ParserImpl, ParserOptions, SourceInfo, parse_tokens};
 
 pub use source::{SourcePosition, SourcePositionOffset, SourceSpan};

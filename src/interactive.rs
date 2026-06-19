@@ -20,20 +20,12 @@ mod term_integration;
 mod trace_categories;
 pub mod win_term;
 
-#[cfg(feature = "highlighting")]
 pub mod highlighting;
 
-#[cfg(feature = "completion")]
 mod completion;
 
-// Basic shell
-#[cfg(feature = "basic")]
 mod basic;
-#[cfg(feature = "basic")]
 pub use basic::BasicInputBackend;
 
-// Minimal shell
-#[cfg(feature = "minimal")]
 mod minimal;
-#[cfg(feature = "minimal")]
 pub use minimal::MinimalInputBackend;

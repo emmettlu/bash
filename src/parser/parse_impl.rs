@@ -6,18 +6,13 @@ use crate::parser::ast;
 use crate::parser::tokenizer::{Token, TokenEndReason, Tokenizer, TokenizerOptions, Tokens};
 
 pub mod peg;
-#[cfg(feature = "winnow-parser")]
-pub mod winnow_str;
 
-/// Parser implementation to use
+/// Parser implementation to use.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Default)]
 pub enum ParserImpl {
-    /// PEG-based parser (token-based)
+    /// PEG-based parser (token-based).
     #[default]
     Peg,
-    /// Winnow-based parser (string-based, direct)
-    #[cfg(feature = "winnow-parser")]
-    Winnow,
 }
 
 /// Options used to control the behavior of the parser.
@@ -133,30 +128,8 @@ impl<R: std::io::BufRead> Parser<R> {
         //   * https://aosabook.org/en/v1/bash.html
         //   * https://pubs.opengroup.org/onlinepubs/9699919799/utilities/V3_chap02.html
         //
-        match self.options.parser_impl {
-            ParserImpl::Peg => {
-                let tokens = self.tokenize()?;
-                parse_tokens(&tokens, &self.options)
-            }
-            #[cfg(feature = "winnow-parser")]
-            ParserImpl::Winnow => {
-                // Read entire input to string for winnow_str parser
-                let mut input_str = String::new();
-                std::io::Read::read_to_string(&mut self.reader, &mut input_str).map_err(|e| {
-                    crate::parser::error::ParseError::Tokenizing {
-                        inner: crate::parser::tokenizer::TokenizerError::from(e),
-                        position: None,
-                    }
-                })?;
-
-                winnow_str::parse_program(&input_str, &self.options, &SourceInfo::default())
-                    .map_err(|_e| {
-                        // Convert winnow error to ParseError
-                        // TODO: Extract position information from winnow error
-                        crate::parser::error::ParseError::ParsingAtEndOfInput
-                    })
-            }
-        }
+        let tokens = self.tokenize()?;
+        parse_tokens(&tokens, &self.options)
     }
 
     /// Parses a function definition body from the input. The body is expected to be

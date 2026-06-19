@@ -3,9 +3,42 @@
 use crate::core::{error, variables};
 use std::path::PathBuf;
 
+#[derive(Clone, Eq, PartialEq)]
+struct ExecutableNameCacheKey {
+    path_value: String,
+    case_insensitive: bool,
+}
+
+/// Cache of executable names for interactive command completion.
+#[derive(Clone, Default)]
+pub struct ExecutableNameCache {
+    key: Option<ExecutableNameCacheKey>,
+    names: Vec<String>,
+}
+
+impl ExecutableNameCache {
+    pub fn get_or_update(
+        &mut self,
+        path_value: String,
+        case_insensitive: bool,
+        build: impl FnOnce(&str, bool) -> Vec<String>,
+    ) -> &[String] {
+        let key = ExecutableNameCacheKey {
+            path_value,
+            case_insensitive,
+        };
+
+        if self.key.as_ref() != Some(&key) {
+            self.names = build(&key.path_value, key.case_insensitive);
+            self.key = Some(key);
+        }
+
+        &self.names
+    }
+}
+
 /// A cache of paths associated with names.
 #[derive(Clone, Default)]
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct PathCache {
     /// The cache itself.
     cache: std::collections::HashMap<String, PathBuf>,

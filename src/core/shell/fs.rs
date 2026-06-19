@@ -8,7 +8,7 @@ use crate::core::{
     ExecutionParameters, ShellFd,
     env::{EnvironmentLookup, EnvironmentScope},
     error, openfiles, pathsearch,
-    sys::{traits::PathExt as _, users},
+    sys::users,
     variables,
 };
 
@@ -113,6 +113,47 @@ impl<SE: crate::core::extensions::ShellExtensions> crate::core::Shell<SE> {
         pathsearch::search_for_executable_with_prefix(paths, filename_prefix, case_insensitive)
     }
 
+    /// Finds executable names in PATH with the given prefix, reusing a cache while PATH is stable.
+    pub fn find_executable_names_in_path_with_prefix_using_cache(
+        &mut self,
+        filename_prefix: &str,
+        case_insensitive: bool,
+    ) -> Vec<String> {
+        let path_value = self.env_str("PATH").unwrap_or_default().into_owned();
+        let cached_names = self.external_command_completion_cache.get_or_update(
+            path_value,
+            case_insensitive,
+            |path_value, case_insensitive| {
+                let paths = crate::core::sys::fs::split_paths(path_value);
+                let mut names =
+                    pathsearch::search_for_executable_with_prefix(paths, "", case_insensitive)
+                        .filter_map(|path| {
+                            path.file_name()
+                                .map(|name| name.to_string_lossy().to_string())
+                        })
+                        .collect::<Vec<_>>();
+                names.sort();
+                names.dedup();
+                names
+            },
+        );
+
+        if case_insensitive {
+            let prefix = filename_prefix.to_ascii_lowercase();
+            cached_names
+                .iter()
+                .filter(|name| name.to_ascii_lowercase().starts_with(&prefix))
+                .cloned()
+                .collect()
+        } else {
+            cached_names
+                .iter()
+                .filter(|name| name.starts_with(filename_prefix))
+                .cloned()
+                .collect()
+        }
+    }
+
     /// Determines whether the given filename is the name of an executable in one of the
     /// directories in the shell's current PATH. If found, returns the path.
     ///
@@ -123,14 +164,8 @@ impl<SE: crate::core::extensions::ShellExtensions> crate::core::Shell<SE> {
         &self,
         candidate_name: S,
     ) -> Option<PathBuf> {
-        let path = self.env_str("PATH").unwrap_or_default();
-        for one_dir in crate::core::sys::fs::split_paths(path.as_ref()) {
-            let candidate_path = one_dir.join(candidate_name.as_ref());
-            if candidate_path.executable() {
-                return Some(candidate_path);
-            }
-        }
-        None
+        self.find_executables_in_path(candidate_name.as_ref())
+            .next()
     }
 
     /// Uses the shell's hash-based path cache to check whether the given filename is the name
@@ -147,10 +182,10 @@ impl<SE: crate::core::extensions::ShellExtensions> crate::core::Shell<SE> {
     where
         String: From<S>,
     {
-        if let Some(cached_path) = self.program_location_cache.get(&candidate_name) {
+        if let Some(cached_path) = self.program_location_cache().get(&candidate_name) {
             Some(cached_path)
         } else if let Some(found_path) = self.find_first_executable_in_path(&candidate_name) {
-            self.program_location_cache
+            self.program_location_cache_mut()
                 .set(candidate_name, found_path.clone());
             Some(found_path)
         } else {

@@ -8,6 +8,10 @@ pub fn display_path(path: &std::path::Path) -> String {
     path.to_string_lossy().to_string()
 }
 
+pub fn has_executable_extension(_path: &std::path::Path) -> bool {
+    true
+}
+
 /// Stub: wrapper that displays a `PathBuf` with forward slashes.
 pub struct DisplayPath(pub std::path::PathBuf);
 

@@ -55,10 +55,9 @@ pub use state::ShellState;
 /// * `SE` - The shell extensions implementation to use. These extensions are statically injected
 ///   into the shell at compile time to provide custom behavior. When unspecified, defaults to
 ///   `DefaultShellExtensions`, which provide standard behavior.
-#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
+
 pub struct Shell<SE: extensions::ShellExtensions = extensions::DefaultShellExtensions> {
     /// Injected error behavior.
-    #[cfg_attr(feature = "serde", serde(skip, default = "default_error_formatter"))]
     error_formatter: SE::ErrorFormatter,
 
     /// Trap handler configuration for the shell.
@@ -80,8 +79,6 @@ pub struct Shell<SE: extensions::ShellExtensions = extensions::DefaultShellExten
     options: RuntimeOptions,
 
     /// State of managed jobs.
-    /// TODO(serde): Need to warn somehow that jobs cannot be serialized.
-    #[cfg_attr(feature = "serde", serde(skip))]
     jobs: jobs::JobManager,
 
     /// Shell aliases.
@@ -118,14 +115,16 @@ pub struct Shell<SE: extensions::ShellExtensions = extensions::DefaultShellExten
     directory_stack: Vec<PathBuf>,
 
     /// Completion configuration.
-    completion_config: crate::core::completion::Config,
+    completion_config: Arc<crate::core::completion::Config>,
 
     /// Shell built-in commands.
-    #[cfg_attr(feature = "serde", serde(skip))]
-    builtins: HashMap<String, builtins::Registration<SE>>,
+    builtins: Arc<HashMap<String, builtins::Registration<SE>>>,
 
     /// Shell program location cache.
-    program_location_cache: pathcache::PathCache,
+    program_location_cache: Arc<pathcache::PathCache>,
+
+    /// Cached executable names used for interactive command completion.
+    external_command_completion_cache: pathcache::ExecutableNameCache,
 
     /// Last "SECONDS" captured time.
     last_stopwatch_time: std::time::SystemTime,
@@ -134,11 +133,9 @@ pub struct Shell<SE: extensions::ShellExtensions = extensions::DefaultShellExten
     last_stopwatch_offset: u32,
 
     /// Parser implementation to use.
-    #[cfg_attr(feature = "serde", serde(skip))]
     parser_impl: crate::core::parser::ParserImpl,
 
     /// Key bindings for the shell, optionally implemented by an interactive shell.
-    #[cfg_attr(feature = "serde", serde(skip))]
     key_bindings: Option<KeyBindingsHelper>,
 
     /// History of commands executed in the shell.
@@ -176,6 +173,7 @@ impl<SE: extensions::ShellExtensions> Clone for Shell<SE> {
             completion_config: self.completion_config.clone(),
             builtins: self.builtins.clone(),
             program_location_cache: self.program_location_cache.clone(),
+            external_command_completion_cache: self.external_command_completion_cache.clone(),
             last_stopwatch_time: self.last_stopwatch_time,
             last_stopwatch_offset: self.last_stopwatch_offset,
             parser_impl: self.parser_impl,
@@ -219,7 +217,7 @@ impl<SE: extensions::ShellExtensions> Shell<SE> {
             version: options.shell_version,
             product_display_str: options.shell_product_display_str,
             working_dir: options.working_dir.map_or_else(std::env::current_dir, Ok)?,
-            builtins: options.builtins,
+            builtins: Arc::new(options.builtins),
             parser_impl: options.parser,
             key_bindings: options.key_bindings,
             ..Self::default()
@@ -432,22 +430,22 @@ impl<SE: extensions::ShellExtensions> ShellState for Shell<SE> {
 
     /// Returns the shell's program location cache.
     pub fn program_location_cache(&self) -> &pathcache::PathCache {
-        &self.program_location_cache
+        self.program_location_cache.as_ref()
     }
 
     /// Returns a mutable reference to the shell's program location cache.
     pub fn program_location_cache_mut(&mut self) -> &mut pathcache::PathCache {
-        &mut self.program_location_cache
+        Arc::make_mut(&mut self.program_location_cache)
     }
 
     /// Returns the shell's completion configuration.
     pub fn completion_config(&self) -> &crate::core::completion::Config {
-        &self.completion_config
+        self.completion_config.as_ref()
     }
 
     /// Returns a mutable reference to the shell's completion configuration.
     pub fn completion_config_mut(&mut self) -> &mut crate::core::completion::Config {
-        &mut self.completion_config
+        Arc::make_mut(&mut self.completion_config)
     }
 
     /// Returns the shell's open files.
@@ -534,9 +532,4 @@ impl<SE: extensions::ShellExtensions> ShellState for Shell<SE> {
     pub fn product_display_str(&self) -> Option<&str> {
         self.product_display_str.as_deref()
     }
-}
-
-#[cfg(feature = "serde")]
-fn default_error_formatter<EF: extensions::ErrorFormatter>() -> EF {
-    EF::default()
 }

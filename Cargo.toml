@@ -8,12 +8,11 @@ license = "MIT"
 categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
-arbitrary = { version = "1", features = ["derive"], optional = true }
 async-recursion = "1"
 async-trait = "0"
 bon = "3"
 cached = "0"
-chrono = { version = "0", features = ["serde"] }
+chrono = "0"
 clap = { version = "4", features = ["derive", "env", "wrap_help"] }
 compio = { version = "0", default-features = false, features = [
   "macros",
@@ -29,18 +28,15 @@ indenter = "0"
 indexmap = "2"
 inherent = "1"
 itertools = "0"
-miette = { version = "7", default-features = false, features = [
-  "derive",
-  "fancy"
-], optional = true }
+
 normalize-path = "0"
 peg = "0"
 radix_trie = "0"
 rand = "0"
 regex = "1"
-rpds = { version = "1", features = ["serde"] }
+rpds = "1"
 serde = { version = "1", features = ["derive", "rc"] }
-serde_json = "1"
+
 strum = "0"
 strum_macros = "0"
 thiserror = "2"
@@ -55,7 +51,6 @@ windows-sys = { version = "0", features = [
   "Win32_System_Threading",
   "Win32_UI_Input_KeyboardAndMouse"
 ] }
-winnow = { version = "1", optional = true }
 
 [dev-dependencies]
 anyhow = "1"
@@ -65,18 +60,6 @@ serde_yaml = "0"
 tempfile = "3"
 
 [features]
-default = ["basic", "minimal"]
-arbitrary = ["dep:arbitrary"]
+default = []
 
-basic = ["completion"]
-completion = []
 debug-tracing = ["peg/trace"]
-diagnostics = ["dep:miette"]
-
-experimental-load = []
-experimental-parser = ["winnow-parser"]
-highlighting = []
-minimal = []
-schema = []
-serde = []
-winnow-parser = ["dep:winnow"]

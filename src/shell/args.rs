@@ -166,11 +166,6 @@ pub struct CommandLineArgs {
     #[clap(long = "enable-highlighting", help_heading = HEADING_UI_OPTIONS, default_value_t = crate::shell::entry::DEFAULT_ENABLE_HIGHLIGHTING)]
     pub enable_highlighting: bool,
 
-    /// Enable experimental parser (not ready for use).
-    #[cfg(feature = "experimental-parser")]
-    #[clap(long = "experimental-parser", help_heading = HEADING_EXPERIMENTAL_OPTIONS)]
-    pub experimental_parser: bool,
-
     /// Enable terminal integration (**experimental**).
     #[clap(long = "enable-terminal-integration", help_heading = HEADING_EXPERIMENTAL_OPTIONS)]
     pub terminal_shell_integration: bool,
@@ -182,12 +177,6 @@ pub struct CommandLineArgs {
     /// Input backend.
     #[clap(long = "input-backend", value_name = "BACKEND", help_heading = HEADING_UI_OPTIONS)]
     pub input_backend: Option<InputBackendType>,
-
-    /// Load state from the given file; the saved state should be in JSON format
-    /// and overrides any non-UI command-line options provided.
-    #[cfg(feature = "experimental-load")]
-    #[clap(long = "load", value_name = "FILE", help_heading = HEADING_EXPERIMENTAL_OPTIONS)]
-    pub load_file: Option<PathBuf>,
 
     /// Enable debug logging for classes of tracing events.
     #[clap(long = "debug", alias = "log-enable", value_name = "EVENT", help_heading = HEADING_UI_OPTIONS)]

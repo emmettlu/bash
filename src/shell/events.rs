@@ -2,7 +2,7 @@
 
 use std::{collections::HashSet, fmt::Display};
 
-use crate::core::Error;
+use crate::engine::Error;
 use tracing_subscriber::{
     Layer, Registry, filter::Targets, layer::SubscriberExt, reload::Handle, util::SubscriberInitExt,
 };
@@ -175,10 +175,13 @@ impl TraceEventConfig {
             if handle.reload(self.compose_filter()).is_ok() {
                 Ok(())
             } else {
-                Err(crate::core::ErrorKind::Unimplemented("failed to enable tracing events").into())
+                Err(
+                    crate::engine::ErrorKind::Unimplemented("failed to enable tracing events")
+                        .into(),
+                )
             }
         } else {
-            Err(crate::core::ErrorKind::Unimplemented("tracing not initialized").into())
+            Err(crate::engine::ErrorKind::Unimplemented("tracing not initialized").into())
         }
     }
 }

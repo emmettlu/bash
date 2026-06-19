@@ -1,7 +1,7 @@
 use clap::Parser;
 use std::borrow::Cow;
 
-use crate::core::{ExecutionExitCode, ExecutionResult, builtins, commands};
+use crate::engine::{ExecutionExitCode, ExecutionResult, builtins, commands};
 
 /// Exec the provided command.
 #[derive(Parser)]
@@ -24,11 +24,11 @@ pub(crate) struct ExecCommand {
 }
 
 impl builtins::Command for ExecCommand {
-    type Error = crate::core::Error;
+    type Error = crate::engine::Error;
 
-    async fn execute<SE: crate::core::ShellExtensions>(
+    async fn execute<SE: crate::engine::ShellExtensions>(
         &self,
-        context: crate::core::ExecutionContext<'_, SE>,
+        context: crate::engine::ExecutionContext<'_, SE>,
     ) -> Result<ExecutionResult, Self::Error> {
         if self.args.is_empty() {
             // When no arguments are present, then there's nothing for us to execute -- but we need
@@ -47,7 +47,7 @@ impl builtins::Command for ExecCommand {
         // of returning.
         if context.shell.is_subshell() {
             if self.empty_environment || self.exec_as_login || self.name_for_argv0.is_some() {
-                return crate::core::error::unimp(
+                return crate::engine::error::unimp(
                     "exec with options in subshell not yet supported",
                 );
             }
@@ -83,7 +83,7 @@ impl builtins::Command for ExecCommand {
             });
 
         let mut result = ExecutionResult::from(exit_code);
-        result.next_control_flow = crate::core::ExecutionControlFlow::ExitShell;
+        result.next_control_flow = crate::engine::ExecutionControlFlow::ExitShell;
         Ok(result)
     }
 }

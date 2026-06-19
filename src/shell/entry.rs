@@ -21,8 +21,8 @@ static TRACE_EVENT_CONFIG: LazyLock<Arc<StdMutex<Option<events::TraceEventConfig
     LazyLock::new(|| Arc::new(StdMutex::new(None)));
 
 type BrushShellExtensions =
-    crate::core::extensions::ShellExtensionsImpl<error_formatter::Formatter>;
-type BrushShell = crate::core::Shell<BrushShellExtensions>;
+    crate::engine::extensions::ShellExtensionsImpl<error_formatter::Formatter>;
+type BrushShell = crate::engine::Shell<BrushShellExtensions>;
 
 // WARN: this implementation shadows `clap::Parser::parse_from` one so it must be defined
 // after the `use clap::Parser`
@@ -31,7 +31,9 @@ impl CommandLineArgs {
     // TODO(cmdline): We can safely remove this `impl` after the issue is resolved
     // https://github.com/clap-rs/clap/issues/5055
     // This function takes precedence over [`clap::Parser::parse_from`]
-    fn try_parse_from(itr: impl IntoIterator<Item = String>) -> Result<Self, clap::Error> {
+    pub(crate) fn try_parse_from(
+        itr: impl IntoIterator<Item = String>,
+    ) -> Result<Self, clap::Error> {
         let mut args: Vec<String> = itr.into_iter().collect();
 
         // In bash, `-c` treats `--` as an option terminator and takes its
@@ -65,7 +67,7 @@ impl CommandLineArgs {
             }
         }
 
-        let (mut this, script_args) = crate::core::builtins::try_parse_known::<Self>(args)?;
+        let (mut this, script_args) = crate::engine::builtins::try_parse_known::<Self>(args)?;
 
         // Collect any args from after `--` (handled by try_parse_known) into
         // script_args, which become positional parameters ($0, $1, ...).
@@ -115,65 +117,8 @@ impl CommandLineArgs {
     }
 }
 
-/// Main entry point for the `brush` shell.
-pub fn run() {
-    //
-    // Install panic handlers to clean up on panic.
-    //
-    install_panic_handlers();
-
-    //
-    // Parse args.
-    //
-    let mut args: Vec<_> = std::env::args().collect();
-
-    // Work around clap's limitations handling +O options.
-    for arg in &mut args {
-        if arg.starts_with("+O") {
-            arg.insert_str(0, "--");
-        }
-    }
-
-    let parsed_args = match CommandLineArgs::try_parse_from(args.iter().cloned()) {
-        Ok(parsed_args) => parsed_args,
-        Err(e) => {
-            let _ = e.print();
-
-            // Check for whether this is something we'd truly consider fatal. clap returns
-            // errors for `--help`, `--version`, etc.
-            let exit_code = match e.kind() {
-                clap::error::ErrorKind::DisplayVersion => 0,
-                clap::error::ErrorKind::DisplayHelp => 0,
-                _ => 2,
-            };
-
-            std::process::exit(exit_code);
-        }
-    };
-
-    //
-    // Run.
-    //
-    let Ok(runtime) = compio::runtime::Runtime::new() else {
-        tracing::error!("error: failed to create Compio runtime");
-        std::process::exit(1);
-    };
-
-    let result = runtime.block_on(run_async(args, parsed_args));
-
-    let exit_code = match result {
-        Ok(code) => code,
-        Err(err) => {
-            tracing::error!("error: {err:#}");
-            1
-        }
-    };
-
-    std::process::exit(i32::from(exit_code));
-}
-
 /// Installs panic handlers to report our panic and cleanly exit on panic.
-fn install_panic_handlers() {
+pub(crate) fn install_panic_handlers() {
     //
     // If stdout is connected to a terminal, then register a new panic handler that
     // resets the terminal and then invokes the default handler.
@@ -199,7 +144,7 @@ pub(crate) const DEFAULT_ENABLE_HIGHLIGHTING: bool = false;
 /// * `cli_args` - The command-line arguments to the shell, in string form.
 /// * `args` - The already-parsed command-line arguments.
 #[doc(hidden)]
-async fn run_async(
+pub(crate) async fn run_async(
     cli_args: Vec<String>,
     args: CommandLineArgs,
 ) -> Result<u8, crate::interactive::ShellError> {
@@ -281,7 +226,7 @@ const fn will_run_interactively(args: &CommandLineArgs) -> bool {
 /// * `input_backend` - The input backend to use.
 /// * `ui_options` - The user interface options to use.
 async fn run_in_shell(
-    shell_ref: &crate::interactive::ShellRef<impl crate::core::ShellExtensions>,
+    shell_ref: &crate::interactive::ShellRef<impl crate::engine::ShellExtensions>,
     args: CommandLineArgs,
     input_backend: &mut impl crate::interactive::InputBackend,
     ui_options: &crate::interactive::UIOptions,
@@ -336,23 +281,23 @@ async fn run_in_shell(
 /// * `shell_ref` - A reference to the shell to initialize.
 /// * `args` - The parsed command-line arguments.
 async fn initialize_shell(
-    shell_ref: &crate::interactive::ShellRef<impl crate::core::ShellExtensions>,
+    shell_ref: &crate::interactive::ShellRef<impl crate::engine::ShellExtensions>,
     args: &CommandLineArgs,
 ) -> Result<(), crate::interactive::ShellError> {
     // Compute desired profile-loading behavior.
     let profile = if args.no_profile {
-        crate::core::ProfileLoadBehavior::Skip
+        crate::engine::ProfileLoadBehavior::Skip
     } else {
-        crate::core::ProfileLoadBehavior::LoadDefault
+        crate::engine::ProfileLoadBehavior::LoadDefault
     };
 
     // Compute desired rc-loading behavior.
     let rc = if args.no_rc {
-        crate::core::RcLoadBehavior::Skip
+        crate::engine::RcLoadBehavior::Skip
     } else if let Some(rc_file) = &args.rc_file {
-        crate::core::RcLoadBehavior::LoadCustom(rc_file.clone())
+        crate::engine::RcLoadBehavior::LoadCustom(rc_file.clone())
     } else {
-        crate::core::RcLoadBehavior::LoadDefault
+        crate::engine::RcLoadBehavior::LoadDefault
     };
 
     shell_ref.lock().await.load_config(&profile, &rc).await?;
@@ -413,15 +358,17 @@ async fn instantiate_shell_from_args(
     let fds = args
         .inherited_fds
         .iter()
-        .filter_map(|&fd| crate::core::sys::fd::try_get_file_for_open_fd(fd).map(|file| (fd, file)))
+        .filter_map(|&fd| {
+            crate::engine::sys::fd::try_get_file_for_open_fd(fd).map(|file| (fd, file))
+        })
         .collect();
 
-    let parser_impl = crate::core::parser::ParserImpl::Peg;
+    let parser_impl = crate::engine::parser::ParserImpl::Peg;
 
     // Set up the shell builder with the requested options.
     // NOTE: We skip loading profile and rc files here; that will be handled later after we've
     // fully instantiated everything we want set before running any code.
-    let shell = crate::core::Shell::builder_with_extensions::<BrushShellExtensions>()
+    let shell = crate::engine::Shell::builder_with_extensions::<BrushShellExtensions>()
         .disable_options(args.disabled_options.clone())
         .disable_shopt_options(args.disabled_shopt_options.clone())
         .disallow_overwriting_regular_files_via_output_redirection(
@@ -435,8 +382,8 @@ async fn instantiate_shell_from_args(
         .interactive(args.is_interactive())
         .command_string_mode(args.command.is_some())
         .no_editing(args.no_editing)
-        .profile(crate::core::ProfileLoadBehavior::Skip)
-        .rc(crate::core::RcLoadBehavior::Skip)
+        .profile(crate::engine::ProfileLoadBehavior::Skip)
+        .rc(crate::engine::RcLoadBehavior::Skip)
         .do_not_inherit_env(args.do_not_inherit_env)
         .fds(fds)
         .maybe_shell_args(shell_args)
@@ -467,7 +414,7 @@ async fn instantiate_shell_from_args(
 }
 
 fn enable_xtrace_to_file(
-    shell: &mut crate::core::Shell<impl crate::core::ShellExtensions>,
+    shell: &mut crate::engine::Shell<impl crate::engine::ShellExtensions>,
     file_path: &Path,
 ) -> Result<(), crate::interactive::ShellError> {
     let file = std::fs::OpenOptions::new()
@@ -479,13 +426,13 @@ fn enable_xtrace_to_file(
             crate::interactive::ShellError::FailedToCreateXtraceFile(file_path.to_path_buf(), e)
         })?;
 
-    let file = crate::core::openfiles::OpenFile::from(file);
+    let file = crate::engine::openfiles::OpenFile::from(file);
     let file_fd = shell.open_files_mut().add(file)?;
 
     shell.options_mut().print_commands_and_arguments = true;
     shell.set_env_global(
         "BASH_XTRACEFD",
-        crate::core::ShellVariable::new(file_fd.to_string()),
+        crate::engine::ShellVariable::new(file_fd.to_string()),
     )?;
 
     Ok(())

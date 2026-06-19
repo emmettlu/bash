@@ -3,7 +3,7 @@ use std::path::PathBuf;
 
 use clap::Parser;
 
-use crate::core::{ExecutionResult, builtins, error};
+use crate::engine::{ExecutionResult, builtins, error};
 
 /// Change the current shell working directory.
 #[derive(Parser)]
@@ -31,11 +31,11 @@ pub(crate) struct CdCommand {
 }
 
 impl builtins::Command for CdCommand {
-    type Error = crate::core::Error;
+    type Error = crate::engine::Error;
 
-    async fn execute<SE: crate::core::ShellExtensions>(
+    async fn execute<SE: crate::engine::ShellExtensions>(
         &self,
-        context: crate::core::ExecutionContext<'_, SE>,
+        context: crate::engine::ExecutionContext<'_, SE>,
     ) -> Result<ExecutionResult, Self::Error> {
         // TODO(cd): implement 'cd -@'
         if self.file_with_xattr_as_dir {

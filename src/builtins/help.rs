@@ -1,4 +1,4 @@
-use crate::core::{ExecutionResult, builtins};
+use crate::engine::{ExecutionResult, builtins};
 use clap::Parser;
 use itertools::Itertools;
 use std::io::Write;
@@ -23,12 +23,12 @@ pub(crate) struct HelpCommand {
 }
 
 impl builtins::Command for HelpCommand {
-    type Error = crate::core::Error;
+    type Error = crate::engine::Error;
 
-    async fn execute<SE: crate::core::ShellExtensions>(
+    async fn execute<SE: crate::engine::ShellExtensions>(
         &self,
-        context: crate::core::ExecutionContext<'_, SE>,
-    ) -> Result<crate::core::ExecutionResult, Self::Error> {
+        context: crate::engine::ExecutionContext<'_, SE>,
+    ) -> Result<crate::engine::ExecutionResult, Self::Error> {
         if self.topic_patterns.is_empty() {
             Self::display_general_help(&context)?;
         } else {
@@ -43,8 +43,8 @@ impl builtins::Command for HelpCommand {
 
 impl HelpCommand {
     fn display_general_help(
-        context: &crate::core::ExecutionContext<'_, impl crate::core::ShellExtensions>,
-    ) -> Result<(), crate::core::Error> {
+        context: &crate::engine::ExecutionContext<'_, impl crate::engine::ShellExtensions>,
+    ) -> Result<(), crate::engine::Error> {
         const COLUMN_COUNT: usize = 3;
 
         if let Some(display_str) = context.shell.product_display_str() {
@@ -75,10 +75,10 @@ impl HelpCommand {
 
     fn display_help_for_topic_pattern(
         &self,
-        context: &crate::core::ExecutionContext<'_, impl crate::core::ShellExtensions>,
+        context: &crate::engine::ExecutionContext<'_, impl crate::engine::ShellExtensions>,
         topic_pattern: &str,
-    ) -> Result<(), crate::core::Error> {
-        let pattern = crate::core::patterns::Pattern::from(topic_pattern)
+    ) -> Result<(), crate::engine::Error> {
+        let pattern = crate::engine::patterns::Pattern::from(topic_pattern)
             .set_extended_globbing(context.shell.options().extended_globbing)
             .set_case_insensitive(context.shell.options().case_insensitive_pathname_expansion);
 
@@ -101,12 +101,12 @@ impl HelpCommand {
         Ok(())
     }
 
-    fn display_help_for_builtin<SE: crate::core::ShellExtensions>(
+    fn display_help_for_builtin<SE: crate::engine::ShellExtensions>(
         &self,
-        context: &crate::core::ExecutionContext<'_, SE>,
+        context: &crate::engine::ExecutionContext<'_, SE>,
         name: &str,
         registration: &builtins::Registration<SE>,
-    ) -> Result<(), crate::core::Error> {
+    ) -> Result<(), crate::engine::Error> {
         let content_type = if self.short_description {
             builtins::ContentType::ShortDescription
         } else if self.man_page_style {
@@ -117,7 +117,8 @@ impl HelpCommand {
             builtins::ContentType::DetailedHelp
         };
 
-        let Some(mut stdout) = context.try_fd(crate::core::openfiles::OpenFiles::STDOUT_FD) else {
+        let Some(mut stdout) = context.try_fd(crate::engine::openfiles::OpenFiles::STDOUT_FD)
+        else {
             // If there's no stdout, nothing to do.
             return Ok(());
         };
@@ -136,8 +137,8 @@ impl HelpCommand {
     }
 }
 
-fn get_builtins_sorted_by_name<'a, SE: crate::core::ShellExtensions>(
-    context: &'a crate::core::ExecutionContext<'_, SE>,
+fn get_builtins_sorted_by_name<'a, SE: crate::engine::ShellExtensions>(
+    context: &'a crate::engine::ExecutionContext<'_, SE>,
 ) -> Vec<(&'a String, &'a builtins::Registration<SE>)> {
     context
         .shell

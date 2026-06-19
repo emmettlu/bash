@@ -2,7 +2,7 @@ use clap::Parser;
 use std::io::Write;
 use std::process::Command;
 
-use crate::core::{ExecutionExitCode, ExecutionResult, builtins};
+use crate::engine::{ExecutionExitCode, ExecutionResult, builtins};
 
 /// Signal a job or process.
 #[derive(Parser)]
@@ -24,11 +24,11 @@ pub(crate) struct KillCommand {
 }
 
 impl builtins::Command for KillCommand {
-    type Error = crate::core::Error;
+    type Error = crate::engine::Error;
 
-    async fn execute<SE: crate::core::ShellExtensions>(
+    async fn execute<SE: crate::engine::ShellExtensions>(
         &self,
-        context: crate::core::ExecutionContext<'_, SE>,
+        context: crate::engine::ExecutionContext<'_, SE>,
     ) -> Result<ExecutionResult, Self::Error> {
         if self.list_signals {
             return print_signals(context.stdout());
@@ -76,7 +76,7 @@ impl builtins::Command for KillCommand {
                 continue;
             }
 
-            let pid = crate::core::int_utils::parse(arg.as_str(), 10)?;
+            let pid = crate::engine::int_utils::parse(arg.as_str(), 10)?;
             if !kill_pid(pid) {
                 writeln!(
                     context.stderr(),
@@ -100,7 +100,7 @@ fn kill_pid(pid: u32) -> bool {
         .is_ok_and(|status| status.success())
 }
 
-fn print_signals(mut stdout: impl Write) -> Result<ExecutionResult, crate::core::Error> {
+fn print_signals(mut stdout: impl Write) -> Result<ExecutionResult, crate::engine::Error> {
     writeln!(stdout, " 1) SIGHUP")?;
     writeln!(stdout, " 2) SIGINT")?;
     writeln!(stdout, " 3) SIGQUIT")?;

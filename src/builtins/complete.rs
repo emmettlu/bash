@@ -3,8 +3,8 @@ use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::io::Write;
 
-use crate::core::completion::{self, CompleteAction, CompleteOption, Spec};
-use crate::core::{ExecutionExitCode, ExecutionResult, builtins, error, escape};
+use crate::engine::completion::{self, CompleteAction, CompleteOption, Spec};
+use crate::engine::{ExecutionExitCode, ExecutionResult, builtins, error, escape};
 
 #[derive(Parser)]
 struct CommonCompleteCommandArgs {
@@ -219,12 +219,12 @@ pub(crate) struct CompleteCommand {
 }
 
 impl builtins::Command for CompleteCommand {
-    type Error = crate::core::Error;
+    type Error = crate::engine::Error;
 
-    async fn execute<SE: crate::core::ShellExtensions>(
+    async fn execute<SE: crate::engine::ShellExtensions>(
         &self,
-        mut context: crate::core::ExecutionContext<'_, SE>,
-    ) -> Result<crate::core::ExecutionResult, Self::Error> {
+        mut context: crate::engine::ExecutionContext<'_, SE>,
+    ) -> Result<crate::engine::ExecutionResult, Self::Error> {
         let mut result = ExecutionResult::success();
 
         // If -D, -E, or -I are specified, then any names provided are ignored.
@@ -249,8 +249,8 @@ impl builtins::Command for CompleteCommand {
 impl CompleteCommand {
     fn process_global(
         &self,
-        context: &mut crate::core::ExecutionContext<'_, impl crate::core::ShellExtensions>,
-    ) -> Result<(), crate::core::Error> {
+        context: &mut crate::engine::ExecutionContext<'_, impl crate::engine::ShellExtensions>,
+    ) -> Result<(), crate::engine::Error> {
         // Read options before taking mutable borrow on completion_config
         let extended_globbing = context.shell.options().extended_globbing;
 
@@ -304,9 +304,9 @@ impl CompleteCommand {
     }
 
     fn try_display_spec_for_command(
-        context: &crate::core::ExecutionContext<'_, impl crate::core::ShellExtensions>,
+        context: &crate::engine::ExecutionContext<'_, impl crate::engine::ShellExtensions>,
         name: &str,
-    ) -> Result<bool, crate::core::Error> {
+    ) -> Result<bool, crate::engine::Error> {
         if let Some(spec) = context.shell.completion_config().get(name) {
             Self::display_spec(context, None, Some(name), spec)?;
             Ok(true)
@@ -318,11 +318,11 @@ impl CompleteCommand {
 
     #[expect(clippy::too_many_lines)]
     fn display_spec(
-        context: &crate::core::ExecutionContext<'_, impl crate::core::ShellExtensions>,
+        context: &crate::engine::ExecutionContext<'_, impl crate::engine::ShellExtensions>,
         special_name: Option<&str>,
         command_name: Option<&str>,
         spec: &Spec,
-    ) -> Result<(), crate::core::Error> {
+    ) -> Result<(), crate::engine::Error> {
         let mut s = String::from("complete");
 
         if let Some(special_name) = special_name {
@@ -446,9 +446,9 @@ impl CompleteCommand {
 
     fn try_process_for_command(
         &self,
-        context: &mut crate::core::ExecutionContext<'_, impl crate::core::ShellExtensions>,
+        context: &mut crate::engine::ExecutionContext<'_, impl crate::engine::ShellExtensions>,
         name: &str,
-    ) -> Result<bool, crate::core::Error> {
+    ) -> Result<bool, crate::engine::Error> {
         if self.print {
             return Self::try_display_spec_for_command(context, name);
         } else if self.remove {
@@ -488,12 +488,12 @@ pub(crate) struct CompGenCommand {
 }
 
 impl builtins::Command for CompGenCommand {
-    type Error = crate::core::Error;
+    type Error = crate::engine::Error;
 
-    async fn execute<SE: crate::core::ShellExtensions>(
+    async fn execute<SE: crate::engine::ShellExtensions>(
         &self,
-        context: crate::core::ExecutionContext<'_, SE>,
-    ) -> Result<crate::core::ExecutionResult, Self::Error> {
+        context: crate::engine::ExecutionContext<'_, SE>,
+    ) -> Result<crate::engine::ExecutionResult, Self::Error> {
         let mut spec = self
             .common_args
             .create_spec(context.shell.options().extended_globbing);
@@ -569,12 +569,12 @@ pub(crate) struct CompOptCommand {
 }
 
 impl builtins::Command for CompOptCommand {
-    type Error = crate::core::Error;
+    type Error = crate::engine::Error;
 
-    async fn execute<SE: crate::core::ShellExtensions>(
+    async fn execute<SE: crate::engine::ShellExtensions>(
         &self,
-        context: crate::core::ExecutionContext<'_, SE>,
-    ) -> Result<crate::core::ExecutionResult, Self::Error> {
+        context: crate::engine::ExecutionContext<'_, SE>,
+    ) -> Result<crate::engine::ExecutionResult, Self::Error> {
         let mut options = HashMap::new();
         for option in &self.disabled_options {
             options.insert(option.clone(), false);

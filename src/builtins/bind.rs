@@ -4,7 +4,7 @@ use itertools::Itertools as _;
 use std::{collections::HashMap, io::Write, str::FromStr as _, sync::Arc};
 use strum::IntoEnumIterator;
 
-use crate::core::{
+use crate::engine::{
     ExecutionExitCode, ExecutionResult, builtins,
     interfaces::{self, InputFunction, KeyAction, KeySequence},
     sys, trace_categories,
@@ -111,9 +111,9 @@ pub(crate) enum BindError {
     BindingParseError(#[from] crate::parser::BindingParseError),
 }
 
-impl crate::core::BuiltinError for BindError {}
+impl crate::engine::BuiltinError for BindError {}
 
-impl From<&BindError> for crate::core::ExecutionExitCode {
+impl From<&BindError> for crate::engine::ExecutionExitCode {
     fn from(_err: &BindError) -> Self {
         Self::GeneralError
     }
@@ -122,10 +122,10 @@ impl From<&BindError> for crate::core::ExecutionExitCode {
 impl builtins::Command for BindCommand {
     type Error = BindError;
 
-    async fn execute<SE: crate::core::ShellExtensions>(
+    async fn execute<SE: crate::engine::ShellExtensions>(
         &self,
-        context: crate::core::ExecutionContext<'_, SE>,
-    ) -> Result<crate::core::ExecutionResult, Self::Error> {
+        context: crate::engine::ExecutionContext<'_, SE>,
+    ) -> Result<crate::engine::ExecutionResult, Self::Error> {
         if let Some(key_bindings) = context.shell.key_bindings() {
             Ok(self.execute_impl(key_bindings, &context).await?)
         } else {
@@ -145,7 +145,7 @@ impl BindCommand {
     async fn execute_impl(
         &self,
         bindings: &Arc<Mutex<dyn interfaces::KeyBindings>>,
-        context: &crate::core::ExecutionContext<'_, impl crate::core::ShellExtensions>,
+        context: &crate::engine::ExecutionContext<'_, impl crate::engine::ShellExtensions>,
     ) -> Result<ExecutionResult, BindError> {
         let mut bindings = bindings.lock().await;
 
@@ -443,7 +443,7 @@ const fn to_onoff(value: bool) -> &'static str {
 
 fn display_funcs_and_bindings(
     bindings: &dyn interfaces::KeyBindings,
-    context: &crate::core::ExecutionContext<'_, impl crate::core::ShellExtensions>,
+    context: &crate::engine::ExecutionContext<'_, impl crate::engine::ShellExtensions>,
     reusable: bool,
 ) -> Result<(), BindError> {
     let mut sequences_by_func: HashMap<InputFunction, Vec<KeySequence>> = HashMap::new();
@@ -487,7 +487,7 @@ fn display_funcs_and_bindings(
 
 fn display_macros(
     bindings: &dyn interfaces::KeyBindings,
-    context: &crate::core::ExecutionContext<'_, impl crate::core::ShellExtensions>,
+    context: &crate::engine::ExecutionContext<'_, impl crate::engine::ShellExtensions>,
     reusable: bool,
 ) -> Result<(), BindError> {
     for (left, right) in bindings.get_macros() {

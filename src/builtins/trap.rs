@@ -1,8 +1,8 @@
 use clap::Parser;
 use std::io::Write;
 
-use crate::core::traps::TrapSignal;
-use crate::core::{ExecutionResult, builtins};
+use crate::engine::traps::TrapSignal;
+use crate::engine::{ExecutionResult, builtins};
 
 /// Manage signal traps.
 #[derive(Parser)]
@@ -19,14 +19,14 @@ pub(crate) struct TrapCommand {
 }
 
 impl builtins::Command for TrapCommand {
-    type Error = crate::core::Error;
+    type Error = crate::engine::Error;
 
-    async fn execute<SE: crate::core::ShellExtensions>(
+    async fn execute<SE: crate::engine::ShellExtensions>(
         &self,
-        mut context: crate::core::ExecutionContext<'_, SE>,
+        mut context: crate::engine::ExecutionContext<'_, SE>,
     ) -> Result<ExecutionResult, Self::Error> {
         if self.list_signals {
-            crate::core::traps::format_signals(context.stdout(), TrapSignal::iterator())
+            crate::engine::traps::format_signals(context.stdout(), TrapSignal::iterator())
                 .map(|()| ExecutionResult::success())
         } else if self.print_trap_commands || self.args.is_empty() {
             if !self.args.is_empty() {
@@ -66,8 +66,8 @@ impl builtins::Command for TrapCommand {
 
 impl TrapCommand {
     fn display_all_handlers(
-        context: &crate::core::ExecutionContext<'_, impl crate::core::ShellExtensions>,
-    ) -> Result<(), crate::core::Error> {
+        context: &crate::engine::ExecutionContext<'_, impl crate::engine::ShellExtensions>,
+    ) -> Result<(), crate::engine::Error> {
         for (signal, _) in context.shell.traps().iter_handlers() {
             Self::display_handlers_for(context, signal)?;
         }
@@ -75,9 +75,9 @@ impl TrapCommand {
     }
 
     fn display_handlers_for(
-        context: &crate::core::ExecutionContext<'_, impl crate::core::ShellExtensions>,
+        context: &crate::engine::ExecutionContext<'_, impl crate::engine::ShellExtensions>,
         signal_type: TrapSignal,
-    ) -> Result<(), crate::core::Error> {
+    ) -> Result<(), crate::engine::Error> {
         if let Some(handler) = context.shell.traps().get_handler(signal_type) {
             writeln!(
                 context.stdout(),
@@ -89,14 +89,14 @@ impl TrapCommand {
     }
 
     fn remove_all_handlers(
-        context: &mut crate::core::ExecutionContext<'_, impl crate::core::ShellExtensions>,
+        context: &mut crate::engine::ExecutionContext<'_, impl crate::engine::ShellExtensions>,
         signal: TrapSignal,
     ) {
         context.shell.traps_mut().remove_handlers(signal);
     }
 
     fn register_handler(
-        context: &mut crate::core::ExecutionContext<'_, impl crate::core::ShellExtensions>,
+        context: &mut crate::engine::ExecutionContext<'_, impl crate::engine::ShellExtensions>,
         signals: Vec<TrapSignal>,
         handler: &str,
     ) {

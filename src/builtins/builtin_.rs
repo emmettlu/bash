@@ -1,27 +1,27 @@
 use clap::Parser;
 
-use crate::core::{ExecutionResult, builtins};
+use crate::engine::{ExecutionResult, builtins};
 
 /// Directly invokes a built-in, without going through typical search order.
 #[derive(Default, Parser)]
 pub(crate) struct BuiltinCommand {
     #[clap(skip)]
-    args: Vec<crate::core::CommandArg>,
+    args: Vec<crate::engine::CommandArg>,
 }
 
 impl builtins::DeclarationCommand for BuiltinCommand {
-    fn set_declarations(&mut self, args: Vec<crate::core::CommandArg>) {
+    fn set_declarations(&mut self, args: Vec<crate::engine::CommandArg>) {
         self.args = args;
     }
 }
 
 impl builtins::Command for BuiltinCommand {
-    type Error = crate::core::Error;
+    type Error = crate::engine::Error;
 
-    async fn execute<SE: crate::core::ShellExtensions>(
+    async fn execute<SE: crate::engine::ShellExtensions>(
         &self,
-        mut context: crate::core::ExecutionContext<'_, SE>,
-    ) -> Result<crate::core::ExecutionResult, Self::Error> {
+        mut context: crate::engine::ExecutionContext<'_, SE>,
+    ) -> Result<crate::engine::ExecutionResult, Self::Error> {
         if self.args.is_empty() {
             return Ok(ExecutionResult::success());
         }
@@ -39,7 +39,7 @@ impl builtins::Command for BuiltinCommand {
             context.command_name = builtin_name;
             (builtin.execute_func)(context, args).await
         } else {
-            Err(crate::core::ErrorKind::BuiltinNotFound(builtin_name).into())
+            Err(crate::engine::ErrorKind::BuiltinNotFound(builtin_name).into())
         }
     }
 }

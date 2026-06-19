@@ -1,7 +1,7 @@
 use clap::Parser;
 use std::io::Write;
 
-use crate::core::{ErrorKind, ExecutionResult, builtins, escape, expansion};
+use crate::engine::{ErrorKind, ExecutionResult, builtins, escape, expansion};
 
 /// Format a string.
 #[derive(Parser)]
@@ -17,18 +17,18 @@ pub(crate) struct PrintfCommand {
 }
 
 impl builtins::Command for PrintfCommand {
-    type Error = crate::core::Error;
+    type Error = crate::engine::Error;
 
-    async fn execute<SE: crate::core::ShellExtensions>(
+    async fn execute<SE: crate::engine::ShellExtensions>(
         &self,
-        context: crate::core::ExecutionContext<'_, SE>,
+        context: crate::engine::ExecutionContext<'_, SE>,
     ) -> Result<ExecutionResult, Self::Error> {
         if let Some(variable_name) = &self.output_variable {
             let mut result: Vec<u8> = vec![];
             format(self.format_and_args.as_slice(), &mut result)?;
 
             let result_str = String::from_utf8(result).map_err(|_| {
-                crate::core::ErrorKind::PrintfInvalidUsage("invalid UTF-8 output".into())
+                crate::engine::ErrorKind::PrintfInvalidUsage("invalid UTF-8 output".into())
             })?;
 
             expansion::assign_to_named_parameter(
@@ -47,7 +47,7 @@ impl builtins::Command for PrintfCommand {
     }
 }
 
-fn format(format_and_args: &[String], writer: impl Write) -> Result<(), crate::core::Error> {
+fn format(format_and_args: &[String], writer: impl Write) -> Result<(), crate::engine::Error> {
     match format_and_args {
         [fmt, arg] if fmt == "%q" => format_special_case_for_percent_q(None, arg, writer),
         [fmt, arg] if fmt == "~%q" => format_special_case_for_percent_q(Some("~"), arg, writer),
@@ -60,7 +60,7 @@ fn format_special_case_for_percent_q(
     prefix: Option<&str>,
     arg: &str,
     mut writer: impl Write,
-) -> Result<(), crate::core::Error> {
+) -> Result<(), crate::engine::Error> {
     let mut result = escape::quote_if_needed(arg, escape::QuoteMode::BackslashEscape).to_string();
 
     if let Some(prefix) = prefix {
@@ -76,7 +76,7 @@ fn format_simple(
     format_string: &str,
     args: &[String],
     mut writer: impl Write,
-) -> Result<(), crate::core::Error> {
+) -> Result<(), crate::engine::Error> {
     let expanded_format = expand_format_escapes(format_string)?;
     let mut arg_index = 0usize;
     let mut chars = expanded_format.chars().peekable();
@@ -112,7 +112,7 @@ fn format_simple(
     Ok(())
 }
 
-fn expand_format_escapes(format_string: &str) -> Result<String, crate::core::Error> {
+fn expand_format_escapes(format_string: &str) -> Result<String, crate::engine::Error> {
     let (bytes, _) =
         escape::expand_backslash_escapes(format_string, escape::EscapeExpansionMode::EchoBuiltin)?;
     String::from_utf8(bytes)
@@ -121,7 +121,7 @@ fn expand_format_escapes(format_string: &str) -> Result<String, crate::core::Err
 
 fn read_format_specifier(
     chars: &mut std::iter::Peekable<std::str::Chars<'_>>,
-) -> Result<char, crate::core::Error> {
+) -> Result<char, crate::engine::Error> {
     for ch in chars.by_ref() {
         if ch.is_ascii_alphabetic() || ch == '%' {
             return Ok(ch);
@@ -135,7 +135,7 @@ fn write_formatted_arg(
     mut writer: impl Write,
     spec: char,
     arg: &str,
-) -> Result<(), crate::core::Error> {
+) -> Result<(), crate::engine::Error> {
     match spec {
         's' => write!(writer, "{arg}")?,
         'q' => write!(
@@ -160,7 +160,7 @@ fn write_formatted_arg(
     Ok(())
 }
 
-fn parse_i64_arg(arg: &str) -> Result<i64, crate::core::Error> {
+fn parse_i64_arg(arg: &str) -> Result<i64, crate::engine::Error> {
     if arg.is_empty() {
         return Ok(0);
     }
@@ -170,7 +170,7 @@ fn parse_i64_arg(arg: &str) -> Result<i64, crate::core::Error> {
     })
 }
 
-fn parse_u64_arg(arg: &str) -> Result<u64, crate::core::Error> {
+fn parse_u64_arg(arg: &str) -> Result<u64, crate::engine::Error> {
     if arg.is_empty() {
         return Ok(0);
     }

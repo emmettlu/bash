@@ -3,11 +3,11 @@ pub(crate) struct Formatter {
     pub use_color: bool,
 }
 
-impl crate::core::extensions::ErrorFormatter for Formatter {
+impl crate::engine::extensions::ErrorFormatter for Formatter {
     fn format_error(
         &self,
-        err: &crate::core::error::Error,
-        _shell: &crate::core::Shell<impl crate::core::ShellExtensions>,
+        err: &crate::engine::error::Error,
+        _shell: &crate::engine::Shell<impl crate::engine::ShellExtensions>,
     ) -> String {
         let prefix = if self.use_color {
             "\x1b[31merror:\x1b[0m "

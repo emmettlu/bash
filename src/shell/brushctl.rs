@@ -1,4 +1,4 @@
-use crate::core::{ExecutionResult, sys};
+use crate::engine::{ExecutionResult, sys};
 use clap::{Parser, Subcommand};
 use std::io::Write;
 
@@ -11,19 +11,19 @@ pub(crate) trait ShellBuilderBrushBuiltinExt {
     fn brush_builtins(self) -> Self;
 }
 
-impl<SE: crate::core::extensions::ShellExtensions, S: crate::core::ShellBuilderState>
-    ShellBuilderBrushBuiltinExt for crate::core::ShellBuilder<SE, S>
+impl<SE: crate::engine::extensions::ShellExtensions, S: crate::engine::ShellBuilderState>
+    ShellBuilderBrushBuiltinExt for crate::engine::ShellBuilder<SE, S>
 {
     fn brush_builtins(self) -> Self {
         // For compatibility with previous releases, we register the command under both
         // `brushctl` and `brushinfo` names. It will behave identically across the two.
         self.builtin(
             "brushctl",
-            crate::core::builtins::builtin::<BrushCtlCommand, SE>(),
+            crate::engine::builtins::builtin::<BrushCtlCommand, SE>(),
         )
         .builtin(
             "brushinfo",
-            crate::core::builtins::builtin::<BrushCtlCommand, SE>(),
+            crate::engine::builtins::builtin::<BrushCtlCommand, SE>(),
         )
     }
 }
@@ -111,13 +111,13 @@ enum ProcessCommand {
     ShowParentProcessId,
 }
 
-impl crate::core::builtins::Command for BrushCtlCommand {
-    type Error = crate::core::Error;
+impl crate::engine::builtins::Command for BrushCtlCommand {
+    type Error = crate::engine::Error;
 
-    async fn execute<SE: crate::core::ShellExtensions>(
+    async fn execute<SE: crate::engine::ShellExtensions>(
         &self,
-        mut context: crate::core::ExecutionContext<'_, SE>,
-    ) -> Result<crate::core::ExecutionResult, Self::Error> {
+        mut context: crate::engine::ExecutionContext<'_, SE>,
+    ) -> Result<crate::engine::ExecutionResult, Self::Error> {
         match &self.command_group {
             CommandGroup::Call(call) => call.execute(&context),
             CommandGroup::Complete(complete) => complete.execute(&mut context).await,
@@ -130,12 +130,12 @@ impl crate::core::builtins::Command for BrushCtlCommand {
 impl CallCommand {
     fn execute(
         &self,
-        context: &crate::core::ExecutionContext<'_, impl crate::core::ShellExtensions>,
-    ) -> Result<crate::core::ExecutionResult, crate::core::Error> {
+        context: &crate::engine::ExecutionContext<'_, impl crate::engine::ShellExtensions>,
+    ) -> Result<crate::engine::ExecutionResult, crate::engine::Error> {
         match self {
             Self::ShowCallStack { detailed } => {
                 let stack = context.shell.call_stack();
-                let format_options = crate::core::callstack::FormatOptions {
+                let format_options = crate::engine::callstack::FormatOptions {
                     show_args: *detailed,
                     show_entry_points: *detailed,
                 };
@@ -151,8 +151,8 @@ impl CallCommand {
 impl CompleteCommand {
     async fn execute(
         &self,
-        context: &mut crate::core::ExecutionContext<'_, impl crate::core::ShellExtensions>,
-    ) -> Result<crate::core::ExecutionResult, crate::core::Error> {
+        context: &mut crate::engine::ExecutionContext<'_, impl crate::engine::ShellExtensions>,
+    ) -> Result<crate::engine::ExecutionResult, crate::engine::Error> {
         match self {
             Self::Line { cursor_index, line } => {
                 let completions = context
@@ -171,12 +171,12 @@ impl CompleteCommand {
 impl EventsCommand {
     fn execute(
         &self,
-        context: &crate::core::ExecutionContext<'_, impl crate::core::ShellExtensions>,
-    ) -> Result<crate::core::ExecutionResult, crate::core::Error> {
+        context: &crate::engine::ExecutionContext<'_, impl crate::engine::ShellExtensions>,
+    ) -> Result<crate::engine::ExecutionResult, crate::engine::Error> {
         let event_config = crate::shell::entry::get_event_config();
 
         let mut event_config = event_config.try_lock().map_err(|_| {
-            crate::core::Error::from(crate::core::ErrorKind::Unimplemented(
+            crate::engine::Error::from(crate::engine::ErrorKind::Unimplemented(
                 "Failed to acquire lock on event configuration",
             ))
         })?;
@@ -193,9 +193,12 @@ impl EventsCommand {
                 Self::Disable { event } => event_config.disable(*event)?,
             }
 
-            Ok(crate::core::ExecutionResult::success())
+            Ok(crate::engine::ExecutionResult::success())
         } else {
-            Err(crate::core::ErrorKind::Unimplemented("event configuration not initialized").into())
+            Err(
+                crate::engine::ErrorKind::Unimplemented("event configuration not initialized")
+                    .into(),
+            )
         }
     }
 }
@@ -203,8 +206,8 @@ impl EventsCommand {
 impl ProcessCommand {
     fn execute(
         &self,
-        context: &crate::core::ExecutionContext<'_, impl crate::core::ShellExtensions>,
-    ) -> Result<crate::core::ExecutionResult, crate::core::Error> {
+        context: &crate::engine::ExecutionContext<'_, impl crate::engine::ShellExtensions>,
+    ) -> Result<crate::engine::ExecutionResult, crate::engine::Error> {
         match self {
             Self::ShowProcessId => {
                 writeln!(context.stdout(), "{}", std::process::id())?;

@@ -1,6 +1,6 @@
 use clap::Parser;
 
-use crate::core::{ExecutionControlFlow, ExecutionExitCode, ExecutionResult, builtins};
+use crate::engine::{ExecutionControlFlow, ExecutionExitCode, ExecutionResult, builtins};
 
 /// Continue to the next iteration of a control-flow loop.
 #[derive(Parser)]
@@ -11,12 +11,12 @@ pub(crate) struct ContinueCommand {
 }
 
 impl builtins::Command for ContinueCommand {
-    type Error = crate::core::Error;
+    type Error = crate::engine::Error;
 
-    async fn execute<SE: crate::core::ShellExtensions>(
+    async fn execute<SE: crate::engine::ShellExtensions>(
         &self,
-        _context: crate::core::ExecutionContext<'_, SE>,
-    ) -> Result<crate::core::ExecutionResult, Self::Error> {
+        _context: crate::engine::ExecutionContext<'_, SE>,
+    ) -> Result<crate::engine::ExecutionResult, Self::Error> {
         // If specified, which_loop needs to be positive.
         if self.which_loop <= 0 {
             return Ok(ExecutionExitCode::InvalidUsage.into());

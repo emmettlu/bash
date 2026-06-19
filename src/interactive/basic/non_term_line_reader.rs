@@ -10,7 +10,7 @@ impl super::LineReader for NonTermLineReader {
             &str,
             usize,
         ) -> Result<
-            crate::core::completion::Completions,
+            crate::engine::completion::Completions,
             crate::interactive::ShellError,
         >,
     ) -> Result<crate::interactive::ReadResult, crate::interactive::ShellError> {

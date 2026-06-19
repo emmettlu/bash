@@ -2,7 +2,7 @@ use clap::Parser;
 use itertools::Itertools;
 use std::{io::Write, sync::LazyLock};
 
-use crate::core::{
+use crate::engine::{
     ErrorKind, ExecutionResult, builtins,
     env::{self, EnvironmentLookup, EnvironmentScope},
     error,
@@ -101,7 +101,7 @@ pub(crate) struct DeclareCommand {
     //
     // N.B. These are skipped by clap, but filled in by the BuiltinDeclarationCommand trait.
     #[clap(skip)]
-    declarations: Vec<crate::core::CommandArg>,
+    declarations: Vec<crate::engine::CommandArg>,
 }
 
 #[derive(Clone, Copy)]
@@ -112,7 +112,7 @@ enum DeclareVerb {
 }
 
 impl builtins::DeclarationCommand for DeclareCommand {
-    fn set_declarations(&mut self, declarations: Vec<crate::core::CommandArg>) {
+    fn set_declarations(&mut self, declarations: Vec<crate::engine::CommandArg>) {
         self.declarations = declarations;
     }
 }
@@ -122,12 +122,12 @@ impl builtins::Command for DeclareCommand {
         true
     }
 
-    type Error = crate::core::Error;
+    type Error = crate::engine::Error;
 
-    async fn execute<SE: crate::core::ShellExtensions>(
+    async fn execute<SE: crate::engine::ShellExtensions>(
         &self,
-        mut context: crate::core::ExecutionContext<'_, SE>,
-    ) -> Result<crate::core::ExecutionResult, Self::Error> {
+        mut context: crate::engine::ExecutionContext<'_, SE>,
+    ) -> Result<crate::engine::ExecutionResult, Self::Error> {
         let verb = match context.command_name.as_str() {
             "local" => DeclareVerb::Local,
             "readonly" => DeclareVerb::Readonly,
@@ -177,13 +177,13 @@ impl builtins::Command for DeclareCommand {
 impl DeclareCommand {
     fn try_display_declaration(
         &self,
-        context: &crate::core::ExecutionContext<'_, impl crate::core::ShellExtensions>,
-        declaration: &crate::core::CommandArg,
+        context: &crate::engine::ExecutionContext<'_, impl crate::engine::ShellExtensions>,
+        declaration: &crate::engine::CommandArg,
         verb: DeclareVerb,
-    ) -> Result<bool, crate::core::Error> {
+    ) -> Result<bool, crate::engine::Error> {
         let name = match declaration {
-            crate::core::CommandArg::String(s) => s,
-            crate::core::CommandArg::Assignment(_) => {
+            crate::engine::CommandArg::String(s) => s,
+            crate::engine::CommandArg::Assignment(_) => {
                 writeln!(context.stderr(), "declare: {declaration}: not found")?;
                 return Ok(false);
             }
@@ -239,10 +239,10 @@ impl DeclareCommand {
 
     fn process_declaration(
         &self,
-        context: &mut crate::core::ExecutionContext<'_, impl crate::core::ShellExtensions>,
-        declaration: &crate::core::CommandArg,
+        context: &mut crate::engine::ExecutionContext<'_, impl crate::engine::ShellExtensions>,
+        declaration: &crate::engine::CommandArg,
         verb: DeclareVerb,
-    ) -> Result<bool, crate::core::Error> {
+    ) -> Result<bool, crate::engine::Error> {
         let create_var_local = matches!(verb, DeclareVerb::Local)
             || (matches!(verb, DeclareVerb::Declare)
                 && context.shell.in_function()
@@ -340,15 +340,16 @@ impl DeclareCommand {
     }
 
     fn declaration_to_name_and_value(
-        declaration: &crate::core::CommandArg,
-    ) -> Result<(String, Option<String>, Option<ShellValueLiteral>, bool), crate::core::Error> {
+        declaration: &crate::engine::CommandArg,
+    ) -> Result<(String, Option<String>, Option<ShellValueLiteral>, bool), crate::engine::Error>
+    {
         let name;
         let assigned_index;
         let initial_value;
         let name_is_array;
 
         match declaration {
-            crate::core::CommandArg::String(s) => {
+            crate::engine::CommandArg::String(s) => {
                 // We need to handle the case of someone invoking `declare array[index]`.
                 // In such case, we ignore the index and treat it as a declaration of
                 // the array.
@@ -364,7 +365,9 @@ impl DeclareCommand {
                     name = captures
                         .get(1)
                         .ok_or_else(|| {
-                            crate::core::ErrorKind::InternalError("declaration parse error".into())
+                            crate::engine::ErrorKind::InternalError(
+                                "declaration parse error".into(),
+                            )
                         })?
                         .as_str()
                         .to_owned();
@@ -378,7 +381,7 @@ impl DeclareCommand {
                 }
                 initial_value = None;
             }
-            crate::core::CommandArg::Assignment(assignment) => {
+            crate::engine::CommandArg::Assignment(assignment) => {
                 match &assignment.name {
                     ast::AssignmentName::VariableName(var_name) => {
                         name = var_name.to_owned();
@@ -426,9 +429,9 @@ impl DeclareCommand {
 
     fn display_matching_env_declarations(
         &self,
-        context: &crate::core::ExecutionContext<'_, impl crate::core::ShellExtensions>,
+        context: &crate::engine::ExecutionContext<'_, impl crate::engine::ShellExtensions>,
         verb: DeclareVerb,
-    ) -> Result<(), crate::core::Error> {
+    ) -> Result<(), crate::engine::Error> {
         //
         // Dump all declarations. Use attribute flags to filter which variables are dumped.
         //
@@ -544,8 +547,8 @@ impl DeclareCommand {
 
     fn display_matching_functions(
         &self,
-        context: &crate::core::ExecutionContext<'_, impl crate::core::ShellExtensions>,
-    ) -> Result<(), crate::core::Error> {
+        context: &crate::engine::ExecutionContext<'_, impl crate::engine::ShellExtensions>,
+    ) -> Result<(), crate::engine::Error> {
         for (name, registration) in context.shell.funcs().iter().sorted_by_key(|v| v.0) {
             if self.function_names_only {
                 writeln!(context.stdout(), "declare -f {name}")?;
@@ -561,7 +564,7 @@ impl DeclareCommand {
     const fn apply_attributes_before_update(
         &self,
         var: &mut ShellVariable,
-    ) -> Result<(), crate::core::Error> {
+    ) -> Result<(), crate::engine::Error> {
         if let Some(value) = self.make_integer.to_bool() {
             if value {
                 var.treat_as_integer();
@@ -628,7 +631,7 @@ impl DeclareCommand {
         &self,
         var: &mut ShellVariable,
         verb: DeclareVerb,
-    ) -> Result<(), crate::core::Error> {
+    ) -> Result<(), crate::engine::Error> {
         if matches!(verb, DeclareVerb::Readonly) {
             var.set_readonly();
         } else if let Some(value) = self.make_readonly.to_bool() {

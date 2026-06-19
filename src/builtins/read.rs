@@ -3,7 +3,7 @@ use itertools::Itertools;
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
-use crate::core::{ErrorKind, builtins, env, error, variables};
+use crate::engine::{ErrorKind, builtins, env, error, variables};
 
 use std::io::{Read, Write};
 
@@ -77,12 +77,12 @@ pub(crate) struct ReadCommand {
 }
 
 impl builtins::Command for ReadCommand {
-    type Error = crate::core::Error;
+    type Error = crate::engine::Error;
 
-    async fn execute<SE: crate::core::ShellExtensions>(
+    async fn execute<SE: crate::engine::ShellExtensions>(
         &self,
-        context: crate::core::ExecutionContext<'_, SE>,
-    ) -> Result<crate::core::ExecutionResult, Self::Error> {
+        context: crate::engine::ExecutionContext<'_, SE>,
+    ) -> Result<crate::engine::ExecutionResult, Self::Error> {
         if self.use_readline {
             return error::unimp("read -e");
         }
@@ -97,8 +97,8 @@ impl builtins::Command for ReadCommand {
 
         // Find the input stream to use.
         let fd_num = self.fd_num_to_read.map_or(
-            crate::core::openfiles::OpenFiles::STDIN_FD,
-            crate::core::ShellFd::from,
+            crate::engine::openfiles::OpenFiles::STDIN_FD,
+            crate::engine::ShellFd::from,
         );
 
         // Retrieve the file.
@@ -122,19 +122,22 @@ impl builtins::Command for ReadCommand {
 
         // Extract the input line and determine exit code based on result.
         let (input_line, result) = match &read_result {
-            ReadResult::Line(line) => (Some(line.clone()), crate::core::ExecutionResult::success()),
+            ReadResult::Line(line) => (
+                Some(line.clone()),
+                crate::engine::ExecutionResult::success(),
+            ),
             ReadResult::Eof(Some(line)) => (
                 Some(line.clone()),
-                crate::core::ExecutionResult::general_error(),
+                crate::engine::ExecutionResult::general_error(),
             ),
             ReadResult::Eof(None) | ReadResult::Interrupted | ReadResult::InputNotReady => {
-                (None, crate::core::ExecutionResult::general_error())
+                (None, crate::engine::ExecutionResult::general_error())
             }
             ReadResult::TimedOut(partial) => (
                 partial.clone(),
-                crate::core::ExecutionResult::new(TIMEOUT_EXIT_CODE),
+                crate::engine::ExecutionResult::new(TIMEOUT_EXIT_CODE),
             ),
-            ReadResult::InputReady => (None, crate::core::ExecutionResult::success()),
+            ReadResult::InputReady => (None, crate::engine::ExecutionResult::success()),
         };
 
         // Assign input to variables based on options.
@@ -158,13 +161,13 @@ impl builtins::Command for ReadCommand {
 /// - Named variables: Split input by IFS and assign to each variable, with remainder to last
 /// - Default (`REPLY`): Assign entire input line to the `REPLY` variable
 fn assign_input_to_variables(
-    shell: &mut crate::core::Shell<impl crate::core::ShellExtensions>,
+    shell: &mut crate::engine::Shell<impl crate::engine::ShellExtensions>,
     input_line: Option<&str>,
     ifs: &str,
     skip_ifs_splitting: bool,
     array_variable: Option<&str>,
     variable_names: &[String],
-) -> Result<(), crate::core::Error> {
+) -> Result<(), crate::engine::Error> {
     if let Some(array_variable) = array_variable {
         let literal_fields = build_array_fields(input_line, ifs, skip_ifs_splitting);
         shell.env_mut().update_or_add(
@@ -194,12 +197,12 @@ fn assign_input_to_variables(
 /// and assigned to the last variable. If there are more variables than fields,
 /// the extra variables are set to empty strings.
 fn assign_to_named_variables(
-    shell: &mut crate::core::Shell<impl crate::core::ShellExtensions>,
+    shell: &mut crate::engine::Shell<impl crate::engine::ShellExtensions>,
     input_line: Option<&str>,
     ifs: &str,
     skip_ifs_splitting: bool,
     variable_names: &[String],
-) -> Result<(), crate::core::Error> {
+) -> Result<(), crate::engine::Error> {
     let mut fields =
         build_variable_fields(input_line, ifs, skip_ifs_splitting, variable_names.len());
 
@@ -293,7 +296,7 @@ enum ReadResult {
 /// higher-level logic of line building and escape processing.
 struct InputReader {
     /// The input source.
-    input: crate::core::openfiles::OpenFile,
+    input: crate::engine::openfiles::OpenFile,
     /// Optional deadline for timeout.
     deadline: Option<Instant>,
     /// Single-byte read buffer.
@@ -310,7 +313,7 @@ struct InputReader {
     ///
     /// The leading underscore suppresses the "unused field" warning while making
     /// it explicit this field exists solely for its `Drop` implementation.
-    _term_mode: Option<crate::core::terminal::AutoModeGuard>,
+    _term_mode: Option<crate::engine::terminal::AutoModeGuard>,
 }
 
 /// Events that can occur when reading input.
@@ -330,9 +333,9 @@ enum InputEvent {
 impl InputReader {
     /// Creates a new input reader with optional timeout.
     fn new(
-        input: crate::core::openfiles::OpenFile,
+        input: crate::engine::openfiles::OpenFile,
         timeout: Option<Duration>,
-        term_mode: Option<crate::core::terminal::AutoModeGuard>,
+        term_mode: Option<crate::engine::terminal::AutoModeGuard>,
     ) -> Self {
         Self {
             input,
@@ -345,11 +348,11 @@ impl InputReader {
     /// Checks if input is immediately available (for `-t 0`). Returns `false` if an error
     /// occurs while checking for available input.
     fn check_input_available(&self) -> bool {
-        crate::core::sys::poll::poll_for_input(&self.input, Duration::ZERO).unwrap_or(false)
+        crate::engine::sys::poll::poll_for_input(&self.input, Duration::ZERO).unwrap_or(false)
     }
 
     /// Reads the next input event, handling timeout and control characters.
-    fn read_event(&mut self) -> Result<InputEvent, crate::core::Error> {
+    fn read_event(&mut self) -> Result<InputEvent, crate::engine::Error> {
         // Check timeout before attempting read.
         if let Some(deadline) = self.deadline {
             let remaining = deadline.saturating_duration_since(Instant::now());
@@ -358,7 +361,7 @@ impl InputReader {
             }
 
             // Poll for input with remaining timeout.
-            match crate::core::sys::poll::poll_for_input(&self.input, remaining) {
+            match crate::engine::sys::poll::poll_for_input(&self.input, remaining) {
                 Ok(true) => { /* Data available, proceed. */ }
                 Ok(false) => return Ok(InputEvent::Timeout),
                 Err(e) => return Err(e.into()),
@@ -403,7 +406,7 @@ struct LineReaderConfig {
 fn read_line_with_reader(
     reader: &mut InputReader,
     config: &LineReaderConfig,
-) -> Result<ReadResult, crate::core::Error> {
+) -> Result<ReadResult, crate::engine::Error> {
     let mut line = String::new();
     let mut pending_backslash = false;
 
@@ -511,10 +514,10 @@ impl ReadCommand {
     /// - With `-r`: backslash is treated as a literal character
     fn read_line(
         &self,
-        input_file: crate::core::openfiles::OpenFile,
+        input_file: crate::engine::openfiles::OpenFile,
         mut stderr_file: impl std::io::Write,
         timeout: Option<Duration>,
-    ) -> Result<ReadResult, crate::core::Error> {
+    ) -> Result<ReadResult, crate::engine::Error> {
         let term_mode = self.setup_terminal_settings(&input_file)?;
 
         // Display prompt on stderr, but only if input is from a terminal (per bash behavior).
@@ -566,11 +569,11 @@ impl ReadCommand {
 
     fn setup_terminal_settings(
         &self,
-        file: &crate::core::openfiles::OpenFile,
-    ) -> Result<Option<crate::core::terminal::AutoModeGuard>, crate::core::Error> {
-        let mode = crate::core::terminal::AutoModeGuard::new(file.to_owned()).ok();
+        file: &crate::engine::openfiles::OpenFile,
+    ) -> Result<Option<crate::engine::terminal::AutoModeGuard>, crate::engine::Error> {
+        let mode = crate::engine::terminal::AutoModeGuard::new(file.to_owned()).ok();
         if let Some(mode) = &mode {
-            let config = crate::core::terminal::Settings::builder()
+            let config = crate::engine::terminal::Settings::builder()
                 .line_input(false)
                 .interrupt_signals(false)
                 .echo_input(!self.silent)
@@ -590,8 +593,8 @@ impl ReadCommand {
     /// TODO(read): Bash uses $TMOUT as a default timeout for `read` when -t is not specified.
     fn validate_timeout(
         &self,
-        context: &crate::core::ExecutionContext<'_, impl crate::core::ShellExtensions>,
-    ) -> Result<Option<crate::core::ExecutionResult>, crate::core::Error> {
+        context: &crate::engine::ExecutionContext<'_, impl crate::engine::ShellExtensions>,
+    ) -> Result<Option<crate::engine::ExecutionResult>, crate::engine::Error> {
         if let Some(timeout) = self.timeout_in_seconds
             && timeout < 0.0
         {
@@ -600,7 +603,7 @@ impl ReadCommand {
                 "{}: -t: invalid timeout specification",
                 context.command_name
             )?;
-            return Ok(Some(crate::core::ExecutionResult::general_error()));
+            return Ok(Some(crate::engine::ExecutionResult::general_error()));
         }
         Ok(None)
     }

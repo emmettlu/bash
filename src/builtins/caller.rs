@@ -1,4 +1,4 @@
-use crate::core::{ExecutionResult, builtins, callstack};
+use crate::engine::{ExecutionResult, builtins, callstack};
 use clap::Parser;
 use std::io::Write;
 
@@ -10,11 +10,11 @@ pub(crate) struct CallerCommand {
 }
 
 impl builtins::Command for CallerCommand {
-    type Error = crate::core::Error;
+    type Error = crate::engine::Error;
 
-    async fn execute<SE: crate::core::ShellExtensions>(
+    async fn execute<SE: crate::engine::ShellExtensions>(
         &self,
-        context: crate::core::ExecutionContext<'_, SE>,
+        context: crate::engine::ExecutionContext<'_, SE>,
     ) -> Result<ExecutionResult, Self::Error> {
         let stack = context.shell.call_stack();
 

@@ -3,11 +3,11 @@ use std::collections::HashMap;
 #[allow(clippy::wildcard_imports)]
 use super::*;
 
-use crate::core::builtins::{self, builtin, decl_builtin, raw_arg_builtin, simple_builtin};
+use crate::engine::builtins::{self, builtin, decl_builtin, raw_arg_builtin, simple_builtin};
 
 /// Returns the default set of Bash-compatible built-in commands.
 #[allow(clippy::too_many_lines)]
-pub fn default_builtins<SE: crate::core::ShellExtensions>()
+pub fn default_builtins<SE: crate::engine::ShellExtensions>()
 -> HashMap<String, builtins::Registration<SE>> {
     let mut m = HashMap::<String, builtins::Registration<SE>>::new();
 

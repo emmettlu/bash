@@ -1,7 +1,7 @@
 use clap::Parser;
 use std::io::Write;
 
-use crate::core::{ExecutionControlFlow, ExecutionExitCode, ExecutionResult, builtins};
+use crate::engine::{ExecutionControlFlow, ExecutionExitCode, ExecutionResult, builtins};
 
 /// Return from the current function.
 #[derive(Parser)]
@@ -11,12 +11,12 @@ pub(crate) struct ReturnCommand {
 }
 
 impl builtins::Command for ReturnCommand {
-    type Error = crate::core::Error;
+    type Error = crate::engine::Error;
 
-    async fn execute<SE: crate::core::ShellExtensions>(
+    async fn execute<SE: crate::engine::ShellExtensions>(
         &self,
-        context: crate::core::ExecutionContext<'_, SE>,
-    ) -> Result<crate::core::ExecutionResult, Self::Error> {
+        context: crate::engine::ExecutionContext<'_, SE>,
+    ) -> Result<crate::engine::ExecutionResult, Self::Error> {
         #[expect(clippy::cast_sign_loss)]
         let code_8bit = if let Some(code_32bit) = &self.code {
             (code_32bit & 0xFF) as u8

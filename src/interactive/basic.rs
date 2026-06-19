@@ -14,6 +14,6 @@ pub(crate) trait LineReader {
             &str,
             usize,
         )
-            -> Result<crate::core::completion::Completions, ShellError>,
+            -> Result<crate::engine::completion::Completions, ShellError>,
     ) -> Result<ReadResult, ShellError>;
 }

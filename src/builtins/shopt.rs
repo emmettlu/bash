@@ -2,7 +2,7 @@ use clap::Parser;
 use itertools::Itertools;
 use std::io::Write;
 
-use crate::core::{ExecutionExitCode, ExecutionResult, builtins};
+use crate::engine::{ExecutionExitCode, ExecutionResult, builtins};
 
 /// Manage shopt-style options.
 #[derive(Parser)]
@@ -32,13 +32,13 @@ pub(crate) struct ShoptCommand {
 }
 
 impl builtins::Command for ShoptCommand {
-    type Error = crate::core::Error;
+    type Error = crate::engine::Error;
 
     #[allow(clippy::too_many_lines)]
-    async fn execute<SE: crate::core::ShellExtensions>(
+    async fn execute<SE: crate::engine::ShellExtensions>(
         &self,
-        context: crate::core::ExecutionContext<'_, SE>,
-    ) -> Result<crate::core::ExecutionResult, Self::Error> {
+        context: crate::engine::ExecutionContext<'_, SE>,
+    ) -> Result<crate::engine::ExecutionResult, Self::Error> {
         if self.set && self.unset {
             writeln!(
                 context.stderr(),
@@ -54,12 +54,14 @@ impl builtins::Command for ShoptCommand {
 
             // Enumerate all options of the selected type.
             let options = if self.set_o_names_only {
-                crate::core::namedoptions::options(crate::core::namedoptions::ShellOptionKind::SetO)
-                    .iter()
-                    .sorted_by_key(|opt| opt.name)
+                crate::engine::namedoptions::options(
+                    crate::engine::namedoptions::ShellOptionKind::SetO,
+                )
+                .iter()
+                .sorted_by_key(|opt| opt.name)
             } else {
-                crate::core::namedoptions::options(
-                    crate::core::namedoptions::ShellOptionKind::Shopt,
+                crate::engine::namedoptions::options(
+                    crate::engine::namedoptions::ShellOptionKind::Shopt,
                 )
                 .iter()
                 .sorted_by_key(|opt| opt.name)
@@ -99,13 +101,13 @@ impl builtins::Command for ShoptCommand {
                 }
 
                 let option_definition = if self.set_o_names_only {
-                    crate::core::namedoptions::options(
-                        crate::core::namedoptions::ShellOptionKind::SetO,
+                    crate::engine::namedoptions::options(
+                        crate::engine::namedoptions::ShellOptionKind::SetO,
                     )
                     .get(option_name.as_str())
                 } else {
-                    crate::core::namedoptions::options(
-                        crate::core::namedoptions::ShellOptionKind::Shopt,
+                    crate::engine::namedoptions::options(
+                        crate::engine::namedoptions::ShellOptionKind::Shopt,
                     )
                     .get(option_name.as_str())
                 };

@@ -48,7 +48,7 @@ impl super::LineReader for TermLineReader {
             &str,
             usize,
         )
-            -> Result<crate::core::completion::Completions, ShellError>,
+            -> Result<crate::engine::completion::Completions, ShellError>,
     ) -> Result<ReadResult, ShellError> {
         let mut state = ReadLineState::new(prompt);
         state.display_prompt()?;
@@ -75,7 +75,7 @@ struct ReadLineState<'a> {
 }
 
 struct CompletionMenu {
-    completions: crate::core::completion::Completions,
+    completions: crate::engine::completion::Completions,
     selected: usize,
     rendered_lines: usize,
     cursor_visibility: Option<win_term::CursorVisibilityGuard>,
@@ -107,7 +107,7 @@ impl<'a> ReadLineState<'a> {
             &str,
             usize,
         )
-            -> Result<crate::core::completion::Completions, ShellError>,
+            -> Result<crate::engine::completion::Completions, ShellError>,
     ) -> Result<Option<ReadResult>, ShellError> {
         match (&event.modifiers, &event.code) {
             (_, KeyCode::Enter) if self.completion_menu.is_some() => {
@@ -261,8 +261,10 @@ impl<'a> ReadLineState<'a> {
         completion_handler: &mut impl FnMut(
             &str,
             usize,
-        )
-            -> Result<crate::core::completion::Completions, ShellError>,
+        ) -> Result<
+            crate::engine::completion::Completions,
+            ShellError,
+        >,
     ) -> Result<(), ShellError> {
         if self.completion_menu.is_some() {
             if let Some(menu) = self.completion_menu.as_mut() {
@@ -277,7 +279,7 @@ impl<'a> ReadLineState<'a> {
 
     fn handle_completions(
         &mut self,
-        completions: crate::core::completion::Completions,
+        completions: crate::engine::completion::Completions,
     ) -> Result<(), ShellError> {
         if completions.candidates.is_empty() {
             Ok(())
@@ -300,7 +302,7 @@ impl<'a> ReadLineState<'a> {
     )]
     fn handle_single_completion(
         &mut self,
-        completions: &crate::core::completion::Completions,
+        completions: &crate::engine::completion::Completions,
     ) -> Result<(), ShellError> {
         let Some(candidate) = completions.candidates.first() else {
             return Ok(());
@@ -503,11 +505,11 @@ impl<'a> ReadLineState<'a> {
 #[allow(clippy::string_slice)]
 fn format_completion_candidate(
     mut candidate: &str,
-    options: &crate::core::completion::ProcessingOptions,
+    options: &crate::engine::completion::ProcessingOptions,
 ) -> String {
     if options.treat_as_filenames {
-        let trimmed = crate::core::sys::fs::strip_path_separator_suffix(candidate);
-        if let Some(index) = crate::core::sys::fs::rfind_path_separator(trimmed) {
+        let trimmed = crate::engine::sys::fs::strip_path_separator_suffix(candidate);
+        if let Some(index) = crate::engine::sys::fs::rfind_path_separator(trimmed) {
             candidate = &candidate[index + 1..];
         }
     }
@@ -515,7 +517,7 @@ fn format_completion_candidate(
     candidate.to_string()
 }
 
-fn completion_column_width(completions: &crate::core::completion::Completions) -> usize {
+fn completion_column_width(completions: &crate::engine::completion::Completions) -> usize {
     let max_candidate_width = completions
         .candidates
         .iter()

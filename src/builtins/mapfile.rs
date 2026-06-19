@@ -2,7 +2,9 @@ use std::io::{Read, Write};
 
 use clap::Parser;
 
-use crate::core::{ErrorKind, ExecutionExitCode, ExecutionResult, builtins, env, error, variables};
+use crate::engine::{
+    ErrorKind, ExecutionExitCode, ExecutionResult, builtins, env, error, variables,
+};
 
 /// Read lines from standard input into an indexed array variable.
 #[derive(Parser)]
@@ -29,7 +31,7 @@ pub(crate) struct MapFileCommand {
 
     /// File descriptor to read from (defaults to stdin).
     #[arg(short = 'u', default_value_t = 0)]
-    fd: crate::core::ShellFd,
+    fd: crate::engine::ShellFd,
 
     /// Name of function to call for each group of lines.
     #[arg(short = 'C')]
@@ -45,12 +47,12 @@ pub(crate) struct MapFileCommand {
 }
 
 impl builtins::Command for MapFileCommand {
-    type Error = crate::core::Error;
+    type Error = crate::engine::Error;
 
-    async fn execute<SE: crate::core::ShellExtensions>(
+    async fn execute<SE: crate::engine::ShellExtensions>(
         &self,
-        context: crate::core::ExecutionContext<'_, SE>,
-    ) -> Result<crate::core::ExecutionResult, Self::Error> {
+        context: crate::engine::ExecutionContext<'_, SE>,
+    ) -> Result<crate::engine::ExecutionResult, Self::Error> {
         if self.callback_group_size != 5000 || self.callback.is_some() {
             return error::unimp("mapfile -C/-c is not yet implemented");
         }
@@ -124,8 +126,8 @@ impl builtins::Command for MapFileCommand {
 impl MapFileCommand {
     fn read_entries(
         &self,
-        mut input_file: crate::core::openfiles::OpenFile,
-    ) -> Result<variables::ArrayLiteral, crate::core::Error> {
+        mut input_file: crate::engine::openfiles::OpenFile,
+    ) -> Result<variables::ArrayLiteral, crate::engine::Error> {
         let _term_mode = setup_terminal_settings(&input_file)?;
 
         let mut entries = vec![];
@@ -184,11 +186,11 @@ impl MapFileCommand {
 }
 
 fn setup_terminal_settings(
-    file: &crate::core::openfiles::OpenFile,
-) -> Result<Option<crate::core::terminal::AutoModeGuard>, crate::core::Error> {
-    let mode = crate::core::terminal::AutoModeGuard::new(file.to_owned()).ok();
+    file: &crate::engine::openfiles::OpenFile,
+) -> Result<Option<crate::engine::terminal::AutoModeGuard>, crate::engine::Error> {
+    let mode = crate::engine::terminal::AutoModeGuard::new(file.to_owned()).ok();
     if let Some(mode) = &mode {
-        let config = crate::core::terminal::Settings::builder()
+        let config = crate::engine::terminal::Settings::builder()
             .line_input(false)
             .interrupt_signals(false)
             .build();

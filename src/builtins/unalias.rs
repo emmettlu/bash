@@ -1,7 +1,7 @@
 use clap::Parser;
 use std::io::Write;
 
-use crate::core::{ExecutionResult, builtins};
+use crate::engine::{ExecutionResult, builtins};
 
 /// Unset a shell alias.
 #[derive(Parser)]
@@ -15,12 +15,12 @@ pub(crate) struct UnaliasCommand {
 }
 
 impl builtins::Command for UnaliasCommand {
-    type Error = crate::core::Error;
+    type Error = crate::engine::Error;
 
-    async fn execute<SE: crate::core::ShellExtensions>(
+    async fn execute<SE: crate::engine::ShellExtensions>(
         &self,
-        context: crate::core::ExecutionContext<'_, SE>,
-    ) -> Result<crate::core::ExecutionResult, Self::Error> {
+        context: crate::engine::ExecutionContext<'_, SE>,
+    ) -> Result<crate::engine::ExecutionResult, Self::Error> {
         let mut exit_code = ExecutionResult::success();
 
         if self.remove_all {

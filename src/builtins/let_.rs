@@ -1,7 +1,7 @@
 use clap::Parser;
 use std::io::Write;
 
-use crate::core::{ExecutionExitCode, ExecutionResult, arithmetic::Evaluatable, builtins};
+use crate::engine::{ExecutionExitCode, ExecutionResult, arithmetic::Evaluatable, builtins};
 
 /// Evaluate arithmetic expressions.
 #[derive(Parser)]
@@ -12,12 +12,12 @@ pub(crate) struct LetCommand {
 }
 
 impl builtins::Command for LetCommand {
-    type Error = crate::core::Error;
+    type Error = crate::engine::Error;
 
-    async fn execute<SE: crate::core::ShellExtensions>(
+    async fn execute<SE: crate::engine::ShellExtensions>(
         &self,
-        context: crate::core::ExecutionContext<'_, SE>,
-    ) -> Result<crate::core::ExecutionResult, Self::Error> {
+        context: crate::engine::ExecutionContext<'_, SE>,
+    ) -> Result<crate::engine::ExecutionResult, Self::Error> {
         let mut result = ExecutionExitCode::InvalidUsage.into();
 
         if self.exprs.is_empty() {

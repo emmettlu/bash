@@ -9,9 +9,9 @@ use crate::interactive::ShellError;
 /// Result of an interactive execution.
 pub enum InteractiveExecutionResult {
     /// The command was executed and returned the given result.
-    Executed(crate::core::ExecutionResult),
+    Executed(crate::engine::ExecutionResult),
     /// The command failed to execute.
-    Failed(crate::core::Error),
+    Failed(crate::engine::Error),
     /// End of input was reached.
     Eof,
 }
@@ -50,7 +50,7 @@ impl Default for InteractiveOptions {
 }
 
 /// Represents an interactive shell that displays prompts, interactively reads user input, etc.
-pub struct InteractiveShell<'a, IB: InputBackend, SE: crate::core::ShellExtensions> {
+pub struct InteractiveShell<'a, IB: InputBackend, SE: crate::engine::ShellExtensions> {
     /// The underlying shell instance.
     shell: crate::interactive::ShellRef<SE>,
     /// The input backend to use.
@@ -61,7 +61,7 @@ pub struct InteractiveShell<'a, IB: InputBackend, SE: crate::core::ShellExtensio
     options: InteractiveOptions,
 }
 
-impl<'a, IB: InputBackend, SE: crate::core::ShellExtensions> InteractiveShell<'a, IB, SE> {
+impl<'a, IB: InputBackend, SE: crate::engine::ShellExtensions> InteractiveShell<'a, IB, SE> {
     /// Creates a new `InteractiveShell` wrapping the given shell instance.
     ///
     /// # Arguments
@@ -78,7 +78,7 @@ impl<'a, IB: InputBackend, SE: crate::core::ShellExtensions> InteractiveShell<'a
 
         // Acquire terminal control if stdin is a terminal.
         if stdin_is_terminal {
-            crate::core::terminal::TerminalControl::acquire()?;
+            crate::engine::terminal::TerminalControl::acquire()?;
         }
 
         // Set up terminal integration if enabled *and* if stdin is a terminal.
@@ -118,15 +118,15 @@ impl<'a, IB: InputBackend, SE: crate::core::ShellExtensions> InteractiveShell<'a
         loop {
             let result = self.run_interactively_once().await?;
             match result {
-                InteractiveExecutionResult::Executed(crate::core::ExecutionResult {
-                    next_control_flow: crate::core::results::ExecutionControlFlow::ExitShell,
+                InteractiveExecutionResult::Executed(crate::engine::ExecutionResult {
+                    next_control_flow: crate::engine::results::ExecutionControlFlow::ExitShell,
                     ..
                 }) => {
                     break;
                 }
-                InteractiveExecutionResult::Executed(crate::core::ExecutionResult {
+                InteractiveExecutionResult::Executed(crate::engine::ExecutionResult {
                     next_control_flow:
-                        crate::core::results::ExecutionControlFlow::ReturnFromFunctionOrScript,
+                        crate::engine::results::ExecutionControlFlow::ReturnFromFunctionOrScript,
                     ..
                 }) => {
                     tracing::error!("return from non-function/script");
@@ -201,8 +201,8 @@ impl<'a, IB: InputBackend, SE: crate::core::ShellExtensions> InteractiveShell<'a
             }
             ReadResult::Interrupted => {
                 // We were interrupted; report that appropriately.
-                let result: crate::core::ExecutionResult =
-                    crate::core::ExecutionExitCode::Interrupted.into();
+                let result: crate::engine::ExecutionResult =
+                    crate::engine::ExecutionExitCode::Interrupted.into();
                 self.shell
                     .lock()
                     .await
@@ -213,7 +213,7 @@ impl<'a, IB: InputBackend, SE: crate::core::ShellExtensions> InteractiveShell<'a
     }
 
     async fn compose_prompt(
-        shell: &mut crate::core::Shell<SE>,
+        shell: &mut crate::engine::Shell<SE>,
         terminal_integration: Option<&crate::interactive::term_integration::TerminalIntegration>,
     ) -> Result<InteractivePrompt, ShellError> {
         // Now that we've done that, compose the prompt.
@@ -288,7 +288,7 @@ impl<'a, IB: InputBackend, SE: crate::core::ShellExtensions> InteractiveShell<'a
 
         // Execute the command.
         let params = shell.default_exec_params();
-        let source_info = crate::core::SourceInfo::from("main");
+        let source_info = crate::engine::SourceInfo::from("main");
         let result = match shell.run_string(read_result, &source_info, &params).await {
             Ok(result) => Ok(InteractiveExecutionResult::Executed(result)),
             Err(e) => Ok(InteractiveExecutionResult::Failed(e)),
@@ -327,7 +327,7 @@ impl<'a, IB: InputBackend, SE: crate::core::ShellExtensions> InteractiveShell<'a
     }
 
     async fn run_pre_prompt_actions(
-        shell: &mut crate::core::Shell<SE>,
+        shell: &mut crate::engine::Shell<SE>,
         options: &InteractiveOptions,
     ) -> Result<(), ShellError> {
         // Check for any completed jobs.
@@ -338,10 +338,10 @@ impl<'a, IB: InputBackend, SE: crate::core::ShellExtensions> InteractiveShell<'a
             && let Some(prompt_cmd_var) = shell.env_var("PROMPT_COMMAND")
         {
             match prompt_cmd_var.value() {
-                crate::core::ShellValue::String(cmd_str) => {
+                crate::engine::ShellValue::String(cmd_str) => {
                     Self::run_pre_prompt_command(shell, cmd_str.to_owned()).await?;
                 }
-                crate::core::ShellValue::IndexedArray(values) => {
+                crate::engine::ShellValue::IndexedArray(values) => {
                     let owned_values: Vec<_> = values.values().cloned().collect();
                     for cmd_str in owned_values {
                         Self::run_pre_prompt_command(shell, cmd_str).await?;
@@ -356,7 +356,7 @@ impl<'a, IB: InputBackend, SE: crate::core::ShellExtensions> InteractiveShell<'a
         // TODO(precmd_functions): verify if we need to save/restore exit results.
         if options.run_cmd_exec_funcs {
             // If there's a variable called precmd_functions, then call them.
-            if let Some(crate::core::ShellValue::IndexedArray(precmd_funcs)) = shell
+            if let Some(crate::engine::ShellValue::IndexedArray(precmd_funcs)) = shell
                 .env_var("precmd_functions")
                 .map(|var| var.value())
                 .cloned()
@@ -377,7 +377,7 @@ impl<'a, IB: InputBackend, SE: crate::core::ShellExtensions> InteractiveShell<'a
     }
 
     async fn run_pre_exec_actions(
-        shell: &mut crate::core::Shell<SE>,
+        shell: &mut crate::engine::Shell<SE>,
         command_line: &str,
         options: &InteractiveOptions,
         terminal_integration: Option<&crate::interactive::term_integration::TerminalIntegration>,
@@ -395,7 +395,7 @@ impl<'a, IB: InputBackend, SE: crate::core::ShellExtensions> InteractiveShell<'a
         // TODO(preexec_functions): verify if we need to save/restore exit results.
         if options.run_cmd_exec_funcs {
             // If there's a variable called preexec_functions, then call them.
-            if let Some(crate::core::ShellValue::IndexedArray(preexec_funcs)) = shell
+            if let Some(crate::engine::ShellValue::IndexedArray(preexec_funcs)) = shell
                 .env_var("preexec_functions")
                 .map(|var| var.value())
                 .cloned()
@@ -421,7 +421,7 @@ impl<'a, IB: InputBackend, SE: crate::core::ShellExtensions> InteractiveShell<'a
     }
 
     async fn run_pre_prompt_command(
-        shell: &mut crate::core::Shell<SE>,
+        shell: &mut crate::engine::Shell<SE>,
         prompt_cmd: String,
     ) -> Result<(), ShellError> {
         // Save (and later restore) the last exit status.
@@ -430,7 +430,7 @@ impl<'a, IB: InputBackend, SE: crate::core::ShellExtensions> InteractiveShell<'a
 
         // Run the command.
         let params = shell.default_exec_params();
-        let source_info = crate::core::SourceInfo::from("PROMPT_COMMAND");
+        let source_info = crate::engine::SourceInfo::from("PROMPT_COMMAND");
         shell.run_string(prompt_cmd, &source_info, &params).await?;
 
         // Restore the last exit status.

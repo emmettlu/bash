@@ -1,6 +1,6 @@
 use std::io::IsTerminal;
 
-use crate::core::Shell;
+use crate::engine::Shell;
 
 use crate::interactive::{
     InputBackend, ShellError, completion,
@@ -17,7 +17,7 @@ pub struct BasicInputBackend;
 impl InputBackend for BasicInputBackend {
     fn read_line(
         &mut self,
-        shell: &crate::interactive::ShellRef<impl crate::core::ShellExtensions>,
+        shell: &crate::interactive::ShellRef<impl crate::engine::ShellExtensions>,
         prompt: InteractivePrompt,
     ) -> Result<ReadResult, ShellError> {
         if std::io::stdin().is_terminal() {
@@ -29,7 +29,7 @@ impl InputBackend for BasicInputBackend {
 }
 
 impl BasicInputBackend {
-    fn read_line_via<R: super::LineReader, SE: crate::core::ShellExtensions>(
+    fn read_line_via<R: super::LineReader, SE: crate::engine::ShellExtensions>(
         &self,
         shell_ref: &crate::interactive::ShellRef<SE>,
         reader: &R,
@@ -79,7 +79,7 @@ impl BasicInputBackend {
         std::io::stdin().is_terminal()
     }
 
-    fn is_valid_input(shell: &Shell<impl crate::core::ShellExtensions>, input: &str) -> bool {
+    fn is_valid_input(shell: &Shell<impl crate::engine::ShellExtensions>, input: &str) -> bool {
         match shell.parse_string(input.to_owned()) {
             // Incomplete tokenizing (unclosed quotes, etc.) - need more input
             Err(crate::parser::ParseError::Tokenizing { inner, position: _ })
@@ -95,20 +95,20 @@ impl BasicInputBackend {
     }
 
     fn generate_completions(
-        shell: &mut Shell<impl crate::core::ShellExtensions>,
+        shell: &mut Shell<impl crate::engine::ShellExtensions>,
         line: &str,
         cursor: usize,
-    ) -> Result<crate::core::completion::Completions, ShellError> {
+    ) -> Result<crate::engine::completion::Completions, ShellError> {
         compio::runtime::Runtime::with_current(|rt| {
             rt.block_on(Self::generate_completions_async(shell, line, cursor))
         })
     }
 
     async fn generate_completions_async(
-        shell: &mut Shell<impl crate::core::ShellExtensions>,
+        shell: &mut Shell<impl crate::engine::ShellExtensions>,
         line: &str,
         cursor: usize,
-    ) -> Result<crate::core::completion::Completions, ShellError> {
+    ) -> Result<crate::engine::completion::Completions, ShellError> {
         Ok(completion::complete_async(shell, line, cursor).await)
     }
 }

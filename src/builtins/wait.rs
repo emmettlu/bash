@@ -1,7 +1,7 @@
 use clap::Parser;
 use std::io::Write;
 
-use crate::core::{ExecutionExitCode, ExecutionResult, builtins, error};
+use crate::engine::{ExecutionExitCode, ExecutionResult, builtins, error};
 
 /// Wait for jobs to terminate.
 #[derive(Parser)]
@@ -24,11 +24,11 @@ pub(crate) struct WaitCommand {
 }
 
 impl builtins::Command for WaitCommand {
-    type Error = crate::core::Error;
+    type Error = crate::engine::Error;
 
-    async fn execute<SE: crate::core::ShellExtensions>(
+    async fn execute<SE: crate::engine::ShellExtensions>(
         &self,
-        context: crate::core::ExecutionContext<'_, SE>,
+        context: crate::engine::ExecutionContext<'_, SE>,
     ) -> Result<ExecutionResult, Self::Error> {
         if self.wait_for_terminate {
             return error::unimp("wait -f");

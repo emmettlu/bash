@@ -351,7 +351,7 @@ mod tests {
     fn load_config_nonexistent_default() {
         // When using default path and file doesn't exist, should return defaults without error
         let result = load_config(false, None);
-        // We may or may not get a path depending on platform, but shouldn't error
+        // We may or may not get a default path, but shouldn't error
         assert!(result.error.is_none());
     }
 

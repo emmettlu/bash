@@ -3,8 +3,8 @@ use std::path::{Path, PathBuf};
 
 use clap::Parser;
 
-use crate::core::sys::{self, traits::PathExt};
-use crate::core::{ExecutionResult, Shell, builtins, parser::ast};
+use crate::engine::sys::{self, traits::PathExt};
+use crate::engine::{ExecutionResult, Shell, builtins, parser::ast};
 
 /// Inspect the type of a named shell item.
 #[derive(Parser)]
@@ -43,12 +43,12 @@ enum ResolvedType<'a> {
 }
 
 impl builtins::Command for TypeCommand {
-    type Error = crate::core::Error;
+    type Error = crate::engine::Error;
 
-    async fn execute<SE: crate::core::ShellExtensions>(
+    async fn execute<SE: crate::engine::ShellExtensions>(
         &self,
-        context: crate::core::ExecutionContext<'_, SE>,
-    ) -> Result<crate::core::ExecutionResult, Self::Error> {
+        context: crate::engine::ExecutionContext<'_, SE>,
+    ) -> Result<crate::engine::ExecutionResult, Self::Error> {
         let mut result = ExecutionResult::success();
 
         for name in &self.names {
@@ -137,7 +137,7 @@ impl builtins::Command for TypeCommand {
 }
 
 impl TypeCommand {
-    fn resolve_types<'a, SE: crate::core::ShellExtensions>(
+    fn resolve_types<'a, SE: crate::engine::ShellExtensions>(
         &self,
         shell: &'a Shell<SE>,
         name: &str,

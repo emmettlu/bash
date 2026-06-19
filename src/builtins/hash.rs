@@ -1,8 +1,8 @@
-use crate::core::sys;
+use crate::engine::sys;
 use clap::Parser;
 use std::{io::Write, path::PathBuf};
 
-use crate::core::{ExecutionResult, builtins};
+use crate::engine::{ExecutionResult, builtins};
 
 #[derive(Parser)]
 pub(crate) struct HashCommand {
@@ -31,12 +31,12 @@ pub(crate) struct HashCommand {
 }
 
 impl builtins::Command for HashCommand {
-    type Error = crate::core::Error;
+    type Error = crate::engine::Error;
 
-    async fn execute<SE: crate::core::ShellExtensions>(
+    async fn execute<SE: crate::engine::ShellExtensions>(
         &self,
-        context: crate::core::ExecutionContext<'_, SE>,
-    ) -> Result<crate::core::ExecutionResult, Self::Error> {
+        context: crate::engine::ExecutionContext<'_, SE>,
+    ) -> Result<crate::engine::ExecutionResult, Self::Error> {
         let mut result = ExecutionResult::success();
 
         if self.remove_all {

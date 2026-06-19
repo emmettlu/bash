@@ -2,7 +2,7 @@ use clap::Parser;
 use itertools::Itertools;
 use std::io::Write;
 
-use crate::core::{
+use crate::engine::{
     ExecutionExitCode, ExecutionResult, builtins,
     env::{EnvironmentLookup, EnvironmentScope},
     parser::ast,
@@ -29,22 +29,22 @@ pub(crate) struct ExportCommand {
     //
     // N.B. These are skipped by clap, but filled in by the BuiltinDeclarationCommand trait.
     #[clap(skip)]
-    declarations: Vec<crate::core::CommandArg>,
+    declarations: Vec<crate::engine::CommandArg>,
 }
 
 impl builtins::DeclarationCommand for ExportCommand {
-    fn set_declarations(&mut self, declarations: Vec<crate::core::CommandArg>) {
+    fn set_declarations(&mut self, declarations: Vec<crate::engine::CommandArg>) {
         self.declarations = declarations;
     }
 }
 
 impl builtins::Command for ExportCommand {
-    type Error = crate::core::Error;
+    type Error = crate::engine::Error;
 
-    async fn execute<SE: crate::core::ShellExtensions>(
+    async fn execute<SE: crate::engine::ShellExtensions>(
         &self,
-        mut context: crate::core::ExecutionContext<'_, SE>,
-    ) -> Result<crate::core::ExecutionResult, Self::Error> {
+        mut context: crate::engine::ExecutionContext<'_, SE>,
+    ) -> Result<crate::engine::ExecutionResult, Self::Error> {
         if self.declarations.is_empty() {
             display_all_exported_vars(&context)?;
             return Ok(ExecutionResult::success());
@@ -65,11 +65,11 @@ impl builtins::Command for ExportCommand {
 impl ExportCommand {
     fn process_decl(
         &self,
-        context: &mut crate::core::ExecutionContext<'_, impl crate::core::ShellExtensions>,
-        decl: &crate::core::CommandArg,
-    ) -> Result<ExecutionResult, crate::core::Error> {
+        context: &mut crate::engine::ExecutionContext<'_, impl crate::engine::ShellExtensions>,
+        decl: &crate::engine::CommandArg,
+    ) -> Result<ExecutionResult, crate::engine::Error> {
         match decl {
-            crate::core::CommandArg::String(s) => {
+            crate::engine::CommandArg::String(s) => {
                 // See if this is supposed to be a function name.
                 if self.names_are_functions {
                     // Try to find the function already present; if we find it, then mark it
@@ -95,7 +95,7 @@ impl ExportCommand {
                     }
                 }
             }
-            crate::core::CommandArg::Assignment(assignment) => {
+            crate::engine::CommandArg::Assignment(assignment) => {
                 let name = match &assignment.name {
                     ast::AssignmentName::VariableName(name) => name,
                     ast::AssignmentName::ArrayElementName(_, _) => {
@@ -140,8 +140,8 @@ impl ExportCommand {
 }
 
 fn display_all_exported_vars(
-    context: &crate::core::ExecutionContext<'_, impl crate::core::ShellExtensions>,
-) -> Result<(), crate::core::Error> {
+    context: &crate::engine::ExecutionContext<'_, impl crate::engine::ShellExtensions>,
+) -> Result<(), crate::engine::Error> {
     // Enumerate variables, sorted by key.
     for (name, variable) in context.shell.env().iter().sorted_by_key(|v| v.0) {
         if variable.is_exported() {

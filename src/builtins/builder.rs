@@ -5,8 +5,8 @@ pub trait ShellBuilderExt {
     fn default_builtins(self) -> Self;
 }
 
-impl<SE: crate::core::extensions::ShellExtensions, S: crate::core::ShellBuilderState>
-    ShellBuilderExt for crate::core::ShellBuilder<SE, S>
+impl<SE: crate::engine::extensions::ShellExtensions, S: crate::engine::ShellBuilderState>
+    ShellBuilderExt for crate::engine::ShellBuilder<SE, S>
 {
     fn default_builtins(self) -> Self {
         self.builtins(crate::builtins::default_builtins())

@@ -212,11 +212,11 @@ impl CommandLineArgs {
         reason = "parsing defaults should not panic"
     )]
     pub fn default_values() -> Self {
-        use clap::Parser;
         // Parse with just the program name to get all defaults.
         // This won't fail because all arguments have defaults or are optional.
         #[allow(clippy::expect_used)]
-        Self::try_parse_from(["brush"]).expect("parsing defaults should never fail")
+        <Self as clap::Parser>::try_parse_from(["brush"])
+            .expect("parsing defaults should never fail")
     }
 
     /// Returns whether or not the arguments indicate that the shell should run in interactive mode.

@@ -1,6 +1,6 @@
 use clap::Parser;
 
-use crate::core::{ExecutionResult, builtins};
+use crate::engine::{ExecutionResult, builtins};
 
 /// Pop a path from the current directory stack.
 #[derive(Parser)]
@@ -15,10 +15,10 @@ pub(crate) struct PopdCommand {
 impl builtins::Command for PopdCommand {
     type Error = crate::builtins::dirs::DirError;
 
-    async fn execute<SE: crate::core::ShellExtensions>(
+    async fn execute<SE: crate::engine::ShellExtensions>(
         &self,
-        context: crate::core::ExecutionContext<'_, SE>,
-    ) -> Result<crate::core::ExecutionResult, Self::Error> {
+        context: crate::engine::ExecutionContext<'_, SE>,
+    ) -> Result<crate::engine::ExecutionResult, Self::Error> {
         if let Some(popped) = context.shell.directory_stack_mut().pop() {
             if !self.no_directory_change {
                 context.shell.set_working_dir(&popped)?;

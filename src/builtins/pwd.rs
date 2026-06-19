@@ -1,4 +1,4 @@
-use crate::core::{ExecutionResult, builtins, sys};
+use crate::engine::{ExecutionResult, builtins, sys};
 use clap::Parser;
 use std::{borrow::Cow, io::Write, path::Path};
 
@@ -15,12 +15,12 @@ pub(crate) struct PwdCommand {
 }
 
 impl builtins::Command for PwdCommand {
-    type Error = crate::core::Error;
+    type Error = crate::engine::Error;
 
-    async fn execute<SE: crate::core::ShellExtensions>(
+    async fn execute<SE: crate::engine::ShellExtensions>(
         &self,
-        context: crate::core::ExecutionContext<'_, SE>,
-    ) -> Result<crate::core::ExecutionResult, Self::Error> {
+        context: crate::engine::ExecutionContext<'_, SE>,
+    ) -> Result<crate::engine::ExecutionResult, Self::Error> {
         let mut cwd: Cow<'_, Path> = context.shell.working_dir().into();
 
         let should_canonicalize = self.physical

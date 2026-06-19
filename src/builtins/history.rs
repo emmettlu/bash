@@ -1,4 +1,4 @@
-use crate::core::{ExecutionExitCode, ExecutionResult, builtins, error, history};
+use crate::engine::{ExecutionExitCode, ExecutionResult, builtins, error, history};
 use clap::Parser;
 use std::{io::Write, path::PathBuf};
 
@@ -51,11 +51,11 @@ struct HistoryConfig {
 }
 
 impl builtins::Command for HistoryCommand {
-    type Error = crate::core::Error;
+    type Error = crate::engine::Error;
 
-    async fn execute<SE: crate::core::ShellExtensions>(
+    async fn execute<SE: crate::engine::ShellExtensions>(
         &self,
-        context: crate::core::ExecutionContext<'_, SE>,
+        context: crate::engine::ExecutionContext<'_, SE>,
     ) -> Result<ExecutionResult, Self::Error> {
         // Retrieve the shell's history config while we still can.
         let config = HistoryConfig {
@@ -69,7 +69,7 @@ impl builtins::Command for HistoryCommand {
         if let Some(history) = context.shell.history_mut() {
             self.execute_with_history(history, config, stdout, stderr)
         } else {
-            Err(crate::core::ErrorKind::HistoryNotEnabled.into())
+            Err(crate::engine::ErrorKind::HistoryNotEnabled.into())
         }
     }
 }
@@ -84,7 +84,7 @@ impl HistoryCommand {
         config: HistoryConfig,
         stdout: impl Write,
         mut stderr: impl Write,
-    ) -> Result<ExecutionResult, crate::core::Error> {
+    ) -> Result<ExecutionResult, crate::engine::Error> {
         if self.clear_history {
             history.clear()?;
         }
@@ -166,7 +166,7 @@ impl HistoryCommand {
         }
 
         let max_entries: Option<usize> = if let Some(arg) = self.args.first() {
-            Some(crate::core::int_utils::parse(arg.as_str(), 10)?)
+            Some(crate::engine::int_utils::parse(arg.as_str(), 10)?)
         } else {
             None
         };
@@ -183,7 +183,7 @@ fn display_history(
     max_entries: Option<usize>,
     mut stdout: impl Write,
     _stderr: impl Write,
-) -> Result<(), crate::core::Error> {
+) -> Result<(), crate::engine::Error> {
     let item_count = history.count();
     let skip_count = item_count - max_entries.unwrap_or(item_count);
 

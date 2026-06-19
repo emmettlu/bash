@@ -4,7 +4,7 @@ use std::io::Write;
 use clap::Parser;
 use itertools::Itertools;
 
-use crate::core::{ExecutionExitCode, ExecutionResult, builtins, variables};
+use crate::engine::{ExecutionExitCode, ExecutionResult, builtins, variables};
 
 crate::minus_or_plus_flag_arg!(
     ExportVariablesOnModification,
@@ -178,20 +178,20 @@ impl builtins::Command for SetCommand {
             }
         }
 
-        let (mut this, rest_args) = crate::core::builtins::try_parse_known::<Self>(updated_args)?;
+        let (mut this, rest_args) = crate::engine::builtins::try_parse_known::<Self>(updated_args)?;
         if let Some(args) = rest_args {
             this.positional_args.extend(args);
         }
         Ok(this)
     }
 
-    type Error = crate::core::Error;
+    type Error = crate::engine::Error;
 
     #[expect(clippy::too_many_lines)]
     #[allow(clippy::useless_let_if_seq)]
-    async fn execute<SE: crate::core::ShellExtensions>(
+    async fn execute<SE: crate::engine::ShellExtensions>(
         &self,
-        context: crate::core::ExecutionContext<'_, SE>,
+        context: crate::engine::ExecutionContext<'_, SE>,
     ) -> Result<ExecutionResult, Self::Error> {
         let mut result = ExecutionResult::success();
 
@@ -325,8 +325,8 @@ impl builtins::Command for SetCommand {
         if let Some(option_names) = &self.set_option.disable {
             saw_option = true;
             if option_names.is_empty() {
-                for option in crate::core::namedoptions::options(
-                    crate::core::namedoptions::ShellOptionKind::SetO,
+                for option in crate::engine::namedoptions::options(
+                    crate::engine::namedoptions::ShellOptionKind::SetO,
                 )
                 .iter()
                 .sorted_by_key(|option| option.name)
@@ -344,8 +344,8 @@ impl builtins::Command for SetCommand {
         if let Some(option_names) = &self.set_option.enable {
             saw_option = true;
             if option_names.is_empty() {
-                for option in crate::core::namedoptions::options(
-                    crate::core::namedoptions::ShellOptionKind::SetO,
+                for option in crate::engine::namedoptions::options(
+                    crate::engine::namedoptions::ShellOptionKind::SetO,
                 )
                 .iter()
                 .sorted_by_key(|option| option.name)
@@ -366,9 +366,10 @@ impl builtins::Command for SetCommand {
                 continue;
             }
 
-            if let Some(option_def) =
-                crate::core::namedoptions::options(crate::core::namedoptions::ShellOptionKind::SetO)
-                    .get(option_name.as_str())
+            if let Some(option_def) = crate::engine::namedoptions::options(
+                crate::engine::namedoptions::ShellOptionKind::SetO,
+            )
+            .get(option_name.as_str())
             {
                 option_def.set(context.shell.options_mut(), value);
             } else {
@@ -413,8 +414,8 @@ impl builtins::Command for SetCommand {
 }
 
 fn display_all(
-    context: &crate::core::ExecutionContext<'_, impl crate::core::ShellExtensions>,
-) -> Result<(), crate::core::Error> {
+    context: &crate::engine::ExecutionContext<'_, impl crate::engine::ShellExtensions>,
+) -> Result<(), crate::engine::Error> {
     // Display variables.
     for (name, var) in context.shell.env().iter().sorted_by_key(|v| v.0) {
         if !var.is_enumerable() {

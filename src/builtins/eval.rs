@@ -1,4 +1,4 @@
-use crate::core::{ExecutionResult, builtins};
+use crate::engine::{ExecutionResult, builtins};
 use clap::Parser;
 
 /// Evaluate the given string as script.
@@ -10,12 +10,12 @@ pub(crate) struct EvalCommand {
 }
 
 impl builtins::Command for EvalCommand {
-    type Error = crate::core::Error;
+    type Error = crate::engine::Error;
 
-    async fn execute<SE: crate::core::ShellExtensions>(
+    async fn execute<SE: crate::engine::ShellExtensions>(
         &self,
-        context: crate::core::ExecutionContext<'_, SE>,
-    ) -> Result<crate::core::ExecutionResult, Self::Error> {
+        context: crate::engine::ExecutionContext<'_, SE>,
+    ) -> Result<crate::engine::ExecutionResult, Self::Error> {
         if !self.args.is_empty() {
             let args_concatenated = self.args.join(" ");
 

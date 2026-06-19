@@ -1,4 +1,4 @@
-use crate::core::{ExecutionResult, builtins, error, history};
+use crate::engine::{ExecutionResult, builtins, error, history};
 use clap::Parser;
 use std::io::Write;
 
@@ -35,11 +35,11 @@ pub(crate) struct FcCommand {
 }
 
 impl builtins::Command for FcCommand {
-    type Error = crate::core::Error;
+    type Error = crate::engine::Error;
 
-    async fn execute<SE: crate::core::ShellExtensions>(
+    async fn execute<SE: crate::engine::ShellExtensions>(
         &self,
-        context: crate::core::ExecutionContext<'_, SE>,
+        context: crate::engine::ExecutionContext<'_, SE>,
     ) -> Result<ExecutionResult, Self::Error> {
         if self.substitute {
             return self.do_execute(context).await;
@@ -56,12 +56,11 @@ impl builtins::Command for FcCommand {
 impl FcCommand {
     fn do_list(
         &self,
-        context: &crate::core::ExecutionContext<'_, impl crate::core::ShellExtensions>,
-    ) -> Result<ExecutionResult, crate::core::Error> {
-        let history = context
-            .shell
-            .history()
-            .ok_or_else(|| crate::core::Error::from(crate::core::ErrorKind::HistoryNotEnabled))?;
+        context: &crate::engine::ExecutionContext<'_, impl crate::engine::ShellExtensions>,
+    ) -> Result<ExecutionResult, crate::engine::Error> {
+        let history = context.shell.history().ok_or_else(|| {
+            crate::engine::Error::from(crate::engine::ErrorKind::HistoryNotEnabled)
+        })?;
 
         let (first_idx, last_idx, reverse) = self.resolve_range(history)?;
 
@@ -80,12 +79,11 @@ impl FcCommand {
 
     async fn do_execute(
         &self,
-        context: crate::core::ExecutionContext<'_, impl crate::core::ShellExtensions>,
-    ) -> Result<ExecutionResult, crate::core::Error> {
-        let history = context
-            .shell
-            .history()
-            .ok_or_else(|| crate::core::Error::from(crate::core::ErrorKind::HistoryNotEnabled))?;
+        context: crate::engine::ExecutionContext<'_, impl crate::engine::ShellExtensions>,
+    ) -> Result<ExecutionResult, crate::engine::Error> {
+        let history = context.shell.history().ok_or_else(|| {
+            crate::engine::Error::from(crate::engine::ErrorKind::HistoryNotEnabled)
+        })?;
 
         // Parse the first argument for pattern=replacement
         let (pattern, replacement) = self
@@ -112,7 +110,7 @@ impl FcCommand {
             history
                 .get(effective_count.saturating_sub(1))
                 .map(|item| item.command_line.clone())
-                .ok_or_else(|| crate::core::Error::from(error::ErrorKind::HistoryItemNotFound))?
+                .ok_or_else(|| crate::engine::Error::from(error::ErrorKind::HistoryItemNotFound))?
         };
 
         // Apply substitution if present
@@ -127,13 +125,12 @@ impl FcCommand {
 
         // Remove the fc command from history before executing the substituted command
         // This matches bash behavior where the fc command is replaced by the executed command
-        let history_mut = context
-            .shell
-            .history_mut()
-            .ok_or_else(|| crate::core::Error::from(crate::core::ErrorKind::HistoryNotEnabled))?;
+        let history_mut = context.shell.history_mut().ok_or_else(|| {
+            crate::engine::Error::from(crate::engine::ErrorKind::HistoryNotEnabled)
+        })?;
         history_mut.remove_nth_item(history_mut.count().saturating_sub(1));
 
-        let source_info = crate::core::SourceInfo::from("(history)");
+        let source_info = crate::engine::SourceInfo::from("(history)");
 
         // Execute the command
         let result = context
@@ -149,10 +146,10 @@ impl FcCommand {
 
     fn write_history_item(
         &self,
-        context: &crate::core::ExecutionContext<'_, impl crate::core::ShellExtensions>,
+        context: &crate::engine::ExecutionContext<'_, impl crate::engine::ShellExtensions>,
         history: &history::History,
         idx: usize,
-    ) -> Result<(), crate::core::Error> {
+    ) -> Result<(), crate::engine::Error> {
         if let Some(item) = history.get(idx) {
             if self.no_line_numbers {
                 // With -n, bash still outputs a tab before the command
@@ -169,7 +166,7 @@ impl FcCommand {
     fn resolve_range(
         &self,
         history: &history::History,
-    ) -> Result<(usize, usize, bool), crate::core::Error> {
+    ) -> Result<(usize, usize, bool), crate::engine::Error> {
         let effective_count = effective_history_count(history);
         let max_idx = effective_count.saturating_sub(1);
 
@@ -221,7 +218,7 @@ impl FcCommand {
     fn resolve_position(
         history: &history::History,
         spec: &str,
-    ) -> Result<usize, crate::core::Error> {
+    ) -> Result<usize, crate::engine::Error> {
         // Try to parse it as a number. If it's not parseable, then we need to assume
         // it's a string prefix we need to search for.
         let Ok(num) = spec.parse::<i64>() else {
@@ -268,12 +265,12 @@ impl FcCommand {
     fn find_command_by_specifier(
         history: &history::History,
         spec: &str,
-    ) -> Result<String, crate::core::Error> {
+    ) -> Result<String, crate::engine::Error> {
         let idx = Self::resolve_position(history, spec)?;
         history
             .get(idx)
             .map(|item| item.command_line.clone())
-            .ok_or_else(|| crate::core::Error::from(error::ErrorKind::HistoryItemNotFound))
+            .ok_or_else(|| crate::engine::Error::from(error::ErrorKind::HistoryItemNotFound))
     }
 
     /// Finds the most recent command starting with the given prefix. Returns
@@ -287,7 +284,7 @@ impl FcCommand {
     fn find_command_by_prefix(
         history: &history::History,
         prefix: &str,
-    ) -> Result<usize, crate::core::Error> {
+    ) -> Result<usize, crate::engine::Error> {
         // Search backwards for a command starting with the prefix (excluding fc command itself)
         let effective_count = effective_history_count(history);
 
@@ -299,7 +296,7 @@ impl FcCommand {
             }
         }
 
-        Err(crate::core::Error::from(
+        Err(crate::engine::Error::from(
             error::ErrorKind::HistoryItemNotFound,
         ))
     }

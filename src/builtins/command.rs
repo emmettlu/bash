@@ -1,7 +1,7 @@
 use clap::Parser;
 use std::{fmt::Display, io::Write, path::Path};
 
-use crate::core::{
+use crate::engine::{
     ExecutionResult, builtins, commands, pathsearch,
     sys::{self, traits::PathExt},
 };
@@ -33,11 +33,11 @@ impl CommandCommand {
 }
 
 impl builtins::Command for CommandCommand {
-    type Error = crate::core::Error;
+    type Error = crate::engine::Error;
 
-    async fn execute<SE: crate::core::ShellExtensions>(
+    async fn execute<SE: crate::engine::ShellExtensions>(
         &self,
-        context: crate::core::ExecutionContext<'_, SE>,
+        context: crate::engine::ExecutionContext<'_, SE>,
     ) -> Result<ExecutionResult, Self::Error> {
         // Silently exit if no command was provided.
         if let Some(command_name) = self.command() {
@@ -90,7 +90,7 @@ impl Display for FoundCommand<'_> {
 
 impl CommandCommand {
     fn try_find_command<'a>(
-        shell: &mut crate::core::Shell<impl crate::core::ShellExtensions>,
+        shell: &mut crate::engine::Shell<impl crate::engine::ShellExtensions>,
         command_name: &'a str,
         use_default_path: bool,
     ) -> Option<FoundCommand<'a>> {
@@ -127,10 +127,10 @@ impl CommandCommand {
 
     async fn execute_command(
         &self,
-        mut context: crate::core::ExecutionContext<'_, impl crate::core::ShellExtensions>,
+        mut context: crate::engine::ExecutionContext<'_, impl crate::engine::ShellExtensions>,
         command_name: &str,
         use_default_path: bool,
-    ) -> Result<ExecutionResult, crate::core::Error> {
+    ) -> Result<ExecutionResult, crate::engine::Error> {
         command_name.clone_into(&mut context.command_name);
         let command_and_args = self
             .command_and_args

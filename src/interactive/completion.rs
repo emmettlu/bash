@@ -1,23 +1,23 @@
 use std::path::{Path, PathBuf};
 
-use crate::core::escape;
+use crate::engine::escape;
 
 #[allow(dead_code)]
 pub(crate) async fn complete_async(
-    shell: &mut crate::core::Shell<impl crate::core::ShellExtensions>,
+    shell: &mut crate::engine::Shell<impl crate::engine::ShellExtensions>,
     line: &str,
     pos: usize,
-) -> crate::core::completion::Completions {
+) -> crate::engine::completion::Completions {
     let working_dir = shell.working_dir().to_path_buf();
 
     // Intentionally ignore any errors that arise.
     let result = shell.complete(line, pos).await;
 
-    let mut completions = result.unwrap_or_else(|_| crate::core::completion::Completions {
+    let mut completions = result.unwrap_or_else(|_| crate::engine::completion::Completions {
         insertion_index: pos,
         delete_count: 0,
         candidates: Vec::new(),
-        options: crate::core::completion::ProcessingOptions::default(),
+        options: crate::engine::completion::ProcessingOptions::default(),
     });
 
     // Look at the line up to 'pos' to check if we're in an unterminated
@@ -70,14 +70,14 @@ pub(crate) async fn complete_async(
 #[allow(dead_code)]
 fn postprocess_completion_candidate(
     mut candidate: String,
-    options: &crate::core::completion::ProcessingOptions,
+    options: &crate::engine::completion::ProcessingOptions,
     working_dir: &Path,
     completing_end_of_line: bool,
     quote_char: Option<char>,
 ) -> String {
     if options.treat_as_filenames {
         // Check if it's a directory.
-        if !crate::core::sys::fs::ends_with_path_separator(&candidate) {
+        if !crate::engine::sys::fs::ends_with_path_separator(&candidate) {
             let candidate_path = Path::new(&candidate);
             let abs_candidate_path = if candidate_path.is_absolute() {
                 PathBuf::from(candidate_path)
@@ -104,7 +104,7 @@ fn postprocess_completion_candidate(
     if completing_end_of_line
         && !options.no_trailing_space_at_end_of_line
         && (!options.treat_as_filenames
-            || !crate::core::sys::fs::ends_with_path_separator(&candidate))
+            || !crate::engine::sys::fs::ends_with_path_separator(&candidate))
     {
         candidate.push(' ');
     }

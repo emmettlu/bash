@@ -2,7 +2,7 @@ use std::borrow::Cow;
 
 use clap::Parser;
 
-use crate::core::{ExecutionResult, Shell, ShellValue, builtins, variables::ShellValueUnsetType};
+use crate::engine::{ExecutionResult, Shell, ShellValue, builtins, variables::ShellValueUnsetType};
 
 /// Unset a variable.
 #[derive(Parser)]
@@ -37,17 +37,17 @@ impl UnsetNameInterpretation {
 }
 
 impl builtins::Command for UnsetCommand {
-    type Error = crate::core::Error;
+    type Error = crate::engine::Error;
 
-    async fn execute<SE: crate::core::ShellExtensions>(
+    async fn execute<SE: crate::engine::ShellExtensions>(
         &self,
-        context: crate::core::ExecutionContext<'_, SE>,
-    ) -> Result<crate::core::ExecutionResult, Self::Error> {
+        context: crate::engine::ExecutionContext<'_, SE>,
+    ) -> Result<crate::engine::ExecutionResult, Self::Error> {
         //
         // TODO(nameref): implement nameref
         //
         if self.name_interpretation.name_references {
-            return crate::core::error::unimp("unset: name references are not yet implemented");
+            return crate::engine::error::unimp("unset: name references are not yet implemented");
         }
 
         let unspecified = self.name_interpretation.unspecified();
@@ -94,10 +94,10 @@ impl builtins::Command for UnsetCommand {
 }
 
 fn unset_array_index(
-    shell: &mut Shell<impl crate::core::ShellExtensions>,
+    shell: &mut Shell<impl crate::engine::ShellExtensions>,
     name: &str,
     index: &str,
-) -> Result<bool, crate::core::Error> {
+) -> Result<bool, crate::engine::Error> {
     // First check to see if it's an associative array.
     let is_assoc_array = if let Some((_, var)) = shell.env().get(name) {
         matches!(

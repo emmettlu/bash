@@ -1,8 +1,8 @@
-use crate::core::sys;
+use crate::engine::sys;
 use clap::Parser;
 use std::io::Write;
 
-use crate::core::{ExecutionResult, builtins};
+use crate::engine::{ExecutionResult, builtins};
 
 #[derive(Debug, thiserror::Error)]
 pub(crate) enum DirError {
@@ -12,10 +12,10 @@ pub(crate) enum DirError {
 
     /// A shell error occurred.
     #[error(transparent)]
-    ShellError(#[from] crate::core::Error),
+    ShellError(#[from] crate::engine::Error),
 }
 
-impl From<&DirError> for crate::core::ExecutionExitCode {
+impl From<&DirError> for crate::engine::ExecutionExitCode {
     fn from(value: &DirError) -> Self {
         match value {
             DirError::DirStackEmpty => Self::GeneralError,
@@ -24,7 +24,7 @@ impl From<&DirError> for crate::core::ExecutionExitCode {
     }
 }
 
-impl crate::core::BuiltinError for DirError {}
+impl crate::engine::BuiltinError for DirError {}
 
 /// Manage the current directory stack.
 #[derive(Default, Parser)]
@@ -49,12 +49,12 @@ pub(crate) struct DirsCommand {
 }
 
 impl builtins::Command for DirsCommand {
-    type Error = crate::core::Error;
+    type Error = crate::engine::Error;
 
-    async fn execute<SE: crate::core::ShellExtensions>(
+    async fn execute<SE: crate::engine::ShellExtensions>(
         &self,
-        context: crate::core::ExecutionContext<'_, SE>,
-    ) -> Result<crate::core::ExecutionResult, Self::Error> {
+        context: crate::engine::ExecutionContext<'_, SE>,
+    ) -> Result<crate::engine::ExecutionResult, Self::Error> {
         if self.clear {
             context.shell.directory_stack_mut().clear();
         } else {

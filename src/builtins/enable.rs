@@ -1,10 +1,10 @@
-use crate::core::ExecutionResult;
+use crate::engine::ExecutionResult;
 use clap::Parser;
 use itertools::Itertools;
 use std::io::Write;
 
-use crate::core::builtins;
-use crate::core::error;
+use crate::engine::builtins;
+use crate::engine::error;
 
 /// Enable, disable, or display built-in commands.
 #[derive(Parser)]
@@ -38,11 +38,11 @@ pub(crate) struct EnableCommand {
 }
 
 impl builtins::Command for EnableCommand {
-    type Error = crate::core::Error;
+    type Error = crate::engine::Error;
 
-    async fn execute<SE: crate::core::ShellExtensions>(
+    async fn execute<SE: crate::engine::ShellExtensions>(
         &self,
-        context: crate::core::ExecutionContext<'_, SE>,
+        context: crate::engine::ExecutionContext<'_, SE>,
     ) -> Result<ExecutionResult, Self::Error> {
         let mut result = ExecutionResult::success();
 

@@ -5,7 +5,7 @@ use std::path::PathBuf;
 pub enum ShellError {
     /// An error occurred with the embedded shell.
     #[error("{0}")]
-    ShellError(#[from] crate::core::Error),
+    ShellError(#[from] crate::engine::Error),
 
     /// A generic I/O error occurred.
     #[error("I/O error: {0}")]

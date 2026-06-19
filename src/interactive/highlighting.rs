@@ -80,7 +80,7 @@ impl HighlightSpan {
 /// A vector of highlighted spans covering the entire input string.
 #[must_use]
 pub fn highlight_command(
-    shell: &crate::core::Shell<impl crate::core::ShellExtensions>,
+    shell: &crate::engine::Shell<impl crate::engine::ShellExtensions>,
     line: &str,
     cursor: usize,
 ) -> Vec<HighlightSpan> {
@@ -99,8 +99,8 @@ enum CommandType {
     Unknown,
 }
 
-struct Highlighter<'a, SE: crate::core::ShellExtensions> {
-    shell: &'a crate::core::Shell<SE>,
+struct Highlighter<'a, SE: crate::engine::ShellExtensions> {
+    shell: &'a crate::engine::Shell<SE>,
     cursor: usize,
     spans: Vec<HighlightSpan>,
     remaining_chars: Chars<'a>,
@@ -108,8 +108,8 @@ struct Highlighter<'a, SE: crate::core::ShellExtensions> {
     next_missing_kind: Option<HighlightKind>,
 }
 
-impl<'a, SE: crate::core::ShellExtensions> Highlighter<'a, SE> {
-    fn new(shell: &'a crate::core::Shell<SE>, input_line: &'a str, cursor: usize) -> Self {
+impl<'a, SE: crate::engine::ShellExtensions> Highlighter<'a, SE> {
+    fn new(shell: &'a crate::engine::Shell<SE>, input_line: &'a str, cursor: usize) -> Self {
         Self {
             shell,
             cursor,
@@ -332,7 +332,7 @@ impl<'a, SE: crate::core::ShellExtensions> Highlighter<'a, SE> {
             return CommandType::Unknown;
         }
 
-        if crate::core::sys::fs::contains_path_separator(name) {
+        if crate::engine::sys::fs::contains_path_separator(name) {
             // TODO(highlighting): Should check for executable-ness.
             let candidate_path = self.shell.absolute_path(std::path::Path::new(name));
             if candidate_path.exists() {
@@ -356,7 +356,7 @@ mod tests {
 
     #[compio::test]
     async fn test_highlight_simple_command() {
-        let shell = crate::core::Shell::builder().build().await.unwrap();
+        let shell = crate::engine::Shell::builder().build().await.unwrap();
         let line = "somecommand hello";
         // Use cursor position at the end so we get final highlighting
         let spans = highlight_command(&shell, line, line.len());
@@ -375,7 +375,7 @@ mod tests {
 
     #[compio::test]
     async fn test_highlight_quoted_string() {
-        let shell = crate::core::Shell::builder().build().await.unwrap();
+        let shell = crate::engine::Shell::builder().build().await.unwrap();
         let line = r#"echo "hello world""#;
         let spans = highlight_command(&shell, line, 0);
 
@@ -388,7 +388,7 @@ mod tests {
 
     #[compio::test]
     async fn test_highlight_parameter_expansion() {
-        let shell = crate::core::Shell::builder().build().await.unwrap();
+        let shell = crate::engine::Shell::builder().build().await.unwrap();
         let line = "echo $HOME";
         let spans = highlight_command(&shell, line, 0);
 
@@ -398,7 +398,7 @@ mod tests {
 
     #[compio::test]
     async fn test_highlight_covers_entire_input() {
-        let shell = crate::core::Shell::builder().build().await.unwrap();
+        let shell = crate::engine::Shell::builder().build().await.unwrap();
         let line = "echo hello world";
         let spans = highlight_command(&shell, line, 0);
 

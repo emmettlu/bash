@@ -220,10 +220,6 @@ pub enum ErrorKind {
     #[error("platform error: {0}")]
     PlatformError(#[from] sys::PlatformError),
 
-    /// An invalid umask was provided.
-    #[error("invalid umask value")]
-    InvalidUmask,
-
     /// The given open file cannot be read from.
     #[error("cannot read from {0}")]
     OpenFileNotReadable(&'static str),

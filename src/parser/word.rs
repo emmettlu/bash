@@ -563,7 +563,7 @@ pub(crate) fn parse_assignment_word(
 
 pub(crate) fn parse_array_assignment(
     word: &str,
-    elements: &[&String],
+    elements: &[&str],
 ) -> Result<ast::Assignment, &'static str> {
     let (assignment_name, append) = expansion_parser::name_equals(word, &ParserOptions::default())
         .map_err(|_| "not array assignment word")?;

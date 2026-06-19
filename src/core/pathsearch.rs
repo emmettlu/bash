@@ -40,16 +40,17 @@ where
     }
 }
 
-pub(crate) struct ExecutablePathPrefixSearch<PI> {
-    paths: VecDeque<PI>,
+pub(crate) struct ExecutablePathPrefixSearch<P> {
+    paths: P,
     queued_items: VecDeque<PathBuf>,
     filename_prefix: String,
     case_insensitive: bool,
 }
 
-impl<PI> Iterator for ExecutablePathPrefixSearch<PI>
+impl<P> Iterator for ExecutablePathPrefixSearch<P>
 where
-    PI: AsRef<Path>,
+    P: Iterator,
+    P::Item: AsRef<Path>,
 {
     type Item = PathBuf;
 
@@ -59,7 +60,7 @@ where
             return Some(item);
         }
 
-        while let Some(path) = self.paths.pop_front() {
+        while let Some(path) = self.paths.next() {
             let path = PathBuf::from(path.as_ref());
 
             if let Ok(readdir) = path.read_dir() {
@@ -115,14 +116,14 @@ where
     }
 }
 
-pub(crate) fn search_for_executable_with_prefix<P, PI>(
+pub(crate) fn search_for_executable_with_prefix<P>(
     paths: P,
     filename_prefix: &str,
     case_insensitive: bool,
-) -> ExecutablePathPrefixSearch<PI>
+) -> ExecutablePathPrefixSearch<P>
 where
-    P: Iterator<Item = PI>,
-    PI: AsRef<Path>,
+    P: Iterator,
+    P::Item: AsRef<Path>,
 {
     let stored_prefix = if case_insensitive {
         filename_prefix.to_ascii_lowercase()
@@ -131,7 +132,7 @@ where
     };
 
     ExecutablePathPrefixSearch {
-        paths: paths.collect(),
+        paths,
         queued_items: VecDeque::new(),
         filename_prefix: stored_prefix,
         case_insensitive,

@@ -65,22 +65,13 @@ impl FcCommand {
 
         let (first_idx, last_idx, reverse) = self.resolve_range(history)?;
 
-        // Determine the order of iteration
-        let indices: Vec<usize> = if reverse {
-            (first_idx..=last_idx).rev().collect()
+        if reverse {
+            for idx in (first_idx..=last_idx).rev() {
+                self.write_history_item(context, history, idx)?;
+            }
         } else {
-            (first_idx..=last_idx).collect()
-        };
-
-        for idx in indices {
-            if let Some(item) = history.get(idx) {
-                if self.no_line_numbers {
-                    // With -n, bash still outputs a tab before the command
-                    writeln!(context.stdout(), "\t {}", item.command_line)?;
-                } else {
-                    // Match bash's fc format: number, tab, command
-                    writeln!(context.stdout(), "{}\t {}", idx + 1, item.command_line)?;
-                }
+            for idx in first_idx..=last_idx {
+                self.write_history_item(context, history, idx)?;
             }
         }
 
@@ -154,6 +145,25 @@ impl FcCommand {
         context.shell.add_to_history(&final_cmd)?;
 
         Ok(result)
+    }
+
+    fn write_history_item(
+        &self,
+        context: &crate::core::ExecutionContext<'_, impl crate::core::ShellExtensions>,
+        history: &history::History,
+        idx: usize,
+    ) -> Result<(), crate::core::Error> {
+        if let Some(item) = history.get(idx) {
+            if self.no_line_numbers {
+                // With -n, bash still outputs a tab before the command
+                writeln!(context.stdout(), "\t {}", item.command_line)?;
+            } else {
+                // Match bash's fc format: number, tab, command
+                writeln!(context.stdout(), "{}\t {}", idx + 1, item.command_line)?;
+            }
+        }
+
+        Ok(())
     }
 
     fn resolve_range(

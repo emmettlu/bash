@@ -22,14 +22,16 @@ impl builtins::Command for CallerCommand {
         // (e.g., 0 = immediate caller, 1 = caller's caller, etc.).
         let expr = self.expr.unwrap_or(0);
 
-        // Get all frames into a vector we can easily index into.
-        let frames: Vec<_> = stack
-            .iter()
-            .filter(|frame| frame.frame_type.is_function() || frame.frame_type.is_script())
-            .collect();
+        let Some(target_index) = expr.checked_add(1) else {
+            return Ok(ExecutionResult::general_error());
+        };
 
         // Look for the last-known location in the parent of frame N.
-        let Some(calling_frame) = frames.get(expr + 1) else {
+        let Some(calling_frame) = stack
+            .iter()
+            .filter(|frame| frame.frame_type.is_function() || frame.frame_type.is_script())
+            .nth(target_index)
+        else {
             return Ok(ExecutionResult::general_error());
         };
 

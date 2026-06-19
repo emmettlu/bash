@@ -105,6 +105,12 @@ impl From<&String> for CommandArg {
     }
 }
 
+impl From<&str> for CommandArg {
+    fn from(value: &str) -> Self {
+        Self::String(value.to_owned())
+    }
+}
+
 impl CommandArg {
     pub(crate) fn quote_for_tracing(&self) -> Cow<'_, str> {
         match self {

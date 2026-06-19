@@ -376,16 +376,13 @@ impl Spec {
 
         // Add prefix and/or suffix, if present.
         if self.prefix.is_some() || self.suffix.is_some() {
-            let empty = String::new();
-            let prefix = self.prefix.as_ref().unwrap_or(&empty);
-            let suffix = self.suffix.as_ref().unwrap_or(&empty);
+            let prefix = self.prefix.as_deref().unwrap_or("");
+            let suffix = self.suffix.as_deref().unwrap_or("");
 
-            let mut updated = Vec::new();
-            for candidate in candidates {
-                updated.push(std::format!("{prefix}{candidate}{suffix}"));
+            for candidate in &mut candidates {
+                candidate.insert_str(0, prefix);
+                candidate.push_str(suffix);
             }
-
-            candidates = updated;
         }
 
         //
@@ -1128,9 +1125,7 @@ impl Config {
             .env_str("COMP_WORDBREAKS")
             .unwrap_or_else(|| FALLBACK.into());
 
-        let delimiters: Vec<_> = delimiter_str.chars().collect();
-
-        simple_tokenize_by_delimiters(input, delimiters.as_slice())
+        simple_tokenize_by_delimiters(input, delimiter_str.as_ref())
     }
 
     async fn get_completions_for_token(
@@ -1387,10 +1382,7 @@ async fn get_completions_using_basic_lookup(
 /// are emitted as tokens. Consecutive non-whitespace delimiters are grouped into a single
 /// token. Whitespace delimiters separate tokens but are not emitted themselves.
 #[allow(clippy::string_slice, reason = "used indices come from char_indices")]
-fn simple_tokenize_by_delimiters<'a>(
-    input: &'a str,
-    delimiters: &[char],
-) -> Vec<CompletionToken<'a>> {
+fn simple_tokenize_by_delimiters<'a>(input: &'a str, delimiters: &str) -> Vec<CompletionToken<'a>> {
     let mut tokens = vec![];
     let mut word_start = None;
     let mut word_is_delimiters = false;
@@ -1416,7 +1408,7 @@ fn simple_tokenize_by_delimiters<'a>(
                 // start a new quote.
                 quote_char = Some(c);
             } else {
-                is_active_delimiter = delimiters.contains(&c);
+                is_active_delimiter = delimiters.contains(c);
             }
         }
 
@@ -1526,7 +1518,7 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     fn completion_tokenization() {
         assert_matches!(
-            simple_tokenize_by_delimiters("one two", &[' ']).as_slice(),
+            simple_tokenize_by_delimiters("one two", " ").as_slice(),
             [
                 CompletionToken {
                     text: "one",
@@ -1540,7 +1532,7 @@ mod tests {
         );
 
         assert_matches!(
-            simple_tokenize_by_delimiters("one \t two", &[' ', '\t']).as_slice(),
+            simple_tokenize_by_delimiters("one \t two", " \t").as_slice(),
             [
                 CompletionToken {
                     text: "one",
@@ -1553,10 +1545,10 @@ mod tests {
             ]
         );
 
-        assert_matches!(simple_tokenize_by_delimiters("    ", &[' ']).as_slice(), []);
+        assert_matches!(simple_tokenize_by_delimiters("    ", " ").as_slice(), []);
 
         assert_matches!(
-            simple_tokenize_by_delimiters(":", &[':']).as_slice(),
+            simple_tokenize_by_delimiters(":", ":").as_slice(),
             [CompletionToken {
                 text: ":",
                 start: 0,
@@ -1564,7 +1556,7 @@ mod tests {
         );
 
         assert_matches!(
-            simple_tokenize_by_delimiters("a:::b", &[':', ' ']).as_slice(),
+            simple_tokenize_by_delimiters("a:::b", ": ").as_slice(),
             [
                 CompletionToken {
                     text: "a",
@@ -1582,7 +1574,7 @@ mod tests {
         );
 
         assert_matches!(
-            simple_tokenize_by_delimiters("a: : :b", &[':', ' ']).as_slice(),
+            simple_tokenize_by_delimiters("a: : :b", ": ").as_slice(),
             [
                 CompletionToken {
                     text: "a",
@@ -1608,7 +1600,7 @@ mod tests {
         );
 
         assert_matches!(
-            simple_tokenize_by_delimiters("one two:three", &[':', ' ']).as_slice(),
+            simple_tokenize_by_delimiters("one two:three", ": ").as_slice(),
             [
                 CompletionToken {
                     text: "one",
@@ -1630,7 +1622,7 @@ mod tests {
         );
 
         assert_matches!(
-            simple_tokenize_by_delimiters("one'two", &['\'']).as_slice(),
+            simple_tokenize_by_delimiters("one'two", "'").as_slice(),
             [
                 CompletionToken {
                     text: "one",
@@ -1648,7 +1640,7 @@ mod tests {
         );
 
         assert_matches!(
-            simple_tokenize_by_delimiters("one 'two:three'", &[':', ' ']).as_slice(),
+            simple_tokenize_by_delimiters("one 'two:three'", ": ").as_slice(),
             [
                 CompletionToken {
                     text: "one",
@@ -1662,7 +1654,7 @@ mod tests {
         );
 
         assert_matches!(
-            simple_tokenize_by_delimiters("one \\'two \"two four\"", &[':', ' ']).as_slice(),
+            simple_tokenize_by_delimiters("one \\'two \"two four\"", ": ").as_slice(),
             [
                 CompletionToken {
                     text: "one",

@@ -27,8 +27,8 @@ pub(crate) struct CommandCommand {
 }
 
 impl CommandCommand {
-    fn command(&self) -> Option<&String> {
-        self.command_and_args.first()
+    fn command(&self) -> Option<&str> {
+        self.command_and_args.first().map(String::as_str)
     }
 }
 
@@ -42,11 +42,9 @@ impl builtins::Command for CommandCommand {
         // Silently exit if no command was provided.
         if let Some(command_name) = self.command() {
             if self.print_description || self.print_verbose_description {
-                if let Some(found_cmd) = Self::try_find_command(
-                    context.shell,
-                    command_name.as_str(),
-                    self.use_default_path,
-                ) {
+                if let Some(found_cmd) =
+                    Self::try_find_command(context.shell, command_name, self.use_default_path)
+                {
                     if self.print_description {
                         writeln!(context.stdout(), "{found_cmd}")?;
                     } else {
@@ -76,12 +74,12 @@ impl builtins::Command for CommandCommand {
     }
 }
 
-enum FoundCommand {
-    Builtin(String),
+enum FoundCommand<'a> {
+    Builtin(&'a str),
     External(String),
 }
 
-impl Display for FoundCommand {
+impl Display for FoundCommand<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Builtin(name) => write!(f, "{name}"),
@@ -91,11 +89,11 @@ impl Display for FoundCommand {
 }
 
 impl CommandCommand {
-    fn try_find_command(
+    fn try_find_command<'a>(
         shell: &mut crate::core::Shell<impl crate::core::ShellExtensions>,
-        command_name: &str,
+        command_name: &'a str,
         use_default_path: bool,
-    ) -> Option<FoundCommand> {
+    ) -> Option<FoundCommand<'a>> {
         // Look in path.
         if sys::fs::contains_path_separator(command_name) {
             let candidate_path = shell.absolute_path(Path::new(command_name));
@@ -110,7 +108,7 @@ impl CommandCommand {
             if let Some(builtin_cmd) = shell.builtins().get(command_name)
                 && !builtin_cmd.disabled
             {
-                return Some(FoundCommand::Builtin(command_name.to_owned()));
+                return Some(FoundCommand::Builtin(command_name));
             }
 
             if use_default_path {
@@ -134,7 +132,11 @@ impl CommandCommand {
         use_default_path: bool,
     ) -> Result<ExecutionResult, crate::core::Error> {
         command_name.clone_into(&mut context.command_name);
-        let command_and_args = self.command_and_args.iter().map(|arg| arg.into()).collect();
+        let command_and_args = self
+            .command_and_args
+            .iter()
+            .map(|arg| commands::CommandArg::from(arg.as_str()))
+            .collect();
 
         let path_dirs = if use_default_path {
             Some(sys::fs::get_default_standard_utils_paths())

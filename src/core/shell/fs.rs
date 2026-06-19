@@ -108,9 +108,13 @@ impl<SE: crate::core::extensions::ShellExtensions> crate::core::Shell<SE> {
         case_insensitive: bool,
     ) -> impl Iterator<Item = PathBuf> {
         let path_var = self.env.get_str("PATH", self).unwrap_or_default();
-        let paths = crate::core::sys::fs::split_paths(path_var.as_ref());
+        let paths = crate::core::sys::fs::split_paths(path_var.as_ref()).collect::<Vec<_>>();
 
-        pathsearch::search_for_executable_with_prefix(paths, filename_prefix, case_insensitive)
+        pathsearch::search_for_executable_with_prefix(
+            paths.into_iter(),
+            filename_prefix,
+            case_insensitive,
+        )
     }
 
     /// Finds executable names in PATH with the given prefix, reusing a cache while PATH is stable.

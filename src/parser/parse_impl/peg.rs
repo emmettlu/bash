@@ -675,11 +675,11 @@ peg::parser! {
                 Ok((parsed, ast::Word::with_location(w, l)))
             }
 
-        rule array_elements() -> Vec<&'input String> =
+        rule array_elements() -> Vec<&'input str> =
              linebreak() e:array_element()* { e }
 
-        rule array_element() -> &'input String =
-            linebreak() [Token::Word(e, _)] linebreak() { e }
+        rule array_element() -> &'input str =
+            linebreak() [Token::Word(e, _)] linebreak() { e.as_str() }
 
         // N.B. An I/O number must be a string of only digits, and it must be
         // followed by a '<' or '>' character (but not consume them). We also

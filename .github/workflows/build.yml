@@ -37,12 +37,6 @@ jobs:
       - name: Checkout self
         uses: actions/checkout@v6
 
-      - name: Copy config file
-        shell: bash
-        run: |
-          mkdir -p .cargo
-          cp -f ../.cargo/config.toml .cargo
-
       - name: Build
         shell: bash
         run: |

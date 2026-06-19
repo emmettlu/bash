@@ -6,7 +6,7 @@ type ParseStringCacheKey = (String, crate::parser::ParserOptions);
 
 thread_local! {
     static PARSE_STRING_CACHE: RefCell<crate::engine::cache::FixedCache<ParseStringCacheKey, crate::parser::ast::Program>> =
-        RefCell::new(crate::engine::cache::FixedCache::new(64));
+        const { RefCell::new(crate::engine::cache::FixedCache::new(64)) };
 }
 
 use crate::engine::{Shell, extensions, trace_categories};

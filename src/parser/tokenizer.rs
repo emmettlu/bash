@@ -9,7 +9,7 @@ type TokenizeCacheKey = (String, TokenizerOptions);
 
 thread_local! {
     static TOKENIZE_CACHE: RefCell<crate::engine::cache::FixedCache<TokenizeCacheKey, Vec<Token>>> =
-        RefCell::new(crate::engine::cache::FixedCache::new(64));
+        const { RefCell::new(crate::engine::cache::FixedCache::new(64)) };
 }
 
 #[derive(Clone, Debug)]

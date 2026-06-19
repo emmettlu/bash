@@ -7,7 +7,7 @@ use crate::parser::error;
 
 thread_local! {
     static ARITHMETIC_PARSE_CACHE: RefCell<crate::engine::cache::FixedCache<String, ast::ArithmeticExpr>> =
-        RefCell::new(crate::engine::cache::FixedCache::new(64));
+        const { RefCell::new(crate::engine::cache::FixedCache::new(64)) };
 }
 
 /// Parses a shell arithmetic expression.

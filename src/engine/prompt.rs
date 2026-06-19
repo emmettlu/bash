@@ -7,7 +7,7 @@ use std::{cell::RefCell, path::Path};
 
 thread_local! {
     static PROMPT_PARSE_CACHE: RefCell<crate::engine::cache::FixedCache<String, Vec<crate::parser::prompt::PromptPiece>>> =
-        RefCell::new(crate::engine::cache::FixedCache::new(64));
+        const { RefCell::new(crate::engine::cache::FixedCache::new(64)) };
 }
 
 const VERSION_MAJOR: &str = env!("CARGO_PKG_VERSION_MAJOR");

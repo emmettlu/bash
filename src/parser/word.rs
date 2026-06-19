@@ -22,7 +22,7 @@ type WordParseCacheKey = (String, ParserOptions);
 
 thread_local! {
     static WORD_PARSE_CACHE: RefCell<crate::engine::cache::FixedCache<WordParseCacheKey, Vec<WordPieceWithSource>>> =
-        RefCell::new(crate::engine::cache::FixedCache::new(64));
+        const { RefCell::new(crate::engine::cache::FixedCache::new(64)) };
 }
 
 /// Encapsulates a `WordPiece` together with its position in the string it came from.

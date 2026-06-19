@@ -319,47 +319,49 @@ impl CallStack {
             return Ok(());
         }
 
-        color_print::cwriteln!(f, "<underline>Call stack (most recent first):</underline>")?;
+        const RESET: &str = "\x1b[0m";
+        const BOLD: &str = "\x1b[1m";
+        const DIM: &str = "\x1b[2m";
+        const UNDERLINE: &str = "\x1b[4m";
+        const YELLOW: &str = "\x1b[33m";
+        const BLUE: &str = "\x1b[34m";
+        const CYAN: &str = "\x1b[36m";
+
+        writeln!(f, "{UNDERLINE}Call stack (most recent first):{RESET}")?;
 
         for (index, frame) in self.iter().enumerate() {
             let si = frame.current_pos_as_source_info();
 
-            color_print::cwrite!(
+            write!(
                 f,
-                "   <dim>#{index}</dim><yellow>|</yellow> <strong>{}</strong>",
+                "   {DIM}#{index}{RESET}{YELLOW}|{RESET} {BOLD}{}{RESET}",
                 si.source
             )?;
 
             if let Some(pos) = &si.start {
-                color_print::cwrite!(f, ":<cyan>{}</cyan>,<cyan>{}</cyan>", pos.line, pos.column)?;
+                write!(f, ":{CYAN}{}{RESET},{CYAN}{}{RESET}", pos.line, pos.column)?;
             }
 
-            color_print::cwrite!(f, " (<dim>{}</dim>", frame.frame_type)?;
+            write!(f, " ({DIM}{}{RESET}", frame.frame_type)?;
 
             if options.show_entry_points
                 && let Some(entry) = &frame.entry
             {
                 let entry_si = frame.pos_as_source_info(Some(entry));
                 if let Some(entry_start) = &entry_si.start {
-                    color_print::cwrite!(
+                    write!(
                         f,
-                        " <dim>entered at {}:{}</dim>",
-                        entry_si.source,
-                        entry_start
+                        " {DIM}entered at {}:{}{RESET}",
+                        entry_si.source, entry_start
                     )?;
                 }
             }
 
-            color_print::cwriteln!(f, ")")?;
+            writeln!(f, ")")?;
 
             if !frame.args.is_empty() && options.show_args {
                 for (i, arg) in frame.args.iter().enumerate() {
-                    color_print::cwriteln!(
-                        f,
-                        "     <yellow>${}</yellow>: <blue>{}</blue>",
-                        i + 1,
-                        arg
-                    )?;
+                    writeln!(f, "     {YELLOW}${}{RESET}: {BLUE}{}{RESET}", i + 1, arg)?;
                 }
             }
         }

@@ -10,7 +10,7 @@ impl crate::core::extensions::ErrorFormatter for Formatter {
         _shell: &crate::core::Shell<impl crate::core::ShellExtensions>,
     ) -> String {
         let prefix = if self.use_color {
-            color_print::cstr!("<red>error:</red> ")
+            "\x1b[31merror:\x1b[0m "
         } else {
             "error: "
         };

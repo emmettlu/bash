@@ -6,24 +6,15 @@ use std::path::PathBuf;
 
 use crate::shell::{events, productinfo};
 
-const SHORT_DESCRIPTION: &str = "Bo[u]rn[e] RUsty SHell 🦀 (https://brush.sh)";
-
 const LONG_DESCRIPTION: &str = r"brush is a bash-compatible, Rust-implemented shell.
 
 brush is distributed under the terms of the MIT license. If you encounter any issues or discrepancies in behavior from bash, please report them at https://github.com/reubeno/brush.
 
 For more information, visit https://brush.sh.";
 
-const USAGE: &str = color_print::cstr!(
-    "<bold>brush</bold> <italics>[OPTIONS]</italics>... <italics>[SCRIPT_PATH [SCRIPT_ARGS]...]</italics>"
-);
+const USAGE: &str = "brush [OPTIONS]... [SCRIPT_PATH [SCRIPT_ARGS]...]";
 
-const VERSION: &str = const_format::concatcp!(
-    productinfo::PRODUCT_VERSION,
-    " (",
-    productinfo::PRODUCT_GIT_VERSION,
-    ")"
-);
+const VERSION: &str = productinfo::PRODUCT_VERSION;
 
 const HEADING_STANDARD_OPTIONS: &str = "Standard shell options";
 
@@ -46,7 +37,6 @@ pub enum InputBackendType {
 #[derive(Clone, Parser)]
 #[clap(name = productinfo::PRODUCT_NAME,
        version = VERSION,
-       about = SHORT_DESCRIPTION,
        long_about = LONG_DESCRIPTION,
        author,
        override_usage = USAGE,

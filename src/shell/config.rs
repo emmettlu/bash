@@ -6,7 +6,6 @@
 //! - Layered configuration: defaults < config file < command-line arguments
 
 use crate::interactive::UIOptions;
-use etcetera::BaseStrategy;
 use std::path::{Path, PathBuf};
 
 use crate::shell::args::CommandLineArgs;
@@ -181,20 +180,23 @@ pub enum ConfigLoadError {
 const CONFIG_SUBDIR_NAME: &str = "brush";
 const CONFIG_FILE_NAME: &str = "config.toml";
 
-/// Returns the default configuration file path for the current platform.
+/// Returns the default Windows configuration file path.
 ///
-/// Uses the XDG Base Directory specification on Linux/macOS and appropriate
-/// platform conventions on other systems via the `etcetera` crate.
+/// Uses `%APPDATA%\\brush\\config.toml`, falling back to `%LOCALAPPDATA%` or
+/// `%USERPROFILE%\\AppData\\Roaming` when `%APPDATA%` is unavailable.
 ///
-/// Returns `None` if the platform's config directory cannot be determined.
+/// Returns `None` if no suitable base directory can be determined.
 pub fn default_config_path() -> Option<PathBuf> {
-    let strategy = etcetera::choose_base_strategy().ok()?;
-    Some(
-        strategy
-            .config_dir()
-            .join(CONFIG_SUBDIR_NAME)
-            .join(CONFIG_FILE_NAME),
-    )
+    let config_dir = std::env::var_os("APPDATA")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("LOCALAPPDATA").map(PathBuf::from))
+        .or_else(|| {
+            std::env::var_os("USERPROFILE")
+                .map(PathBuf::from)
+                .map(|path| path.join("AppData").join("Roaming"))
+        })?;
+
+    Some(config_dir.join(CONFIG_SUBDIR_NAME).join(CONFIG_FILE_NAME))
 }
 
 /// Loads configuration from the specified path.

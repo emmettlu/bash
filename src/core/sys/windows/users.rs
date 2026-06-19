@@ -4,6 +4,11 @@
 use crate::core::error;
 use std::path::PathBuf;
 use std::sync::LazyLock;
+use windows_sys::Win32::Foundation::{CloseHandle, HANDLE};
+use windows_sys::Win32::Security::{
+    GetTokenInformation, TOKEN_ELEVATION, TOKEN_QUERY, TokenElevation,
+};
+use windows_sys::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
 /// Placeholder UID for non-elevated Windows processes.
 ///
@@ -18,7 +23,7 @@ const NON_ELEVATED_GID: u32 = 1000;
 /// Cached elevation status. The underlying check queries the process token,
 /// which can't change after process start, so it's safe to memoize.
 static IS_ELEVATED: LazyLock<bool> = LazyLock::new(|| {
-    check_elevation::is_elevated().unwrap_or_else(|err| {
+    query_process_elevation().unwrap_or_else(|err| {
         tracing::warn!("failed to determine process elevation: {err}");
         false
     })
@@ -36,6 +41,35 @@ pub(crate) fn get_current_user_home_dir() -> Option<PathBuf> {
 
 pub(crate) fn get_current_user_default_shell() -> Option<PathBuf> {
     None
+}
+
+fn query_process_elevation() -> std::io::Result<bool> {
+    let mut token: HANDLE = std::ptr::null_mut();
+    if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) } == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+
+    let mut elevation = TOKEN_ELEVATION { TokenIsElevated: 0 };
+    let mut returned_len = 0;
+    let result = unsafe {
+        GetTokenInformation(
+            token,
+            TokenElevation,
+            std::ptr::addr_of_mut!(elevation).cast(),
+            size_of::<TOKEN_ELEVATION>() as u32,
+            &mut returned_len,
+        )
+    };
+    let close_result = unsafe { CloseHandle(token) };
+
+    if result == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    if close_result == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+
+    Ok(elevation.TokenIsElevated != 0)
 }
 
 fn is_elevated() -> bool {
@@ -59,8 +93,9 @@ pub(crate) fn get_effective_gid() -> Result<u32, error::Error> {
 }
 
 pub(crate) fn get_current_username() -> Result<String, error::Error> {
-    let username = whoami::username().map_err(std::io::Error::from)?;
-    Ok(username)
+    std::env::var("USERNAME")
+        .or_else(|_| std::env::var("USER"))
+        .map_err(|_| error::ErrorKind::NoCurrentUser.into())
 }
 
 #[allow(clippy::unnecessary_wraps)]

@@ -7,8 +7,8 @@ on:
 jobs:
   build:
     env:
-      PROJECT_PATH: brush
-      PROJECT_BIN: brush
+      PROJECT_PATH: bash
+      PROJECT_BIN: bash
 
     runs-on: windows-2022
 
@@ -37,13 +37,6 @@ jobs:
 
       - name: Checkout self
         uses: actions/checkout@v6
-
-      - name: Checkout ${{ env.PROJECT_PATH }}
-        uses: actions/checkout@v6
-        with:
-          repository: ${{ env.PROJECT_REPOSITORY }}
-          ref: refs/tags/${{ env.PROJECT_VERSION }}
-          path: ${{ env.PROJECT_PATH }}
 
       - name: Copy config file
         shell: bash

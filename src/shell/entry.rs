@@ -5,12 +5,10 @@ use crate::shell::args::CommandLineArgs;
 use crate::shell::args::InputBackendType;
 use crate::shell::brushctl::ShellBuilderBrushBuiltinExt as _;
 
-use crate::shell::config;
 use crate::shell::error_formatter;
 use crate::shell::events;
 use crate::shell::productinfo;
 use clap::CommandFactory;
-use futures::lock::Mutex;
 use std::sync::{LazyLock, Mutex as StdMutex};
 use std::{path::Path, sync::Arc};
 
@@ -119,74 +117,6 @@ impl CommandLineArgs {
 
 pub(crate) const DEFAULT_ENABLE_HIGHLIGHTING: bool = false;
 
-/// Run the brush shell. Returns the exit code.
-///
-/// # Arguments
-///
-/// * `cli_args` - The command-line arguments to the shell, in string form.
-/// * `args` - The already-parsed command-line arguments.
-#[doc(hidden)]
-pub(crate) async fn run_async(
-    cli_args: Vec<String>,
-    args: CommandLineArgs,
-) -> Result<u8, crate::interactive::ShellError> {
-    // Initializing tracing.
-    if let Ok(mut event_config) = TRACE_EVENT_CONFIG.lock() {
-        *event_config = Some(events::TraceEventConfig::init(
-            &args.enabled_debug_events,
-            &args.disabled_events,
-        ));
-    }
-
-    // Load configuration file.
-    let file_config = config::load_config(args.no_config, args.config_file.as_deref())
-        .into_config_or_log()
-        .map_err(|e| crate::interactive::ShellError::IoError(std::io::Error::other(e)))?;
-
-    // Instantiate an appropriately configured shell and wrap it in an `Arc`. Note that we do
-    // *not* run any code in the shell yet. We'll delay loading profiles and such until after
-    // we've set up everything else (in `run_in_shell`).
-    let shell: BrushShell = instantiate_shell(&args, cli_args).await?;
-    let shell = Arc::new(Mutex::new(shell));
-
-    // Run with the selected input backend. Each branch instantiates the concrete
-    // backend type and calls `run_in_shell`, preserving static dispatch.
-    let default_backend = get_default_input_backend_type(&args);
-    let selected_backend = args.input_backend.unwrap_or(default_backend);
-
-    // Build UI options by merging config file with CLI args.
-    let ui_options = file_config.to_ui_options(&args);
-
-    let result = match selected_backend {
-        InputBackendType::Basic => {
-            let mut input_backend = crate::interactive::BasicInputBackend;
-            run_in_shell(&shell, args.clone(), &mut input_backend, &ui_options).await
-        }
-        InputBackendType::Minimal => {
-            let mut input_backend = crate::interactive::MinimalInputBackend;
-            run_in_shell(&shell, args.clone(), &mut input_backend, &ui_options).await
-        }
-    };
-
-    // Display any error that percolated up.
-    let exit_code = match result {
-        Ok(code) => code,
-        Err(crate::interactive::ShellError::ShellError(e)) => {
-            let shell = shell.lock().await;
-            let mut stderr = shell.stderr();
-            let _ = shell.display_error(&mut stderr, &e);
-            drop(shell);
-            1
-        }
-        Err(err) => {
-            tracing::error!("error: {err:#}");
-            1
-        }
-    };
-
-    Ok(exit_code)
-}
-
 /// Determines whether `run_in_shell` will run the shell interactively. Must be sync'd with it.
 const fn will_run_interactively(args: &CommandLineArgs) -> bool {
     if args.command.is_some() {
@@ -207,7 +137,7 @@ const fn will_run_interactively(args: &CommandLineArgs) -> bool {
 /// * `args` - The parsed command-line arguments.
 /// * `input_backend` - The input backend to use.
 /// * `ui_options` - The user interface options to use.
-async fn run_in_shell(
+pub(crate) async fn run_in_shell(
     shell_ref: &crate::interactive::ShellRef<impl crate::engine::ShellExtensions>,
     args: CommandLineArgs,
     input_backend: &mut impl crate::interactive::InputBackend,
@@ -293,7 +223,7 @@ async fn initialize_shell(
 ///
 /// * `args` - The parsed command-line arguments.
 /// * `cli_args` - The raw command-line arguments.
-async fn instantiate_shell(
+pub(crate) async fn instantiate_shell(
     args: &CommandLineArgs,
     cli_args: Vec<String>,
 ) -> Result<BrushShell, crate::interactive::ShellError> {
@@ -426,7 +356,7 @@ const fn new_error_behavior(args: &CommandLineArgs) -> error_formatter::Formatte
     }
 }
 
-fn get_default_input_backend_type(args: &CommandLineArgs) -> InputBackendType {
+pub(crate) fn get_default_input_backend_type(args: &CommandLineArgs) -> InputBackendType {
     if std::io::stdin().is_terminal() && will_run_interactively(args) {
         InputBackendType::Basic
     } else {

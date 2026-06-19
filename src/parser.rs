@@ -1,9 +1,5 @@
 //! Implements a tokenizer and parsers for bash shell syntax.
 
-#![allow(clippy::module_inception)]
-// TODO(unwrap): remove or scope this allow attribute
-#![allow(clippy::unwrap_used)]
-
 pub mod arithmetic;
 pub mod ast;
 pub mod pattern;
@@ -13,7 +9,7 @@ pub mod test_command;
 pub mod word;
 
 mod error;
-mod parser;
+mod parse_impl;
 mod source;
 mod tokenizer;
 
@@ -28,8 +24,8 @@ pub use error::{
 pub use error::miette::PrettyError;
 
 #[cfg(feature = "winnow-parser")]
-pub use parser::winnow_str;
-pub use parser::{Parser, ParserBuilder, ParserImpl, ParserOptions, SourceInfo, parse_tokens};
+pub use parse_impl::winnow_str;
+pub use parse_impl::{Parser, ParserBuilder, ParserImpl, ParserOptions, SourceInfo, parse_tokens};
 
 pub use source::{SourcePosition, SourcePositionOffset, SourceSpan};
 pub use tokenizer::{

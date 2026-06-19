@@ -16,7 +16,7 @@ mod simple_commands;
 
 use crate::parser::ast::Program;
 use crate::parser::error::ParseError;
-use crate::parser::parser::{Parser, ParserImpl, ParserOptions};
+use crate::parser::parse_impl::{Parser, ParserImpl, ParserOptions};
 use anyhow::Result;
 #[cfg(feature = "winnow-parser")]
 use serde_json::Value;

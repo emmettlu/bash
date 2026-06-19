@@ -1,8 +1,6 @@
 //! Implements the command-line interface for the `brush` shell.
 
 use crate::builtins::ShellBuilderExt as _;
-#[cfg(feature = "experimental-builtins")]
-use crate::experimental_builtins::ShellBuilderExt as _;
 use crate::shell::args::CommandLineArgs;
 use crate::shell::args::InputBackendType;
 use crate::shell::brushctl::ShellBuilderBrushBuiltinExt as _;
@@ -192,9 +190,6 @@ fn install_panic_handlers() {
     }
 }
 
-#[cfg(feature = "experimental")]
-pub(crate) const DEFAULT_ENABLE_HIGHLIGHTING: bool = true;
-#[cfg(not(feature = "experimental"))]
 pub(crate) const DEFAULT_ENABLE_HIGHLIGHTING: bool = false;
 
 /// Run the brush shell. Returns the exit code.
@@ -403,12 +398,6 @@ fn instantiate_shell_from_file(
         shell.register_builtin(&builtin_name, builtin);
     }
 
-    // Add experimental builtins (if enabled).
-    #[cfg(feature = "experimental-builtins")]
-    for (builtin_name, builtin) in crate::experimental_builtins::experimental_builtins() {
-        shell.register_builtin(&builtin_name, builtin);
-    }
-
     Ok(shell)
 }
 
@@ -502,10 +491,6 @@ async fn instantiate_shell_from_args(
 
     // Add builtins.
     let shell = shell.default_builtins().brush_builtins();
-
-    // Add experimental builtins (if enabled).
-    #[cfg(feature = "experimental-builtins")]
-    let shell = shell.experimental_builtins();
 
     // Build the shell.
     let mut shell = shell.build().await?;

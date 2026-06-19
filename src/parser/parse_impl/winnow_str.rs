@@ -3,7 +3,7 @@
 use winnow::error::ContextError;
 
 use crate::parser::ast;
-use crate::parser::parser::{ParserOptions, SourceInfo};
+use crate::parser::parse_impl::{ParserOptions, SourceInfo};
 
 /// Type alias for parser error
 type PError = winnow::error::ErrMode<ContextError>;

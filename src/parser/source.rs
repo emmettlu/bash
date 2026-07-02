@@ -62,6 +62,21 @@ pub struct SourceSpan {
     pub end: Arc<SourcePosition>,
 }
 
+impl SourceSpan {
+    /// Returns the length of the token in characters.
+    pub fn length(&self) -> usize {
+        self.end.index - self.start.index
+    }
+    pub(crate) fn within(start: &Self, end: &Self) -> Self {
+        Self {
+            start: start.start.clone(),
+            end: end.end.clone(),
+        }
+    }
+}
+
+// This test-only module is intentionally placed after all other items
+// to avoid the `clippy::items_after_test_module` lint.
 #[cfg(test)]
 mod source_position_arc_serde {
     use std::sync::Arc;
@@ -85,18 +100,5 @@ mod source_position_arc_serde {
         D: serde::Deserializer<'de>,
     {
         SourcePosition::deserialize(deserializer).map(Arc::new)
-    }
-}
-
-impl SourceSpan {
-    /// Returns the length of the token in characters.
-    pub fn length(&self) -> usize {
-        self.end.index - self.start.index
-    }
-    pub(crate) fn within(start: &Self, end: &Self) -> Self {
-        Self {
-            start: start.start.clone(),
-            end: end.end.clone(),
-        }
     }
 }

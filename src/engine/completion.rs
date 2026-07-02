@@ -1360,13 +1360,16 @@ async fn get_completions_using_basic_lookup(
 
     let directory_only = matches!(context.command_name, Some("cd")) && context.token_index > 0;
 
-    // File completions
-    let mut candidates = get_file_completions(shell, token, directory_only).await;
+    // Only perform file/dir completion for cd arguments.
+    // General file completion on tab is removed.
+    let mut candidates: Vec<String> = if directory_only {
+        get_file_completions(shell, token, /*must_be_dir*/ true).await
+    } else {
+        Vec::new()
+    };
 
-    // If this appears to be the command token (and if there's *some* prefix without
-    // a path separator) then also consider whether we should search the path for
-    // completions too.
-    // TODO(completions): Do a better job than just checking if index == 0.
+    // Command completion only for the first token (non-empty), no files shown here.
+    // If token is empty (nothing typed), produce no output.
     let is_command_position =
         context.token_index == 0 && !token.is_empty() && !sys::fs::contains_path_separator(token);
 

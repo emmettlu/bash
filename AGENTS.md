@@ -1,317 +1,185 @@
-# Agent Development Guide for `brush`
+# bash AI 代理开发指南
 
-This guide helps AI agents work efficiently on the `brush` codebase by providing essential context about architecture, patterns, and development workflows.
+本指南帮助 AI 代理高效地在 `bash` 代码库上工作, 提供架构, 模式和开发工作流的基本上下文. 
 
-## 1. Architecture Overview & Navigation
+## 1. 架构概述 & 导航
 
-### Project Structure
+### 项目结构
 
-The brush project is organized into several key crates:
+本项目是单 crate Rust 项目 (package 名为 "bash", Rust 2024 edition):
 
-- **`brush-core/`**: Core shell functionality, builtins, and runtime
-- **`brush-parser/`**: Shell script parsing (AST generation)
-- **`brush-builtins/`**: Implementation of shell builtins (e.g., echo, cd)
-- **`brush-interactive/`**: Interactive shell interfaces (readline, etc.)
-- **`brush-shell/`**: Main CLI application and entry point
+- `src/` 主源码目录:
+  - `shell/` : CLI 参数, 入口逻辑, 配置加载
+  - `engine/` : 核心 Shell 实现, 解释器, 变量, 作业控制, 系统集成
+  - `parser/` : Shell 脚本解析 (tokenizer + PEG 生成 AST)
+  - `builtins/` : 内置命令实现 (echo, cd, set 等)
+  - `interactive/` : 交互输入后端, 补全, 提示符, Windows 终端处理
 
-### Key Files & Entry Points
+### 关键文件 & 入口点
 
-**Critical files to understand first:**
+**必须先理解的关键文件:**
 
-- `brush-core/src/shell.rs` - Main `Shell` struct and creation logic
-- `brush-core/src/lib.rs` - Public API exports
-- `brush-shell/src/main.rs` - CLI application entry point
+- `src/main.rs` - 程序入口点, 创建 compio runtime 并调用 `bash::run()`
+- `src/lib.rs` - 导出 `run()` 和 `ExitCode`
+- `src/shell/entry.rs` - Shell 实例化, 解析参数, 运行交互/脚本模式
+- `src/engine/shell.rs` - 核心 `Shell<SE>` 结构体与内部状态
+- `src/engine/interp.rs` - AST 执行引擎 (impl Execute for Program/Pipeline 等)
+- `src/parser/parse_impl/peg.rs` - PEG 语法规则, token 驱动解析器
+- `src/engine/sys/` - Windows 平台集成 (大部分 fallback 到 unsupported)
 
-**Architecture patterns:**
+**架构模式:**
 
-- Shell instances are created via `Shell::builder()`
-- The project uses builder patterns for type-safe configuration
-- We try to keep platform-specific code in `brush-core` under the `sys` module
-- Follows Rust 2024 edition standards
+- 使用 `Shell::builder()` / `CreateOptions::builder()` 创建 shell 实例
+- 强烈使用 builder 模式实现类型安全配置
+- 解析基于 peg crate (token 流驱动)
+- 执行全程异步 (compio runtime)
+- 扩展点通过 `ShellExtensions` trait 静态注入
+- Windows 平台代码集中放在 `engine::sys`
 
-### Module Dependencies
+### 模块依赖关系
 
 ```text
-brush-shell → brush-interactive → brush-core → brush-parser
-            ↘ brush-builtins ↗
+main.rs
+  → lib::run()
+    → shell::entry (参数处理 + instantiate_shell)
+      → engine::Shell::builder()
+      → interactive::{Basic,Minimal}InputBackend
+      → parser (脚本解析)
+      → engine::interp (AST 执行)
+      → engine::builtins (内置命令)
 ```
 
-## 2. Testing Strategy
+## 2. 测试与验证策略
 
-### Test Execution Priority
+### 推荐开发流程 (内循环)
 
-**Recommended development workflow:**
+1. 修改后立即 `cargo check`
+2. 运行受影响模块的单元测试: `cargo test`
+3. 快速检查格式与 lint:
+   ```bash
+   cargo fmt -- --check
+   cargo clippy
+   ```
 
-#### Using xtask (Recommended)
+### 提交前验证 (外循环)
 
-The project provides a `cargo xtask` command that centralizes common development tasks:
+推荐执行:
 
 ```bash
-# Run quick inner-loop checks (~7s warm): fmt, build, lint, unit tests
-cargo xtask ci quick
-
-# Run full pre-commit checks (~45s warm): quick + deps, schemas, integration tests
-cargo xtask ci pre-commit
-
-# Run with --continue-on-error to see all failures at once
-cargo xtask ci pre-commit -k
-
-# Add -v for verbose output showing exact commands being run
-cargo xtask -v ci pre-commit
+cargo fmt
+cargo clippy
+cargo test
 ```
 
-#### Individual Test Commands
+### 测试组织
 
-```bash
-# Run unit tests (fast tests excluding integration binaries)
-cargo xtask test unit
+- 单元测试写在各源文件内的 `#[cfg(test)] mod tests { ... }`
+- 解析器快照测试位于 `src/parser/snapshot_tests.rs`
+- 内置命令和引擎均有大量单元测试
+- 目前无 workspace 或 xtask 工具, 直接使用 cargo 命令
 
-# Run integration tests (all workspace tests including compat tests)
-cargo xtask test integration
+**测试驱动建议:**
 
-# Run tests with coverage
-cargo xtask test integration --coverage --coverage-output codecov.xml
+- 改动前先添加/更新测试描述期望行为
+- 先针对单个 crate/module 跑测试, 再扩展范围
+- 兼容性行为改动需对应补充测试
+
+**快速迭代技巧:**
+
+- `cargo test <test_name>` 运行单个测试
+- `cargo test --lib` 仅库测试
+- `cargo check` 最快语法/类型检查
+
+### 测试失败处理
+
+- 优先关注改动区域的失败
+- 解析/执行行为变化通常需同步更新快照或测试断言
+- 格式与 clippy 问题必须先修复
+
+## 3. 错误处理 & 日志模式
+
+### 错误处理
+
+- crate 内错误使用 `thiserror`
+- 测试代码可用 `anyhow`
+- 常见错误类型: `engine::Error`, `engine::ErrorKind`, `parser::ParseError`
+
+### 日志与追踪
+
+使用 `tracing` 进行结构化调试日志.
+
+预定义分类在 `trace_categories.rs`:
+
+- `COMMANDS`, `EXPANSION`, `FUNCTIONS`, `JOBS`, `PARSE`, `PATTERN`, `UNIMPLEMENTED` 等
+
+用法示例:
+
+```rust
+tracing::debug!(target: trace_categories::JOBS, "polling job {}", job_id);
 ```
 
-#### Manual Approach (Alternate)
+## 4. Windows 平台特殊考虑
 
-For finer-grained control:
+- 本项目主要为 Windows 构建 (windows-sys 依赖)
+- 大部分进程/信号/管道功能目前 fallback 到 `src/engine/sys/unsupported`
+- 文件系统有部分原生实现 (`sys/fs/native.rs`)
+- 环境变量处理: USERPROFILE → HOME, TEMP/TMP → TMPDIR 等
+- 路径统一使用 `/` 分隔符 (有 `normalize_path_separators` 工具)
+- `/dev/null` 等特殊文件映射到 Windows NUL
+- 交互终端: `interactive/win_term.rs`
+- 许多作业控制, trap, signal 功能当前受限
 
-##### Inner Loop (Fast Iteration)
+改动平台相关代码时, 优先在 `engine/sys` 下实现, 避免污染通用路径.
 
-1. **Quick validation**: `cargo check --package <changed-package>` - Fast syntax/type checking
-2. **Correctness validation**: `cargo test --package <changed-package>` - Target specific crates for faster feedback
+## 5. 文档与示例标准
 
-##### Outer Loop (Comprehensive Testing)  
+### rustdoc 要求
 
-1. **Compatibility tests**: `cargo test --test brush-compat-tests` - Bash compatibility validation
-2. **Full workspace tests**: `cargo test --workspace` - Complete test suite
+- 所有导出的类型, 函数, trait, 模块必须有良好 rustdoc
+- 内部组件的文档为尽力而为
 
-#### Pre-Finish Quality Validation
+### 新功能示例
 
-**Recommended:** Run the xtask pre-commit workflow:
+仅主要特性添加 runnable 示例. 示例应:
 
-```bash
-cargo xtask ci pre-commit
-```
+- 可通过 `cargo run` 执行
+- 包含完整错误处理
+- 演示基本与进阶用法
 
-**Manual approach:** Before considering work complete, run these validation steps:
+## 6. 性能与克隆策略
 
-- **Compatibility tests**: `cargo test --test brush-compat-tests`
-- **Linting**: `cargo clippy`
-- **Formatting**: `cargo fmt --check`
-- **Security/License audit**: `cargo deny check all`
-- **Full test suite**: `cargo test --workspace`
+- 默认避免克隆
+- 仅在异步安全或必须持有独立副本时才克隆
 
-**When tests fail:**
+## 快速参考清单
 
-- Focus on failures in the area you changed first
-- Compatibility test failures often indicate shell behavior changes
-- Check if new functionality needs corresponding test cases
-- Format/clippy failures should be fixed before proceeding
+### 开始改动前
 
-**Common pitfalls:**
+- [ ] 理解改动涉及的模块
+- [ ] 确认是否会影响公开 API 或 Windows 行为
+- [ ] 找到相关测试文件
 
-- **Test scope mistakes**: Running full test suite too early instead of targeting specific areas first
-- **Skipping test-driven development**: Add tests that specify desired behavior before implementing
+### 开发中
 
-**Test-driven development approach:**
+- [ ] 频繁运行 `cargo check`
+- [ ] 先跑受影响模块的测试
+- [ ] 必要时更新快照测试
 
-- When possible, write tests first that specify the desired behavior
-- Use unit tests for logic changes, compatibility tests for shell behavior changes
-- Use these tests as validation that your implementation is working correctly
+### 提交前
 
-**Pro tip**: For specific compatibility test cases, use:
+- [ ] `cargo fmt`
+- [ ] `cargo clippy`
+- [ ] `cargo test` (至少受影响区域)
+- [ ] 提交信息纯英文, Conventional Commits 风格, 单段不超过 64 词
 
-```bash
-cargo test --test brush-compat-tests -- '<name of test case>'
-```
+### 文档
 
-**Fast iteration strategies:**
+- [ ] 为导出的公开 API 添加 rustdoc
+- [ ] 主要功能提供可运行示例
+- [ ] 必要时更新本指南
 
-- Target specific crates: `cargo test --package <changed-package>`
-- Target specific test cases: `cargo test <test-name>` or `cargo test --test <test-file>`
-- Requires knowledge of which tests best exercise the code being changed
+### 个人规范
 
-**Testing approach:**
-
-- Follow good software engineering practice: start by validating the specific area being changed, then iteratively move to incrementally broader sets of tests
-
-### Test Organization
-
-**Testing expectations for new public APIs:**
-
-- Unit tests are expected if feasible
-- Examples are nice to have and worthwhile for sufficiently critical APIs
-
-**Test patterns and conventions:**
-
-- **Compatibility tests**: For any compatibility-related fixes, it's critical to add new test cases to the compat tests (see docs/how-to/run-tests.md and section 3 for when breaking changes apply)
-
-**Test categories:**
-
-- Unit tests: In `src/` files with `#[cfg(test)]`
-- Integration tests: In `tests/` directories
-- Examples: In `examples/` directories (must be runnable)
-- Shell script tests: YAML-based test cases in `brush-shell/tests/cases/`
-
-### Performance Testing
-
-**Performance regression testing:**
-
-- Not a chief concern for most changes
-- For performance-specific work, benchmarks are available (see docs/how-to/run-benchmarks.md)
-- Performance sensitivity will be identified in the initial brief if relevant
-
-## 3. Breaking Changes & Compatibility
-
-### API Stability Guidelines
-
-**Breaking change policy:**
-
-- Non-backwards compatible changes to public APIs are considered breaking
-- Breaking changes are still in consideration, but need to be highlighted and carefully reviewed
-- Any APIs exported from crates are considered public because all of the crates are published to crates.io
-
-**Adding new fields to public structs:**
-
-- New optional fields are fine to add as long as the struct implements the Default trait and as long as the defaulted value is a sensible one
-
-### Dependency Impact
-
-When changing public APIs in `brush-core` (see section 3 for breaking change policy):
-
-1. Check `brush-shell/src/main.rs` for struct initialization sites
-2. Check `brush-interactive/` for any usage
-
-## 4. Documentation & Examples Standards
-
-### Documentation Requirements
-
-**Rustdoc documentation standards:**
-
-- At minimum we must have good rustdoc documentation for exported types, functions, traits, etc. as well as on all exported modules and crates
-- Documentation for internal components should be a best-effort, nice to have thing
-
-**Examples for new features:**
-
-- Unless explicitly requested, only major feature additions warrant an example.
-
-**Documentation style:**
-
-- Follow general best practices for Rust
-
-### Example Standards
-
-Examples should:
-
-- Be self-contained and runnable with `cargo run --package brush-core --example <name>`
-- Include comprehensive error handling
-- Demonstrate both basic and advanced usage patterns
-- Include output examples in comments when helpful
-
-## 5. Build & Release Process
-
-### Development Tools
-
-The project uses several tools for code quality:
-
-**Using xtask (Recommended):**
-
-The project provides a `cargo xtask` command that centralizes common development tasks:
-
-```bash
-# Run all pre-commit checks (comprehensive)
-cargo xtask ci pre-commit
-
-# Individual checks
-cargo xtask check fmt      # Format check
-cargo xtask check lint     # Clippy
-cargo xtask check deps     # cargo-deny
-cargo xtask check build    # Compilation check
-cargo xtask check schemas  # Schema drift check
-
-# Tests
-cargo xtask test unit        # Fast unit tests (excludes integration binaries)
-cargo xtask test integration # All workspace tests (unit + compat)
-
-# Analysis
-cargo xtask analyze bench  # Run benchmarks
-```
-
-**Manual approach (Alternate):**
-
-- Standard cargo commands (e.g., check, test, build, run, clippy)
-- You may need to reverse engineer some of the args looking at CI checks in .github/*.yml
-
-**Command frequency guidelines:**
-
-- **Frequent (inner loop)**: `cargo xtask ci quick`, `cargo check`, `cargo test --package <pkg>`
-- **Regular (before commits)**: `cargo xtask ci pre-commit` or `cargo fmt` + `cargo clippy`
-- **Occasional (outer loop)**: `cargo xtask test integration` or `cargo test --workspace`
-- **Rare (pre-finish only)**: `cargo xtask check deps` or `cargo deny check`
-
-**Pre-commit validation:**
-
-- Recommended: `cargo xtask ci pre-commit`
-- Quick check: `cargo xtask ci quick` for fast feedback
-- Manual: Run `cargo fmt` and `cargo clippy` before committing
-
-**Outer loop validation:**
-
-- `cargo deny check all` should pass (security/license auditing) - not for frequent use during development
-
-## 6. Performance & Error Handling Patterns
-
-### Error Handling
-
-**Error handling patterns:**
-
-- `thiserror` is used for implementing crate-specific errors
-- Use `anyhow` only in tests
-
-**Logging and tracing patterns:**
-
-- Use `tracing` for debug logging with predefined categories
-- Categories are defined in `trace_categories.rs` modules (e.g., `COMMANDS`, `COMPLETION`, `EXPANSION`, `FUNCTIONS`, `INPUT`, `JOBS`, `PARSE`, `PATTERN`, `UNIMPLEMENTED`)
-- Usage pattern: `tracing::debug!(target: trace_categories::CATEGORY_NAME, "message")`
-- Example: `tracing::debug!(target: trace_categories::JOBS, "Polling job {} for completion...", job_id)`
-
-### Performance Considerations
-
-**Clone vs references:**
-
-- Avoid cloning by default, no reason to make extra copies
-- Only use cloning when you really must capture a separate copy for async safety or similarly important reasons
-
----
-
-## Quick Reference Checklist
-
-When making changes to brush:
-
-### Before Starting
-
-- [ ] Understand which crate(s) are affected
-- [ ] Check if changes might break dependent crates
-- [ ] Identify relevant test files and examples
-
-### During Development  
-
-- [ ] Run `cargo check` frequently during development
-- [ ] Test changes with package-specific tests first (see section 2 for testing workflow)
-- [ ] Update dependent crate usage if needed (see section 3 for compatibility considerations)
-- [ ] Add/update examples for major feature additions only (see section 4)
-
-### Before Committing
-
-- [ ] Run full test suite: `cargo test` (see section 2 for complete testing workflow)
-- [ ] Format code: `cargo fmt` (see section 5 for tool details)
-- [ ] Check linting: `cargo clippy`
-- [ ] Use conventional commit format
-
-### Documentation
-
-- [ ] Add rustdoc to exported APIs (see section 4 for documentation standards)
-- [ ] Include working examples for major features only
-- [ ] Update this guide if new patterns emerge
+- 所有代码注释, 文档, 说明使用简体中文
+- 标点符号使用半角 (英文标点), 逗号后追加空格
+- 编写完成后仅需运行 `cargo clippy`, 不必 release 构建或手动运行

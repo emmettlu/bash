@@ -1,9 +1,8 @@
-//! Create for brush, an executable bash-compatible shell.
+//! Create for bash, an executable bash-compatible shell.
 
 #![allow(dead_code)]
 
 pub mod args;
-mod brushctl;
 
 pub mod config;
 pub mod entry;

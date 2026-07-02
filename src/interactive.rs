@@ -1,4 +1,4 @@
-//! Library implementing interactive command input and completion for the brush shell.
+//! Library implementing interactive command input and completion for the shell.
 
 mod error;
 pub use error::ShellError;

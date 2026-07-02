@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Shell benchmarking harness for brush.
+Shell benchmarking harness.
 
 Runs shell script snippets against test and reference shells using
 warmup, calibration, and timed execution phases.
@@ -117,7 +117,7 @@ BENCHMARK_CASES: dict[str, BenchmarkCase] = {
         loop_body="(:)",
     ),
     "cmdsubst": BenchmarkCase(
-        loop_body=': $(:)',
+        loop_body=": $(:)",
     ),
     "var_expand": BenchmarkCase(
         setup='myvar="hello world"',
@@ -128,7 +128,7 @@ BENCHMARK_CASES: dict[str, BenchmarkCase] = {
         loop_body="myfunc",
     ),
     "array_access": BenchmarkCase(
-        setup='myarr=(a b c d e f g h i j)',
+        setup="myarr=(a b c d e f g h i j)",
         loop_body=': "${myarr[5]}"',
     ),
     "pattern_match": BenchmarkCase(
@@ -211,9 +211,7 @@ def generate_benchmark_script(case: BenchmarkCase, iterations: int) -> str:
         lines.append(case.setup)
 
     # Timed loop (no braces needed around for loop)
-    lines.append(
-        f"time for ((i=0; i<{iterations}; i++)); do {case.loop_body}; done"
-    )
+    lines.append(f"time for ((i=0; i<{iterations}; i++)); do {case.loop_body}; done")
 
     # Cleanup (optional)
     if case.cleanup:
@@ -232,10 +230,10 @@ def generate_benchmark_script(case: BenchmarkCase, iterations: int) -> str:
 
 def get_shell_flags(shell_path: str) -> list[str]:
     """Get appropriate flags for running a shell in benchmark mode."""
-    # Check if this looks like brush
+    # Check if this looks like our shell
     shell_name = shell_path.split("/")[-1]
 
-    if "brush" in shell_name:
+    if "bash" in shell_name:
         return [
             "--norc",
             "--noprofile",
@@ -440,7 +438,9 @@ def run_benchmark(
     calibration_iterations = CALIBRATION_MIN_ITERATIONS
     calibration_timing: Optional[TimingResult] = None
     while calibration_iterations <= CALIBRATION_MAX_ITERATIONS:
-        calibration_timing = run_benchmark_phase(shell_path, case, calibration_iterations)
+        calibration_timing = run_benchmark_phase(
+            shell_path, case, calibration_iterations
+        )
 
         if calibration_timing.real_seconds >= CALIBRATION_MIN_TIME_SECONDS:
             # We have enough time for reliable measurement
@@ -469,7 +469,9 @@ def run_benchmark(
     if per_iteration_seconds <= 0:
         # Fallback if calibration was too fast: use minimum measurable time
         # divided by max iterations as a conservative lower bound
-        per_iteration_seconds = CALIBRATION_MIN_TIME_SECONDS / CALIBRATION_MAX_ITERATIONS
+        per_iteration_seconds = (
+            CALIBRATION_MIN_TIME_SECONDS / CALIBRATION_MAX_ITERATIONS
+        )
 
     iterations_per_sample = max(1, int(sample_duration / per_iteration_seconds))
     iterations_per_sample = min(iterations_per_sample, MAX_TARGET_ITERATIONS)
@@ -485,7 +487,9 @@ def run_benchmark(
     sample_ns_values: list[float] = []
     for sample_idx in range(actual_samples):
         sample_timing = run_benchmark_phase(shell_path, case, iterations_per_sample)
-        per_iter_ns = (sample_timing.real_seconds / iterations_per_sample) * NS_PER_SECOND
+        per_iter_ns = (
+            sample_timing.real_seconds / iterations_per_sample
+        ) * NS_PER_SECOND
         sample_ns_values.append(per_iter_ns)
 
         if verbose:
@@ -596,7 +600,9 @@ def print_human_single_shell_results(results: list[BenchmarkResult], shell: str)
     for result in results:
         print(f"🧪 {result.case_name}")
         print(f"   {format_result_with_variance(result)}")
-        print(f"   ({result.sample_count} samples, {result.iterations_per_sample} iters/sample)")
+        print(
+            f"   ({result.sample_count} samples, {result.iterations_per_sample} iters/sample)"
+        )
         print()
 
 
@@ -730,7 +736,10 @@ def resolve_shell_path(shell: str) -> str:
 
     # Verify it exists and is executable
     if not os.path.isfile(resolved):
-        print(f"Error: Shell path '{resolved}' does not exist or is not a file", file=sys.stderr)
+        print(
+            f"Error: Shell path '{resolved}' does not exist or is not a file",
+            file=sys.stderr,
+        )
         sys.exit(1)
     if not os.access(resolved, os.X_OK):
         print(f"Error: Shell '{resolved}' is not executable", file=sys.stderr)
@@ -763,7 +772,7 @@ def _positive_int(value: str) -> int:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Shell benchmarking harness for brush",
+        description="Shell benchmarking harness",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Available benchmarks:
@@ -783,9 +792,9 @@ Available benchmarks:
   if_not_taken  - If conditional (branch not taken)
 
 Examples:
-  %(prog)s --shell ./target/release/brush
-  %(prog)s --shell brush --reference-shell bash --benchmarks colon increment
-  %(prog)s --shell brush --duration 5 --json
+  %(prog)s --shell ./target/release/bash
+  %(prog)s --shell bash --reference-shell bash --benchmarks colon increment
+  %(prog)s --shell bash --duration 5 --json
 """,
     )
 
@@ -864,7 +873,9 @@ Examples:
 
     # Resolve shell paths
     test_shell = resolve_shell_path(args.shell)
-    ref_shell = resolve_shell_path(args.reference_shell) if args.reference_shell else None
+    ref_shell = (
+        resolve_shell_path(args.reference_shell) if args.reference_shell else None
+    )
 
     if not args.json_output:
         print("🐚 Shell Benchmark Harness", file=sys.stderr)

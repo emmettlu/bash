@@ -1,9 +1,9 @@
-# Sample brush configuration file
-# Copy this file to ~/.config/brush/config.toml on Linux/macOS
-# or %APPDATA%\brush\config.toml on Windows
+# Sample bash configuration file
+# Copy this file to ~/.config/bash/config.toml on Linux/macOS
+# or %APPDATA%\bash\config.toml on Windows
 #
 # For schema-based validation in VS Code (with Even Better TOML extension):
-#:schema https://raw.githubusercontent.com/reubeno/brush/main/schemas/config.schema.json
+#:schema https://raw.githubusercontent.com/example/bash/main/schemas/config.schema.json
 
 # User interface settings
 [ui]

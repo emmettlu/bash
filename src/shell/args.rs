@@ -1,4 +1,4 @@
-//! Types for brush command-line parsing.
+//! Types for command-line parsing.
 
 use clap::{Parser, builder::styling};
 use std::io::IsTerminal;
@@ -6,13 +6,11 @@ use std::path::PathBuf;
 
 use crate::shell::{events, productinfo};
 
-const LONG_DESCRIPTION: &str = r"brush is a bash-compatible, Rust-implemented shell.
+const LONG_DESCRIPTION: &str = r"A bash-compatible, Rust-implemented shell.
 
-brush is distributed under the terms of the MIT license. If you encounter any issues or discrepancies in behavior from bash, please report them at https://github.com/reubeno/brush.
+This shell is distributed under the terms of the MIT license.";
 
-For more information, visit https://brush.sh.";
-
-const USAGE: &str = "brush [OPTIONS]... [SCRIPT_PATH [SCRIPT_ARGS]...]";
+const USAGE: &str = "bash [OPTIONS]... [SCRIPT_PATH [SCRIPT_ARGS]...]";
 
 const VERSION: &str = productinfo::PRODUCT_VERSION;
 
@@ -33,7 +31,7 @@ pub enum InputBackendType {
     Minimal,
 }
 
-/// Parsed command-line arguments for the brush shell.
+/// Parsed command-line arguments for the shell.
 #[derive(Clone, Parser)]
 #[clap(name = productinfo::PRODUCT_NAME,
        version = VERSION,
@@ -42,7 +40,7 @@ pub enum InputBackendType {
        override_usage = USAGE,
        disable_help_flag = true,
        disable_version_flag = true,
-       styles = brush_help_styles())]
+       styles = help_styles())]
 pub struct CommandLineArgs {
     /// Display usage information.
     #[clap(long = "help", action = clap::ArgAction::HelpShort)]
@@ -52,11 +50,11 @@ pub struct CommandLineArgs {
     #[clap(long = "version", action = clap::ArgAction::Version)]
     pub version: Option<bool>,
 
-    /// Path to TOML-based `brush` config file (overrides default location).
+    /// Path to TOML-based config file (overrides default location).
     #[clap(long = "config", value_name = "FILE", help_heading = HEADING_CONFIG_OPTIONS)]
     pub config_file: Option<PathBuf>,
 
-    /// Disable loading of TOML-based `brush` config file.
+    /// Disable loading of TOML-based config file.
     #[clap(long = "no-config", help_heading = HEADING_CONFIG_OPTIONS)]
     pub no_config: bool,
 
@@ -101,7 +99,7 @@ pub struct CommandLineArgs {
     #[clap(long = "noprofile", help_heading = HEADING_STANDARD_OPTIONS)]
     pub no_profile: bool,
 
-    /// Don't process "rc" files if the shell is interactive (e.g., `~/.bashrc`, `~/.brushrc`).
+    /// Don't process "rc" files if the shell is interactive (e.g., `~/.bashrc`).
     #[clap(long = "norc", help_heading = HEADING_STANDARD_OPTIONS)]
     pub no_rc: bool,
 
@@ -215,7 +213,7 @@ impl CommandLineArgs {
         // Parse with just the program name to get all defaults.
         // This won't fail because all arguments have defaults or are optional.
         #[allow(clippy::expect_used)]
-        <Self as clap::Parser>::try_parse_from(["brush"])
+        <Self as clap::Parser>::try_parse_from(["bash"])
             .expect("parsing defaults should never fail")
     }
 
@@ -244,7 +242,7 @@ impl CommandLineArgs {
 
 /// Returns clap styling to be used for command-line help.
 #[doc(hidden)]
-fn brush_help_styles() -> clap::builder::Styles {
+fn help_styles() -> clap::builder::Styles {
     styling::Styles::styled()
         .header(
             styling::AnsiColor::Yellow.on_default()

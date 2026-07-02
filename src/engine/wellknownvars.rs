@@ -60,12 +60,6 @@ pub(crate) fn inherit_env_vars(
 pub(crate) fn init_well_known_vars(
     shell: &mut Shell<impl extensions::ShellExtensions>,
 ) -> Result<(), error::Error> {
-    let shell_version = shell.version().map(ToString::to_string);
-    shell.env_mut().set_global(
-        "BRUSH_VERSION",
-        ShellVariable::new(shell_version.unwrap_or_default()),
-    )?;
-
     // BASH
     if let Some(shell_name) = shell.current_shell_name().map(|s| s.to_string()) {
         shell
@@ -201,7 +195,7 @@ pub(crate) fn init_well_known_vars(
         .set_global("BASH_VERSINFO", bash_versinfo_var)?;
 
     // BASH_VERSION
-    // This is the Bash interface version. See BRUSH_VERSION for its implementation version.
+    // This is the Bash interface version.
     shell.env_mut().set_global(
         "BASH_VERSION",
         ShellVariable::new(std::format!(
@@ -314,7 +308,7 @@ pub(crate) fn init_well_known_vars(
     if !shell.env().is_set("HISTFILE")
         && let Some(home_dir) = shell.home_dir()
     {
-        let histfile = home_dir.join(".brush_history");
+        let histfile = home_dir.join(".bash_history");
         shell.env_mut().set_global(
             "HISTFILE",
             ShellVariable::new(ShellValue::String(histfile.to_string_lossy().to_string())),

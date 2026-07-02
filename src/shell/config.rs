@@ -1,4 +1,4 @@
-//! Configuration file support for the brush shell.
+//! Configuration file support for the shell.
 //!
 //! This module provides TOML-based configuration file loading with the following features:
 //! - Forward-compatible: unknown fields are ignored
@@ -10,7 +10,7 @@ use std::path::{Path, PathBuf};
 
 use crate::shell::args::CommandLineArgs;
 
-/// Root configuration structure for the brush shell.
+/// Root configuration structure for the shell.
 ///
 /// All fields are optional to support forward compatibility and partial configuration.
 /// Unknown fields in the TOML file are silently ignored.
@@ -177,13 +177,13 @@ pub enum ConfigLoadError {
     Parse(#[from] toml::de::Error),
 }
 
-const CONFIG_SUBDIR_NAME: &str = "brush";
+const CONFIG_SUBDIR_NAME: &str = "bash";
 const CONFIG_FILE_NAME: &str = "config.toml";
 
 /// Returns the default Windows configuration file path.
 ///
-/// Uses `%APPDATA%\\brush\\config.toml`, falling back to `%LOCALAPPDATA%` or
-/// `%USERPROFILE%\\AppData\\Roaming` when `%APPDATA%` is unavailable.
+/// Uses `%APPDATA%\bash\config.toml`, falling back to `%LOCALAPPDATA%` or
+/// `%USERPROFILE%\AppData\Roaming` when `%APPDATA%` is unavailable.
 ///
 /// Returns `None` if no suitable base directory can be determined.
 pub fn default_config_path() -> Option<PathBuf> {
@@ -411,7 +411,7 @@ mod tests {
         // Simulate CLI explicitly setting values different from defaults
         // by parsing with the flags enabled
         let args = <CommandLineArgs as clap::Parser>::try_parse_from([
-            "brush",
+            "bash",
             "--enable-highlighting",
             "--enable-zsh-hooks",
         ])
@@ -428,7 +428,7 @@ mod tests {
     fn to_ui_options_cli_only_settings() {
         let config = Config::default();
         let args = <CommandLineArgs as clap::Parser>::try_parse_from([
-            "brush",
+            "bash",
             "--disable-bracketed-paste",
             "--disable-color",
         ])

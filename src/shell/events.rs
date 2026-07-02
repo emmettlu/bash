@@ -1,4 +1,4 @@
-//! Facilities for configuring event tracing in the brush shell.
+//! Facilities for configuring event tracing in the shell.
 
 use std::{collections::HashSet, fmt::Display};
 

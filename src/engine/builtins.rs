@@ -92,9 +92,7 @@ pub trait Command: clap::Parser {
         content_type: ContentType,
         options: &ContentOptions,
     ) -> Result<String, error::Error> {
-        let mut clap_command = Self::command()
-            .styles(brush_help_styles())
-            .next_line_help(false);
+        let mut clap_command = Self::command().styles(help_styles()).next_line_help(false);
         clap_command.set_bin_name(name);
 
         let s = match content_type {
@@ -270,7 +268,7 @@ fn get_builtin_short_usage(name: &str, command: &clap::Command) -> String {
     std::format!("{name}: {name} {usage}\n")
 }
 
-fn brush_help_styles() -> clap::builder::Styles {
+fn help_styles() -> clap::builder::Styles {
     styling::Styles::styled()
         .header(
             styling::AnsiColor::Yellow.on_default()

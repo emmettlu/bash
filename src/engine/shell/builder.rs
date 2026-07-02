@@ -219,8 +219,8 @@ pub struct CreateOptions<SE: extensions::ShellExtensions = extensions::DefaultSh
     pub max_function_call_depth: Option<usize>,
     /// Key bindings helper for the shell to use.
     pub key_bindings: Option<KeyBindingsHelper>,
-    /// Brush implementation version.
-    pub shell_version: Option<String>,
+    	/// Shell implementation version.
+        pub shell_version: Option<String>,
 }
 
 impl<SE: extensions::ShellExtensions> Default for Shell<SE> {

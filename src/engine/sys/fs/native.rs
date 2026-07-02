@@ -464,7 +464,7 @@ mod tests {
     #[test]
     fn resolve_executable_for_nonexistent_returns_none() {
         // A path that cannot exist on any test host.
-        let path = PathBuf::from(r"C:\__brush_test_definitely_missing__");
-        assert!(resolve_executable(path).is_none());
+        let path = PathBuf::from(r"C:\\__bash_test_definitely_missing__");
+            assert!(resolve_executable(path).is_none());
     }
 }

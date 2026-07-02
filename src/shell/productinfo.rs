@@ -1,7 +1,7 @@
 //! Information about this shell project.
 
 /// The formal name of this product.
-pub const PRODUCT_NAME: &str = "brush";
+pub const PRODUCT_NAME: &str = "bash";
 
 const PRODUCT_HOMEPAGE: &str = env!("CARGO_PKG_HOMEPAGE");
 const PRODUCT_REPO: &str = env!("CARGO_PKG_REPOSITORY");

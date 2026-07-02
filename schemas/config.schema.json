@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Config",
-  "description": "Root configuration structure for the brush shell.\n\nAll fields are optional to support forward compatibility and partial configuration.\nUnknown fields in the TOML file are silently ignored.",
+  "description": "Root configuration structure for the shell.\n\nAll fields are optional to support forward compatibility and partial configuration.\nUnknown fields in the TOML file are silently ignored.",
   "type": "object",
   "properties": {
     "experimental": {
@@ -20,18 +20,12 @@
       "properties": {
         "terminal-shell-integration": {
           "description": "Enable terminal shell integration.",
-          "type": [
-            "boolean",
-            "null"
-          ],
+          "type": ["boolean", "null"],
           "default": null
         },
         "zsh-hooks": {
           "description": "Enable zsh-style preexec/precmd hooks.",
-          "type": [
-            "boolean",
-            "null"
-          ],
+          "type": ["boolean", "null"],
           "default": null
         }
       }
@@ -42,10 +36,7 @@
       "properties": {
         "syntax-highlighting": {
           "description": "Enable syntax highlighting in the input line.",
-          "type": [
-            "boolean",
-            "null"
-          ],
+          "type": ["boolean", "null"],
           "default": null
         }
       }

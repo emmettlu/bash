@@ -921,7 +921,7 @@ mod tests {
 
     #[test]
     fn test_requires_expansion() {
-        // Delegates to the PEG grammar; thorough coverage is in brush-parser.
+        // Delegates to the PEG grammar.
         // Here we just verify the integration works.
         assert!(requires_expansion("*", false));
         assert!(requires_expansion("[abc]", false));

@@ -15,7 +15,7 @@ impl TerminalControl {
         // in `move_self_to_foreground` is a "write to the controlling
         // terminal from a background process," which the kernel signals with
         // SIGTTOU. The default action for SIGTTOU is to stop the process,
-        // leaving brush (and any downstream reads from the terminal) hung.
+        // leaving the shell (and any downstream reads from the terminal) hung.
         // Installing the SIG_IGN handler before the tcsetpgrp makes that call
         // succeed instead of stopping us.
         sys::signal::mask_sigttou()?;

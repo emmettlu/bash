@@ -7,7 +7,7 @@ use crate::engine::{Shell, error, extensions, prompt};
 impl<SE: extensions::ShellExtensions> Shell<SE> {
     /// Returns the default prompt string for the shell.
     const fn default_prompt(&self) -> &'static str {
-        "brush$ "
+        "$ "
     }
 
     /// Composes the shell's post-input, pre-command prompt, applying all appropriate expansions.
@@ -18,12 +18,6 @@ impl<SE: extensions::ShellExtensions> Shell<SE> {
     /// Composes the shell's prompt, applying all appropriate expansions.
     pub async fn compose_prompt(&mut self) -> Result<String, error::Error> {
         self.expand_prompt_var("PS1", self.default_prompt()).await
-    }
-
-    /// Composes the shell's alternate-side prompt, applying all appropriate expansions.
-    pub async fn compose_alt_side_prompt(&mut self) -> Result<String, error::Error> {
-        // This is a brush extension.
-        self.expand_prompt_var("BRUSH_PS_ALT", "").await
     }
 
     /// Composes the shell's continuation prompt.

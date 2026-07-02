@@ -34,7 +34,7 @@ impl Display for KeyAction {
 }
 
 /// Defines all input functions. Based on standard `readline` functions,
-/// augmented with some `brush`-specific extensions.
+/// augmented with some shell-specific extensions.
 #[derive(
     Clone,
     Debug,
@@ -63,8 +63,6 @@ pub enum InputFunction {
     BeginningOfHistory,
     BeginningOfLine,
     BracketedPasteBegin,
-    BrushAcceptHint,
-    BrushAcceptHintWord,
     CallLastKbdMacro,
     CapitalizeWord,
     CharacterSearch,

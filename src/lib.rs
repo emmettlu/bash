@@ -30,7 +30,7 @@ impl std::fmt::Display for ExitCode {
 
 impl std::error::Error for ExitCode {}
 
-/// Main entry point for the `brush` shell.
+/// Main entry point for the shell.
 pub async fn run() -> anyhow::Result<()> {
     let mut cli_args: Vec<_> = std::env::args().collect();
 

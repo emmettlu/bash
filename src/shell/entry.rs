@@ -1,9 +1,8 @@
-//! Implements the command-line interface for the `brush` shell.
+//! Implements the command-line interface for the shell.
 
 use crate::builtins::ShellBuilderExt as _;
 use crate::shell::args::CommandLineArgs;
 use crate::shell::args::InputBackendType;
-use crate::shell::brushctl::ShellBuilderBrushBuiltinExt as _;
 
 use crate::shell::error_formatter;
 use crate::shell::events;
@@ -18,9 +17,9 @@ use std::io::IsTerminal;
 static TRACE_EVENT_CONFIG: LazyLock<Arc<StdMutex<Option<events::TraceEventConfig>>>> =
     LazyLock::new(|| Arc::new(StdMutex::new(None)));
 
-type BrushShellExtensions =
+type BashShellExtensions =
     crate::engine::extensions::ShellExtensionsImpl<error_formatter::Formatter>;
-type BrushShell = crate::engine::Shell<BrushShellExtensions>;
+type BashShell = crate::engine::Shell<BashShellExtensions>;
 
 // WARN: this implementation shadows `clap::Parser::parse_from` one so it must be defined
 // after the `use clap::Parser`
@@ -226,7 +225,7 @@ async fn initialize_shell(
 pub(crate) async fn instantiate_shell(
     args: &CommandLineArgs,
     cli_args: Vec<String>,
-) -> Result<BrushShell, crate::interactive::ShellError> {
+) -> Result<BashShell, crate::interactive::ShellError> {
     instantiate_shell_from_args(args, cli_args).await
 }
 
@@ -239,7 +238,7 @@ pub(crate) async fn instantiate_shell(
 async fn instantiate_shell_from_args(
     args: &CommandLineArgs,
     cli_args: Vec<String>,
-) -> Result<BrushShell, crate::interactive::ShellError> {
+) -> Result<BashShell, crate::interactive::ShellError> {
     // Compute login flag.
     let login = args.login || cli_args.first().is_some_and(|argv0| argv0.starts_with('-'));
 
@@ -280,7 +279,7 @@ async fn instantiate_shell_from_args(
     // Set up the shell builder with the requested options.
     // NOTE: We skip loading profile and rc files here; that will be handled later after we've
     // fully instantiated everything we want set before running any code.
-    let shell = crate::engine::Shell::builder_with_extensions::<BrushShellExtensions>()
+    let shell = crate::engine::Shell::builder_with_extensions::<BashShellExtensions>()
         .disable_options(args.disabled_options.clone())
         .disable_shopt_options(args.disabled_shopt_options.clone())
         .disallow_overwriting_regular_files_via_output_redirection(
@@ -312,7 +311,7 @@ async fn instantiate_shell_from_args(
         .shell_version(env!("CARGO_PKG_VERSION").to_string());
 
     // Add builtins.
-    let shell = shell.default_builtins().brush_builtins();
+    let shell = shell.default_builtins();
 
     // Build the shell.
     let mut shell = shell.build().await?;
@@ -387,20 +386,15 @@ mod tests {
 
     #[test]
     fn parse_empty_args() -> Result<()> {
-        let parsed_args = CommandLineArgs::try_parse_from(args(&["brush"]))?;
+        let parsed_args = CommandLineArgs::try_parse_from(args(&["bash"]))?;
         assert_matches!(parsed_args.script_args.as_slice(), []);
         Ok(())
     }
 
     #[test]
     fn parse_script_and_args() -> Result<()> {
-        let parsed_args = CommandLineArgs::try_parse_from(args(&[
-            "brush",
-            "some-script",
-            "-x",
-            "1",
-            "--option",
-        ]))?;
+        let parsed_args =
+            CommandLineArgs::try_parse_from(args(&["bash", "some-script", "-x", "1", "--option"]))?;
         assert_eq!(
             parsed_args.script_args,
             ["some-script", "-x", "1", "--option"]
@@ -410,21 +404,21 @@ mod tests {
 
     #[test]
     fn parse_script_and_args_with_double_dash_in_script_args() -> Result<()> {
-        let parsed_args = CommandLineArgs::try_parse_from(args(&["brush", "some-script", "--"]))?;
+        let parsed_args = CommandLineArgs::try_parse_from(args(&["bash", "some-script", "--"]))?;
         assert_eq!(parsed_args.script_args, ["some-script", "--"]);
         Ok(())
     }
 
     #[test]
     fn parse_unknown_args() {
-        let result = CommandLineArgs::try_parse_from(args(&["brush", "--unknown-option"]));
+        let result = CommandLineArgs::try_parse_from(args(&["bash", "--unknown-option"]));
         assert!(result.is_err());
     }
 
     #[test]
     fn parse_c_with_double_dash_separator() -> Result<()> {
         let parsed_args =
-            CommandLineArgs::try_parse_from(args(&["brush", "-c", "--", "echo hello", "arg0"]))?;
+            CommandLineArgs::try_parse_from(args(&["bash", "-c", "--", "echo hello", "arg0"]))?;
         assert_eq!(parsed_args.command, Some("echo hello".to_string()));
         assert_eq!(parsed_args.script_args, ["arg0"]);
         Ok(())
@@ -432,13 +426,13 @@ mod tests {
 
     #[test]
     fn parse_c_with_double_dash_no_command() {
-        assert!(CommandLineArgs::try_parse_from(args(&["brush", "-c", "--"])).is_err());
+        assert!(CommandLineArgs::try_parse_from(args(&["bash", "-c", "--"])).is_err());
     }
 
     #[test]
     fn parse_c_with_double_dash_command_is_double_dash() -> Result<()> {
         let parsed_args =
-            CommandLineArgs::try_parse_from(args(&["brush", "-c", "--", "--", "echo", "hi"]))?;
+            CommandLineArgs::try_parse_from(args(&["bash", "-c", "--", "--", "echo", "hi"]))?;
         assert_eq!(parsed_args.command, Some("--".to_string()));
         assert_eq!(parsed_args.script_args, ["echo", "hi"]);
         Ok(())
@@ -447,7 +441,7 @@ mod tests {
     #[test]
     fn parse_ec_with_double_dash_separator() -> Result<()> {
         let parsed_args =
-            CommandLineArgs::try_parse_from(args(&["brush", "-ec", "--", "echo hello", "arg0"]))?;
+            CommandLineArgs::try_parse_from(args(&["bash", "-ec", "--", "echo hello", "arg0"]))?;
         assert_eq!(parsed_args.command, Some("echo hello".to_string()));
         assert!(parsed_args.exit_on_nonzero_command_exit);
         assert_eq!(parsed_args.script_args, ["arg0"]);
@@ -457,7 +451,7 @@ mod tests {
     #[test]
     fn parse_c_with_value_before_double_dash_unchanged() -> Result<()> {
         let parsed_args =
-            CommandLineArgs::try_parse_from(args(&["brush", "-c", "echo hi", "--", "arg0"]))?;
+            CommandLineArgs::try_parse_from(args(&["bash", "-c", "echo hi", "--", "arg0"]))?;
         assert_eq!(parsed_args.command, Some("echo hi".to_string()));
         assert_eq!(parsed_args.script_args, ["--", "arg0"]);
         Ok(())
@@ -467,7 +461,7 @@ mod tests {
     fn parse_o_with_double_dash_is_not_transformed() {
         // Unlike -c, bash's -o consumes -- as its literal value (invalid option
         // name), not as an option terminator. Verify we don't transform it.
-        let result = CommandLineArgs::try_parse_from(args(&["brush", "-o", "--"]));
+        let result = CommandLineArgs::try_parse_from(args(&["bash", "-o", "--"]));
         // Here, try_parse_from / try_parse_known splits at --, so -o ends up
         // without a value and parsing correctly fails. The key assertion is
         // that we MUST NOT reinterpret -- as an option terminator for -o and
@@ -479,7 +473,7 @@ mod tests {
     fn parse_oc_not_treated_as_pending_c() -> Result<()> {
         // -oc means -o with value "c", not -o flag + -c flag. The --
         // should NOT be treated as an option terminator for -c.
-        let parsed_args = CommandLineArgs::try_parse_from(args(&["brush", "-oc", "--", "echo"]))?;
+        let parsed_args = CommandLineArgs::try_parse_from(args(&["bash", "-oc", "--", "echo"]))?;
         // -o consumed "c" as its value; -- split the rest; no -c command.
         assert!(parsed_args.command.is_none());
         assert_eq!(parsed_args.script_args, ["--", "echo"]);
@@ -491,7 +485,7 @@ mod tests {
         // -e is a boolean flag, not -c. The -- should NOT be removed;
         // everything from -- onward becomes positional (including -c).
         let parsed_args =
-            CommandLineArgs::try_parse_from(args(&["brush", "-e", "--", "-c", "echo"]))?;
+            CommandLineArgs::try_parse_from(args(&["bash", "-e", "--", "-c", "echo"]))?;
         assert!(parsed_args.command.is_none());
         assert!(parsed_args.exit_on_nonzero_command_exit);
         assert_eq!(parsed_args.script_args, ["--", "-c", "echo"]);
@@ -503,7 +497,7 @@ mod tests {
         // After removing the first --, -c gets "echo". The second -- is
         // handled by try_parse_known and appears in script_args.
         let parsed_args =
-            CommandLineArgs::try_parse_from(args(&["brush", "-c", "--", "echo", "--", "more"]))?;
+            CommandLineArgs::try_parse_from(args(&["bash", "-c", "--", "echo", "--", "more"]))?;
         assert_eq!(parsed_args.command, Some("echo".to_string()));
         assert_eq!(parsed_args.script_args, ["--", "more"]);
         Ok(())

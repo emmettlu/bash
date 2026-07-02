@@ -18,14 +18,15 @@ struct TestCase {
     pub stdin: Option<String>,
 }
 
-#[test]
-#[ignore = "not yet ready for default-enablement"]
-fn test_parser_using_yaml_test_cases() {
-    insta::glob!("../../brush-shell", "tests/cases/**/*.yaml", |path| {
-        test_parser_using_yaml(path).unwrap();
-    });
-}
-
+// Disabled glob-based YAML parser test.
+// The test cases live in an external repository (previously brush-shell).
+// To run manually, place yaml files in a directory and uncomment + adjust the glob.
+// #[test]
+// fn test_parser_using_yaml() {
+//     insta::glob!("tests/parser/cases", "**/*.yaml", |path| {
+//         let _ = test_parser_using_yaml(path);
+//     });
+// }
 fn test_parser_using_yaml(path: &Path) -> Result<()> {
     let yaml_file = std::fs::File::open(path)?;
     let test_case_set: TestCaseSet = serde_yaml::from_reader(yaml_file)

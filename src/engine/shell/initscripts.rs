@@ -104,8 +104,6 @@ impl<SE: extensions::ShellExtensions> Shell<SE> {
                         if let Some(home_path) = self.home_dir() {
                             self.source_if_exists(home_path.join(".bashrc").as_path(), &params)
                                 .await?;
-                            self.source_if_exists(home_path.join(".brushrc").as_path(), &params)
-                                .await?;
                         }
                     }
                 }

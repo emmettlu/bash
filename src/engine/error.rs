@@ -81,11 +81,6 @@ pub enum ErrorKind {
     #[error("not yet implemented: {0}")]
     Unimplemented(&'static str),
 
-    /// The requested functionality has not yet been implemented in this shell; it is tracked in a
-    /// GitHub issue.
-    #[error("not yet implemented: {0}; see https://github.com/reubeno/brush/issues/{1}")]
-    UnimplementedAndTracked(&'static str, u32),
-
     /// An expected environment scope could not be found.
     #[error("missing environment scope")]
     MissingScope,
@@ -352,9 +347,7 @@ impl From<&ErrorKind> for results::ExecutionExitCode {
     fn from(value: &ErrorKind) -> Self {
         match value {
             ErrorKind::CommandNotFound(..) => Self::NotFound,
-            ErrorKind::Unimplemented(..) | ErrorKind::UnimplementedAndTracked(..) => {
-                Self::Unimplemented
-            }
+            ErrorKind::Unimplemented(..) => Self::Unimplemented,
             ErrorKind::ParseError(..) => Self::InvalidUsage,
             ErrorKind::FunctionParseError(..) => Self::InvalidUsage,
             ErrorKind::TestCommandParseError(..) => Self::InvalidUsage,
@@ -465,14 +458,4 @@ impl Error {
 /// * `msg` - The message to include in the error
 pub fn unimp<T>(msg: &'static str) -> Result<T, Error> {
     Err(ErrorKind::Unimplemented(msg).into())
-}
-
-/// Convenience function for returning an error for *tracked*, unimplemented functionality.
-///
-/// # Arguments
-///
-/// * `msg` - The message to include in the error
-/// * `project_issue_id` - The GitHub issue ID where the implementation is tracked.
-pub fn unimp_with_issue<T>(msg: &'static str, project_issue_id: u32) -> Result<T, Error> {
-    Err(ErrorKind::UnimplementedAndTracked(msg, project_issue_id).into())
 }

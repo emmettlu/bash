@@ -219,7 +219,7 @@ impl<'a, IB: InputBackend, SE: crate::engine::ShellExtensions> InteractiveShell<
         // Now that we've done that, compose the prompt.
         let mut prompt = InteractivePrompt {
             prompt: shell.compose_prompt().await?,
-            alt_side_prompt: shell.compose_alt_side_prompt().await?,
+            alt_side_prompt: String::new(),
             continuation_prompt: shell.compose_continuation_prompt().await?,
         };
 

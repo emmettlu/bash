@@ -12,9 +12,9 @@ pub(crate) struct CallerCommand {
 impl builtins::Command for CallerCommand {
     type Error = crate::engine::Error;
 
-    async fn execute<SE: crate::engine::ShellExtensions>(
+    async fn execute(
         &self,
-        context: crate::engine::ExecutionContext<'_, SE>,
+        context: crate::engine::ExecutionContext<'_>,
     ) -> Result<ExecutionResult, Self::Error> {
         let stack = context.shell.call_stack();
 

@@ -79,9 +79,9 @@ pub(crate) struct ReadCommand {
 impl builtins::Command for ReadCommand {
     type Error = crate::engine::Error;
 
-    async fn execute<SE: crate::engine::ShellExtensions>(
+    async fn execute(
         &self,
-        context: crate::engine::ExecutionContext<'_, SE>,
+        context: crate::engine::ExecutionContext<'_>,
     ) -> Result<crate::engine::ExecutionResult, Self::Error> {
         if self.use_readline {
             return error::unimp("read -e");
@@ -161,7 +161,7 @@ impl builtins::Command for ReadCommand {
 /// - Named variables: Split input by IFS and assign to each variable, with remainder to last
 /// - Default (`REPLY`): Assign entire input line to the `REPLY` variable
 fn assign_input_to_variables(
-    shell: &mut crate::engine::Shell<impl crate::engine::ShellExtensions>,
+    shell: &mut crate::engine::Shell,
     input_line: Option<&str>,
     ifs: &str,
     skip_ifs_splitting: bool,
@@ -197,7 +197,7 @@ fn assign_input_to_variables(
 /// and assigned to the last variable. If there are more variables than fields,
 /// the extra variables are set to empty strings.
 fn assign_to_named_variables(
-    shell: &mut crate::engine::Shell<impl crate::engine::ShellExtensions>,
+    shell: &mut crate::engine::Shell,
     input_line: Option<&str>,
     ifs: &str,
     skip_ifs_splitting: bool,
@@ -593,7 +593,7 @@ impl ReadCommand {
     /// TODO(read): Bash uses $TMOUT as a default timeout for `read` when -t is not specified.
     fn validate_timeout(
         &self,
-        context: &crate::engine::ExecutionContext<'_, impl crate::engine::ShellExtensions>,
+        context: &crate::engine::ExecutionContext<'_>,
     ) -> Result<Option<crate::engine::ExecutionResult>, crate::engine::Error> {
         if let Some(timeout) = self.timeout_in_seconds
             && timeout < 0.0

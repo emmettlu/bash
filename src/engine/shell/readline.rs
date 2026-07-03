@@ -1,8 +1,8 @@
 //! Readline edit buffer support for shell instances.
 
-use crate::engine::{error, extensions, variables::ShellVariable};
+use crate::engine::{error, variables::ShellVariable};
 
-impl<SE: extensions::ShellExtensions> crate::engine::Shell<SE> {
+impl crate::engine::Shell {
     /// Updates the shell state to reflect the given edit buffer contents.
     ///
     /// # Arguments

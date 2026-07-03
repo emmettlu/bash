@@ -8,7 +8,7 @@ use crate::engine::{
     trace_categories,
 };
 
-impl<SE: crate::engine::extensions::ShellExtensions> crate::engine::Shell<SE> {
+impl crate::engine::Shell {
     /// Returns the default execution parameters for this shell.
     pub fn default_exec_params(&self) -> ExecutionParameters {
         let mut params = ExecutionParameters::default();

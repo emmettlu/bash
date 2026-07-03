@@ -18,9 +18,9 @@ impl builtins::DeclarationCommand for BuiltinCommand {
 impl builtins::Command for BuiltinCommand {
     type Error = crate::engine::Error;
 
-    async fn execute<SE: crate::engine::ShellExtensions>(
+    async fn execute(
         &self,
-        mut context: crate::engine::ExecutionContext<'_, SE>,
+        mut context: crate::engine::ExecutionContext<'_>,
     ) -> Result<crate::engine::ExecutionResult, Self::Error> {
         if self.args.is_empty() {
             return Ok(ExecutionResult::success());

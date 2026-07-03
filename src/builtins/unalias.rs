@@ -17,9 +17,9 @@ pub(crate) struct UnaliasCommand {
 impl builtins::Command for UnaliasCommand {
     type Error = crate::engine::Error;
 
-    async fn execute<SE: crate::engine::ShellExtensions>(
+    async fn execute(
         &self,
-        context: crate::engine::ExecutionContext<'_, SE>,
+        context: crate::engine::ExecutionContext<'_>,
     ) -> Result<crate::engine::ExecutionResult, Self::Error> {
         let mut exit_code = ExecutionResult::success();
 

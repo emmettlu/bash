@@ -2,9 +2,9 @@
 
 use std::borrow::Cow;
 
-use crate::engine::{Shell, error, extensions, prompt};
+use crate::engine::{Shell, error, prompt};
 
-impl<SE: extensions::ShellExtensions> Shell<SE> {
+impl Shell {
     /// Returns the default prompt string for the shell.
     const fn default_prompt(&self) -> &'static str {
         "$ "

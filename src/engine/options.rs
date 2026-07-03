@@ -2,7 +2,7 @@
 
 use itertools::Itertools;
 
-use crate::engine::{CreateOptions, extensions, namedoptions};
+use crate::engine::{CreateOptions, namedoptions};
 
 /// Runtime changeable options for a shell instance.
 #[derive(Clone, Default)]
@@ -203,25 +203,18 @@ impl RuntimeOptions {
     /// # Arguments
     ///
     /// * `create_options` - The options used to create the shell.
-    pub fn defaults_from<SE: extensions::ShellExtensions>(
-        create_options: &CreateOptions<SE>,
-    ) -> Self {
+    pub fn defaults_from(create_options: &CreateOptions) -> Self {
+        macro_rules! copy_create_options {
+            ($target:ident, $source:ident, $($field:ident),* $(,)?) => {
+                $($target.$field = $source.$field;)*
+            };
+        }
+
         // There's a set of options enabled by default for all shells.
         let mut options = Self {
-            interactive: create_options.interactive,
-            disallow_overwriting_regular_files_via_output_redirection: create_options
-                .disallow_overwriting_regular_files_via_output_redirection,
-            do_not_execute_commands: create_options.do_not_execute_commands,
             enable_command_history: create_options.interactive,
             enable_job_control: create_options.interactive,
-            exit_after_one_command: create_options.exit_after_one_command,
-            read_commands_from_stdin: create_options.read_commands_from_stdin,
-            command_string_mode: create_options.command_string_mode,
-            print_commands_and_arguments: create_options.print_commands_and_arguments,
             print_shell_input_lines: create_options.verbose,
-            treat_unset_variables_as_error: create_options.treat_unset_variables_as_error,
-            exit_on_nonzero_command_exit: create_options.exit_on_nonzero_command_exit,
-            external_cmd_leads_session: create_options.external_cmd_leads_session,
             login_shell: create_options.login,
             disable_filename_globbing: create_options.disable_pathname_expansion,
             remember_command_locations: true,
@@ -245,6 +238,21 @@ impl RuntimeOptions {
             ..Self::default()
         };
 
+        copy_create_options!(
+            options,
+            create_options,
+            interactive,
+            disallow_overwriting_regular_files_via_output_redirection,
+            do_not_execute_commands,
+            exit_after_one_command,
+            read_commands_from_stdin,
+            command_string_mode,
+            print_commands_and_arguments,
+            treat_unset_variables_as_error,
+            exit_on_nonzero_command_exit,
+            external_cmd_leads_session,
+        );
+
         // Additional options are enabled by default for interactive shells.
         if create_options.interactive {
             options.enable_bang_style_history_substitution = true;
@@ -252,37 +260,30 @@ impl RuntimeOptions {
             options.expand_aliases = true;
         }
 
-        // Update any options.
-        for enabled_option in &create_options.enabled_options {
-            if let Some(option) = namedoptions::options(namedoptions::ShellOptionKind::SetO)
-                .get(enabled_option.as_str())
-            {
-                option.set(&mut options, true);
-            }
-        }
-        for disabled_option in &create_options.disabled_options {
-            if let Some(option) = namedoptions::options(namedoptions::ShellOptionKind::SetO)
-                .get(disabled_option.as_str())
-            {
-                option.set(&mut options, false);
-            }
-        }
-
-        // Update any shopt options.
-        for enabled_option in &create_options.enabled_shopt_options {
-            if let Some(shopt_option) = namedoptions::options(namedoptions::ShellOptionKind::Shopt)
-                .get(enabled_option.as_str())
-            {
-                shopt_option.set(&mut options, true);
-            }
-        }
-        for disabled_option in &create_options.disabled_shopt_options {
-            if let Some(shopt_option) = namedoptions::options(namedoptions::ShellOptionKind::Shopt)
-                .get(disabled_option.as_str())
-            {
-                shopt_option.set(&mut options, false);
-            }
-        }
+        apply_named_options(
+            &mut options,
+            namedoptions::ShellOptionKind::SetO,
+            &create_options.enabled_options,
+            true,
+        );
+        apply_named_options(
+            &mut options,
+            namedoptions::ShellOptionKind::SetO,
+            &create_options.disabled_options,
+            false,
+        );
+        apply_named_options(
+            &mut options,
+            namedoptions::ShellOptionKind::Shopt,
+            &create_options.enabled_shopt_options,
+            true,
+        );
+        apply_named_options(
+            &mut options,
+            namedoptions::ShellOptionKind::Shopt,
+            &create_options.disabled_shopt_options,
+            false,
+        );
 
         options
     }
@@ -331,6 +332,20 @@ impl RuntimeOptions {
 
         cs.sort_unstable();
         cs.into_iter().join(":")
+    }
+}
+
+fn apply_named_options(
+    options: &mut RuntimeOptions,
+    kind: namedoptions::ShellOptionKind,
+    names: &[String],
+    value: bool,
+) {
+    let option_set = namedoptions::options(kind);
+    for name in names {
+        if let Some(option) = option_set.get(name.as_str()) {
+            option.set(options, value);
+        }
     }
 }
 

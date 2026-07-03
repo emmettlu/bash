@@ -45,9 +45,9 @@ enum ResolvedType<'a> {
 impl builtins::Command for TypeCommand {
     type Error = crate::engine::Error;
 
-    async fn execute<SE: crate::engine::ShellExtensions>(
+    async fn execute(
         &self,
-        context: crate::engine::ExecutionContext<'_, SE>,
+        context: crate::engine::ExecutionContext<'_>,
     ) -> Result<crate::engine::ExecutionResult, Self::Error> {
         let mut result = ExecutionResult::success();
 
@@ -137,11 +137,7 @@ impl builtins::Command for TypeCommand {
 }
 
 impl TypeCommand {
-    fn resolve_types<'a, SE: crate::engine::ShellExtensions>(
-        &self,
-        shell: &'a Shell<SE>,
-        name: &str,
-    ) -> Vec<ResolvedType<'a>> {
+    fn resolve_types<'a>(&self, shell: &'a Shell, name: &str) -> Vec<ResolvedType<'a>> {
         let mut types = vec![];
 
         if !self.force_path_search {

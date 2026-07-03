@@ -20,7 +20,7 @@ pub type KeyBindingsHelper = Arc<Mutex<dyn interfaces::KeyBindings>>;
 pub type ShellFd = i32;
 
 // NOTE: The submodule files below (e.g., `shell/traps.rs`, `shell/callstack.rs`) contain
-// `impl Shell<SE>` blocks that provide methods coordinating with types defined in the
+// `impl Shell` blocks that provide methods coordinating with types defined in the
 // corresponding top-level modules (e.g., `traps.rs`, `callstack.rs`). This is an intentional
 // layered architecture: top-level modules define domain types and data structures, while
 // shell/ submodules implement Shell methods that operate on those types.
@@ -41,23 +41,17 @@ mod job_control;
 mod parsing;
 mod prompts;
 mod readline;
-mod state;
 mod traps;
 
-pub use builder::{CreateOptions, ShellBuilder, ShellBuilderState};
+pub(crate) use builder::CreateOptions;
+pub use builder::{ShellBuilder, ShellBuilderState};
 pub use initscripts::{ProfileLoadBehavior, RcLoadBehavior};
-pub use state::ShellState;
 
 /// Represents an instance of a shell.
 ///
-/// # Type Parameters
-///
-/// * `SE` - The shell extensions implementation to use. These extensions are statically injected
-///   into the shell at compile time to provide custom behavior. When unspecified, defaults to
-///   `DefaultShellExtensions`, which provide standard behavior.
-pub struct Shell<SE: extensions::ShellExtensions = extensions::DefaultShellExtensions> {
+pub struct Shell {
     /// 注入的错误格式化器.
-    error_formatter: SE,
+    error_formatter: Arc<dyn extensions::ErrorFormatter>,
 
     /// Trap handler configuration for the shell.
     traps: crate::engine::traps::TrapHandlerConfig,
@@ -117,7 +111,7 @@ pub struct Shell<SE: extensions::ShellExtensions = extensions::DefaultShellExten
     completion_config: Arc<crate::engine::completion::Config>,
 
     /// Shell built-in commands.
-    builtins: Arc<HashMap<String, builtins::Registration<SE>>>,
+    builtins: Arc<HashMap<String, builtins::Registration>>,
 
     /// Shell program location cache.
     program_location_cache: Arc<pathcache::PathCache>,
@@ -141,7 +135,7 @@ pub struct Shell<SE: extensions::ShellExtensions = extensions::DefaultShellExten
     history: Option<crate::engine::history::History>,
 }
 
-impl<SE: extensions::ShellExtensions> Clone for Shell<SE> {
+impl Clone for Shell {
     fn clone(&self) -> Self {
         Self {
             error_formatter: self.error_formatter.clone(),
@@ -183,32 +177,34 @@ impl<SE: extensions::ShellExtensions> Clone for Shell<SE> {
     }
 }
 
-impl<SE: extensions::ShellExtensions> AsRef<Self> for Shell<SE> {
+impl AsRef<Self> for Shell {
     fn as_ref(&self) -> &Self {
         self
     }
 }
 
-impl<SE: extensions::ShellExtensions> AsMut<Self> for Shell<SE> {
+impl AsMut<Self> for Shell {
     fn as_mut(&mut self) -> &mut Self {
         self
     }
 }
 
-impl<SE: extensions::ShellExtensions> Shell<SE> {
+impl Shell {
     /// Returns a new shell instance created with the given options.
     /// Does *not* load any configuration files (e.g., bashrc).
     ///
     /// # Arguments
     ///
     /// * `options` - The options to use when creating the shell.
-    pub(crate) fn new(options: CreateOptions<SE>) -> Result<Self, error::Error> {
+    pub(crate) fn new(options: CreateOptions) -> Result<Self, error::Error> {
         // Compute runtime options before moving fields out of `options`.
         let runtime_options = RuntimeOptions::defaults_from(&options);
 
         // Instantiate the shell with some defaults.
         let mut shell = Self {
-            error_formatter: options.error_formatter,
+            error_formatter: options
+                .error_formatter
+                .unwrap_or_else(|| Arc::new(extensions::DefaultErrorFormatter)),
             open_files: openfiles::OpenFiles::new(),
             options: runtime_options,
             name: options.shell_name,
@@ -256,7 +252,7 @@ impl<SE: extensions::ShellExtensions> Shell<SE> {
     }
 }
 
-impl<SE: extensions::ShellExtensions> Shell<SE> {
+impl Shell {
     /// Increments the interactive line offset in the shell by the indicated number
     /// of lines.
     ///
@@ -340,10 +336,8 @@ impl<SE: extensions::ShellExtensions> Shell<SE> {
     }
 }
 
-/// ShellState trait 实现: 仅包含通过 dyn ShellState 实际调用的方法.
-/// `#[inherent::inherent]` 使这些方法也可作为 Shell<SE> 的 inherent 方法调用, 无需导入 trait.
-#[inherent::inherent]
-impl<SE: extensions::ShellExtensions> ShellState for Shell<SE> {
+/// Shell 状态访问方法.
+impl Shell {
     /// 返回 shell 的调用栈.
     pub fn call_stack(&self) -> &crate::engine::callstack::CallStack {
         &self.call_stack
@@ -410,8 +404,8 @@ impl<SE: extensions::ShellExtensions> ShellState for Shell<SE> {
     }
 }
 
-/// Shell<SE> 的其他状态访问方法 (inherent 方法, 无需导入任何 trait).
-impl<SE: extensions::ShellExtensions> Shell<SE> {
+/// Shell 的其他状态访问方法.
+impl Shell {
     /// 返回 shell 是否处于 subshell 环境.
     pub fn is_subshell(&self) -> bool {
         self.depth > 0

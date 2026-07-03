@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use crate::engine::{error, openfiles};
 
-impl<SE: crate::engine::extensions::ShellExtensions> crate::engine::Shell<SE> {
+impl crate::engine::Shell {
     pub(super) fn load_history(
         &self,
     ) -> Result<Option<crate::engine::history::History>, error::Error> {

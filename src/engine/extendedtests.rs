@@ -2,8 +2,8 @@ use crate::parser::ast;
 use std::path::Path;
 
 use crate::engine::{
-    ExecutionParameters, Shell, ShellFd, arithmetic, env, error, escape, expansion, extensions,
-    namedoptions, patterns,
+    ExecutionParameters, Shell, ShellFd, arithmetic, env, error, escape, expansion, namedoptions,
+    patterns,
     sys::{fs::MetadataExt, traits::PathExt, users},
     variables::{self, ArrayLiteral},
 };
@@ -11,7 +11,7 @@ use crate::engine::{
 #[async_recursion::async_recursion]
 pub(crate) async fn eval_extended_test_expr(
     expr: &ast::ExtendedTestExpr,
-    shell: &mut Shell<impl extensions::ShellExtensions>,
+    shell: &mut Shell,
     params: &ExecutionParameters,
 ) -> Result<bool, error::Error> {
     match expr {
@@ -44,7 +44,7 @@ pub(crate) async fn eval_extended_test_expr(
 async fn apply_unary_predicate(
     op: &ast::UnaryPredicate,
     operand: &ast::Word,
-    shell: &mut Shell<impl extensions::ShellExtensions>,
+    shell: &mut Shell,
     params: &ExecutionParameters,
 ) -> Result<bool, error::Error> {
     let expanded_operand = expansion::basic_expand_word(shell, params, operand).await?;
@@ -68,7 +68,7 @@ async fn apply_unary_predicate(
 pub(crate) fn apply_unary_predicate_to_str(
     op: &ast::UnaryPredicate,
     operand: &str,
-    shell: &Shell<impl extensions::ShellExtensions>,
+    shell: &Shell,
     params: &ExecutionParameters,
 ) -> Result<bool, error::Error> {
     match op {
@@ -194,7 +194,7 @@ async fn apply_binary_predicate(
     op: &ast::BinaryPredicate,
     left: &ast::Word,
     right: &ast::Word,
-    shell: &mut Shell<impl extensions::ShellExtensions>,
+    shell: &mut Shell,
     params: &ExecutionParameters,
 ) -> Result<bool, error::Error> {
     match op {
@@ -474,7 +474,7 @@ pub(crate) fn apply_binary_predicate_to_strs(
     op: &ast::BinaryPredicate,
     left: &str,
     right: &str,
-    shell: &Shell<impl extensions::ShellExtensions>,
+    shell: &Shell,
 ) -> Result<bool, error::Error> {
     match op {
         ast::BinaryPredicate::FilesReferToSameDeviceAndInodeNumbers => {
@@ -558,7 +558,7 @@ fn apply_test_binary_arithmetic_predicate(
 }
 
 fn left_file_is_older_or_does_not_exist_when_right_does(
-    shell: &Shell<impl extensions::ShellExtensions>,
+    shell: &Shell,
     left: impl AsRef<str>,
     right: impl AsRef<str>,
 ) -> Result<bool, error::Error> {
@@ -575,7 +575,7 @@ fn left_file_is_older_or_does_not_exist_when_right_does(
 }
 
 fn left_file_is_newer_or_exists_when_right_does_not(
-    shell: &Shell<impl extensions::ShellExtensions>,
+    shell: &Shell,
     left: impl AsRef<str>,
     right: impl AsRef<str>,
 ) -> Result<bool, error::Error> {
@@ -592,7 +592,7 @@ fn left_file_is_newer_or_exists_when_right_does_not(
 }
 
 fn files_refer_to_same_device_and_inode_numbers(
-    shell: &Shell<impl extensions::ShellExtensions>,
+    shell: &Shell,
     left: impl AsRef<str>,
     right: impl AsRef<str>,
 ) -> Result<bool, error::Error> {

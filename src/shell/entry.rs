@@ -8,8 +8,8 @@ use crate::shell::error_formatter;
 use crate::shell::events;
 use crate::shell::productinfo;
 use clap::CommandFactory;
-use std::sync::{LazyLock, Mutex as StdMutex};
-use std::{path::Path, sync::Arc};
+use std::path::Path;
+use std::sync::{Arc, LazyLock, Mutex as StdMutex};
 
 #[allow(unused_imports, reason = "only used in some configs")]
 use std::io::IsTerminal;
@@ -17,7 +17,7 @@ use std::io::IsTerminal;
 static TRACE_EVENT_CONFIG: LazyLock<Arc<StdMutex<Option<events::TraceEventConfig>>>> =
     LazyLock::new(|| Arc::new(StdMutex::new(None)));
 
-type BashShell = crate::engine::Shell<error_formatter::Formatter>;
+type BashShell = crate::engine::Shell;
 
 // WARN: this implementation shadows `clap::Parser::parse_from` one so it must be defined
 // after the `use clap::Parser`
@@ -135,7 +135,7 @@ const fn will_run_interactively(args: &CommandLineArgs) -> bool {
 /// * `input_backend` - The input backend to use.
 /// * `ui_options` - The user interface options to use.
 pub(crate) async fn run_in_shell(
-    shell_ref: &crate::interactive::ShellRef<impl crate::engine::ShellExtensions>,
+    shell_ref: &crate::interactive::ShellRef,
     args: CommandLineArgs,
     input_backend: &mut impl crate::interactive::InputBackend,
     ui_options: &crate::interactive::UIOptions,
@@ -190,7 +190,7 @@ pub(crate) async fn run_in_shell(
 /// * `shell_ref` - A reference to the shell to initialize.
 /// * `args` - The parsed command-line arguments.
 async fn initialize_shell(
-    shell_ref: &crate::interactive::ShellRef<impl crate::engine::ShellExtensions>,
+    shell_ref: &crate::interactive::ShellRef,
     args: &CommandLineArgs,
 ) -> Result<(), crate::interactive::ShellError> {
     // Compute desired profile-loading behavior.
@@ -277,7 +277,7 @@ async fn instantiate_shell_from_args(
     // Set up the shell builder with the requested options.
     // NOTE: We skip loading profile and rc files here; that will be handled later after we've
     // fully instantiated everything we want set before running any code.
-    let shell = crate::engine::Shell::builder_with_extensions::<error_formatter::Formatter>()
+    let shell = crate::engine::Shell::builder()
         .disable_options(args.disabled_options.clone())
         .disable_shopt_options(args.disabled_shopt_options.clone())
         .disallow_overwriting_regular_files_via_output_redirection(
@@ -323,7 +323,7 @@ async fn instantiate_shell_from_args(
 }
 
 fn enable_xtrace_to_file(
-    shell: &mut crate::engine::Shell<impl crate::engine::ShellExtensions>,
+    shell: &mut crate::engine::Shell,
     file_path: &Path,
 ) -> Result<(), crate::interactive::ShellError> {
     let file = std::fs::OpenOptions::new()
@@ -347,10 +347,10 @@ fn enable_xtrace_to_file(
     Ok(())
 }
 
-const fn new_error_behavior(args: &CommandLineArgs) -> error_formatter::Formatter {
-    error_formatter::Formatter {
+fn new_error_behavior(args: &CommandLineArgs) -> Arc<dyn crate::engine::ErrorFormatter> {
+    Arc::new(error_formatter::Formatter {
         use_color: !args.disable_color,
-    }
+    })
 }
 
 pub(crate) fn get_default_input_backend_type(args: &CommandLineArgs) -> InputBackendType {

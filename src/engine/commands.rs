@@ -14,9 +14,7 @@ use sys::commands::{CommandExt, CommandFdInjectionExt, CommandFgControlExt};
 
 use crate::engine::{
     ErrorKind, ExecutionControlFlow, ExecutionParameters, ExecutionResult, Shell, ShellFd,
-    builtins, commands, env, error, escape,
-    extensions::{self, ShellExtensions},
-    functions,
+    builtins, commands, env, error, escape, functions,
     interp::{self, Execute, ProcessGroupPolicy},
     openfiles::{self, OpenFile, OpenFiles},
     pathsearch, processes,
@@ -33,16 +31,16 @@ pub enum CommandWaitResult {
 }
 
 /// Represents the context for executing a command.
-pub struct ExecutionContext<'a, SE: ShellExtensions = extensions::DefaultShellExtensions> {
+pub struct ExecutionContext<'a> {
     /// The shell in which the command is being executed.
-    pub shell: &'a mut Shell<SE>,
+    pub shell: &'a mut Shell,
     /// The name of the command being executed.
     pub command_name: String,
     /// The parameters for the execution.
     pub params: ExecutionParameters,
 }
 
-impl<SE: ShellExtensions> ExecutionContext<'_, SE> {
+impl ExecutionContext<'_> {
     /// Returns the standard input file; usable with `write!` et al.
     pub fn stdin(&self) -> impl std::io::Read + 'static {
         self.params.stdin(self.shell)
@@ -112,6 +110,14 @@ impl From<&str> for CommandArg {
 }
 
 impl CommandArg {
+    /// 将命令参数转换为普通字符串.
+    pub(crate) fn into_string(self) -> String {
+        match self {
+            Self::String(s) => s,
+            Self::Assignment(a) => a.to_string(),
+        }
+    }
+
     pub(crate) fn quote_for_tracing(&self) -> Cow<'_, str> {
         match self {
             Self::String(s) => escape::quote_if_needed(s, escape::QuoteMode::SingleQuote),
@@ -129,36 +135,71 @@ impl CommandArg {
     }
 }
 
-/// Encapsulates a possibly-owned reference to a `Shell` for command execution.
-pub enum ShellForCommand<'a, SE: extensions::ShellExtensions> {
-    /// The command is run in the same shell as its parent; the provided
-    /// mutable reference allows modifying the parent shell.
-    ParentShell(&'a mut Shell<SE>),
-    /// The command is run in its own owned shell (which is also provided).
-    OwnedShell {
-        /// The owned shell.
-        target: Box<Shell<SE>>,
-        /// The parent shell.
-        parent: &'a mut Shell<SE>,
-    },
+/// 命令执行时使用的目标 shell。
+pub enum ShellForCommandTarget<'a> {
+    /// 借用父 shell 作为目标 shell。
+    Borrowed(&'a mut Shell),
+    /// 使用独立持有的 shell 作为目标 shell。
+    Owned(Box<Shell>),
 }
 
-impl<SE: extensions::ShellExtensions> std::ops::Deref for ShellForCommand<'_, SE> {
-    type Target = Shell<SE>;
+/// 显式描述命令执行的目标 shell 及其父 shell 关系。
+pub struct ShellForCommand<'a> {
+    target: ShellForCommandTarget<'a>,
+    parent: Option<&'a mut Shell>,
+}
 
-    fn deref(&self) -> &Self::Target {
-        match self {
-            ShellForCommand::ParentShell(shell) => shell,
-            ShellForCommand::OwnedShell { target, .. } => target,
+impl<'a> ShellForCommand<'a> {
+    /// 使用父 shell 作为命令执行目标。
+    pub const fn parent(shell: &'a mut Shell) -> Self {
+        Self {
+            target: ShellForCommandTarget::Borrowed(shell),
+            parent: None,
         }
     }
-}
 
-impl<SE: extensions::ShellExtensions> std::ops::DerefMut for ShellForCommand<'_, SE> {
-    fn deref_mut(&mut self) -> &mut Self::Target {
-        match self {
-            ShellForCommand::ParentShell(shell) => shell,
-            ShellForCommand::OwnedShell { target, .. } => target,
+    /// 使用子 shell 作为命令执行目标, 同时保留父 shell。
+    pub const fn subshell(target: Box<Shell>, parent: &'a mut Shell) -> Self {
+        Self {
+            target: ShellForCommandTarget::Owned(target),
+            parent: Some(parent),
+        }
+    }
+
+    /// 返回命令目标是否是独立持有的 shell。
+    pub const fn is_owned(&self) -> bool {
+        match &self.target {
+            ShellForCommandTarget::Borrowed(_) => false,
+            ShellForCommandTarget::Owned(_) => true,
+        }
+    }
+
+    /// 返回命令执行目标 shell。
+    pub fn target(&self) -> &Shell {
+        match &self.target {
+            ShellForCommandTarget::Borrowed(shell) => shell,
+            ShellForCommandTarget::Owned(target) => target,
+        }
+    }
+
+    /// 返回命令执行目标 shell 的可变引用。
+    pub fn target_mut(&mut self) -> &mut Shell {
+        match &mut self.target {
+            ShellForCommandTarget::Borrowed(shell) => shell,
+            ShellForCommandTarget::Owned(target) => target,
+        }
+    }
+
+    /// 消费 self, 返回 (owned target, parent shell)。
+    /// Borrowed 情况下返回 (None, borrowed shell)。
+    /// Owned 情况下返回 (Some(target), parent)。
+    pub fn into_owned_and_parent(self) -> (Option<Box<Shell>>, &'a mut Shell) {
+        match (self.target, self.parent) {
+            (ShellForCommandTarget::Borrowed(shell), _) => (None, shell),
+            (ShellForCommandTarget::Owned(target), Some(parent)) => (Some(target), parent),
+            (ShellForCommandTarget::Owned(_), None) => {
+                unreachable!("owned shell must have a parent shell")
+            }
         }
     }
 }
@@ -175,8 +216,8 @@ impl<SE: extensions::ShellExtensions> std::ops::DerefMut for ShellForCommand<'_,
 /// * `args` - The arguments to pass to the command.
 /// * `empty_env` - If true, the command will be executed with an empty environment; if false, the
 ///   command will inherit environment variables marked as exported in the provided `Shell`.
-pub fn compose_std_command<S: AsRef<OsStr>, SE: extensions::ShellExtensions>(
-    context: &ExecutionContext<'_, SE>,
+pub fn compose_std_command<S: AsRef<OsStr>>(
+    context: &ExecutionContext<'_>,
     command_name: &str,
     argv0: &str,
     args: &[S],
@@ -259,12 +300,12 @@ pub fn compose_std_command<S: AsRef<OsStr>, SE: extensions::ShellExtensions>(
 }
 
 pub(crate) async fn on_preexecute(
-    cmd: &mut commands::SimpleCommand<'_, impl extensions::ShellExtensions>,
+    cmd: &mut commands::SimpleCommand<'_>,
 ) -> Result<(), error::Error> {
     // Set BASH_COMMAND before invoking the DEBUG trap (and generally before
     // executing commands).
     let full_cmd = cmd.args.iter().map(|arg| arg.to_string()).join(" ");
-    cmd.shell.env_mut().update_or_add(
+    cmd.shell.target_mut().env_mut().update_or_add(
         "BASH_COMMAND",
         variables::ShellValueLiteral::Scalar(full_cmd),
         |_| Ok(()),
@@ -273,9 +314,10 @@ pub(crate) async fn on_preexecute(
     )?;
 
     // Fire the DEBUG trap if one is registered.
-    if cmd.shell.traps().handles(traps::TrapSignal::Debug) {
+    if cmd.shell.target().traps().handles(traps::TrapSignal::Debug) {
         let _ = cmd
             .shell
+            .target_mut()
             .invoke_trap_handler(traps::TrapSignal::Debug, &cmd.params)
             .await?;
     }
@@ -284,9 +326,9 @@ pub(crate) async fn on_preexecute(
 }
 
 /// Represents a simple command to be executed.
-pub struct SimpleCommand<'a, SE: extensions::ShellExtensions> {
+pub struct SimpleCommand<'a> {
     /// The shell to run the command in.
-    shell: ShellForCommand<'a, SE>,
+    shell: ShellForCommand<'a>,
 
     /// The execution parameters for the command.
     pub params: ExecutionParameters,
@@ -317,10 +359,10 @@ pub struct SimpleCommand<'a, SE: extensions::ShellExtensions> {
     /// that it is *not* invoked if the shell is discarded during the execution
     /// process.
     #[allow(clippy::type_complexity)]
-    pub post_execute: Option<fn(&mut Shell<SE>) -> Result<(), error::Error>>,
+    pub post_execute: Option<fn(&mut Shell) -> Result<(), error::Error>>,
 }
 
-impl<'a, SE: extensions::ShellExtensions> SimpleCommand<'a, SE> {
+impl<'a> SimpleCommand<'a> {
     /// Creates a new `SimpleCommand` instance.
     ///
     /// # Arguments
@@ -330,7 +372,7 @@ impl<'a, SE: extensions::ShellExtensions> SimpleCommand<'a, SE> {
     /// * `command_name` - The name of the command to execute.
     /// * `args` - The arguments to the command, including the command itself.
     pub const fn new(
-        shell: ShellForCommand<'a, SE>,
+        shell: ShellForCommand<'a>,
         params: ExecutionParameters,
         command_name: String,
         args: Vec<CommandArg>,
@@ -359,13 +401,22 @@ impl<'a, SE: extensions::ShellExtensions> SimpleCommand<'a, SE> {
     )]
     pub async fn execute(mut self) -> Result<ExecutionSpawnResult, error::Error> {
         // First see if it's the name of a builtin.
-        let builtin = self.shell.builtins().get(&self.command_name).cloned();
+        let builtin = self
+            .shell
+            .target()
+            .builtins()
+            .get(&self.command_name)
+            .cloned();
 
         // Assuming we weren't requested not to do so, check if it's the name of
         // a shell function.
         if self.use_functions
-            && let Some(func_registration) =
-                self.shell.funcs().get(self.command_name.as_str()).cloned()
+            && let Some(func_registration) = self
+                .shell
+                .target()
+                .funcs()
+                .get(self.command_name.as_str())
+                .cloned()
         {
             return self.execute_via_function(func_registration).await;
         }
@@ -387,6 +438,7 @@ impl<'a, SE: extensions::ShellExtensions> SimpleCommand<'a, SE> {
                     .next()
             } else {
                 self.shell
+                    .target_mut()
                     .find_first_executable_in_path_using_cache(&self.command_name)
             };
 
@@ -396,10 +448,10 @@ impl<'a, SE: extensions::ShellExtensions> SimpleCommand<'a, SE> {
                 // Bash updates $_ even when the command is not found, so mirror
                 // that here before reporting the error.
                 let last_arg = Self::take_last_arg(&self.args);
-                self.shell.update_last_arg_variable(last_arg);
+                self.shell.target_mut().update_last_arg_variable(last_arg);
 
                 if let Some(post_execute) = self.post_execute {
-                    let _ = post_execute(&mut self.shell);
+                    let _ = post_execute(self.shell.target_mut());
                 }
 
                 Err(ErrorKind::CommandNotFound(self.command_name).into())
@@ -418,28 +470,37 @@ impl<'a, SE: extensions::ShellExtensions> SimpleCommand<'a, SE> {
 
     async fn execute_via_builtin(
         self,
-        builtin: builtins::Registration<SE>,
+        builtin: builtins::Registration,
     ) -> Result<ExecutionSpawnResult, error::Error> {
-        match self.shell {
-            ShellForCommand::OwnedShell { target, .. } => {
-                Ok(Self::execute_via_builtin_in_owned_shell(
-                    *target,
-                    self.params,
-                    builtin,
-                    self.command_name,
-                    self.args,
-                ))
-            }
-            ShellForCommand::ParentShell(..) => {
-                self.execute_via_builtin_in_parent_shell(builtin).await
-            }
+        if self.shell.is_owned() {
+            let Self {
+                shell,
+                params,
+                command_name,
+                args,
+                ..
+            } = self;
+            let (owned_shell, _) = shell.into_owned_and_parent();
+            let Some(target) = owned_shell else {
+                unreachable!("owned shell expected")
+            };
+
+            Ok(Self::execute_via_builtin_in_owned_shell(
+                *target,
+                params,
+                builtin,
+                command_name,
+                args,
+            ))
+        } else {
+            self.execute_via_builtin_in_parent_shell(builtin).await
         }
     }
 
     fn execute_via_builtin_in_owned_shell(
-        mut shell: Shell<SE>,
+        mut shell: Shell,
         params: ExecutionParameters,
-        builtin: builtins::Registration<SE>,
+        builtin: builtins::Registration,
         command_name: String,
         args: Vec<CommandArg>,
     ) -> ExecutionSpawnResult {
@@ -464,24 +525,31 @@ impl<'a, SE: extensions::ShellExtensions> SimpleCommand<'a, SE> {
 
     async fn execute_via_builtin_in_parent_shell(
         self,
-        builtin: builtins::Registration<SE>,
+        builtin: builtins::Registration,
     ) -> Result<ExecutionSpawnResult, error::Error> {
-        let mut shell = self.shell;
-        let last_arg = Self::take_last_arg(&self.args);
+        let Self {
+            mut shell,
+            params,
+            command_name,
+            args,
+            post_execute,
+            ..
+        } = self;
+        let last_arg = Self::take_last_arg(&args);
 
         let cmd_context = ExecutionContext {
-            shell: &mut shell,
-            command_name: self.command_name,
-            params: self.params,
+            shell: shell.target_mut(),
+            command_name,
+            params,
         };
 
-        let result = execute_builtin_command(&builtin, cmd_context, self.args).await;
+        let result = execute_builtin_command(&builtin, cmd_context, args).await;
 
         // Update $_ after command execution.
-        shell.update_last_arg_variable(last_arg);
+        shell.target_mut().update_last_arg_variable(last_arg);
 
-        if let Some(post_execute) = self.post_execute {
-            let _ = post_execute(&mut shell);
+        if let Some(post_execute) = post_execute {
+            let _ = post_execute(shell.target_mut());
         }
 
         let result = result?;
@@ -493,55 +561,71 @@ impl<'a, SE: extensions::ShellExtensions> SimpleCommand<'a, SE> {
         self,
         func_registration: functions::Registration,
     ) -> Result<ExecutionSpawnResult, error::Error> {
-        let mut shell = self.shell;
-        let last_arg = Self::take_last_arg(&self.args);
+        let Self {
+            mut shell,
+            params,
+            command_name,
+            args,
+            post_execute,
+            ..
+        } = self;
+        let last_arg = Self::take_last_arg(&args);
 
         let cmd_context = ExecutionContext {
-            shell: &mut shell,
-            command_name: self.command_name,
-            params: self.params,
+            shell: shell.target_mut(),
+            command_name,
+            params,
         };
 
         // Strip the function name off args.
-        let result = invoke_shell_function(func_registration, cmd_context, &self.args[1..]).await;
+        let result = invoke_shell_function(func_registration, cmd_context, &args[1..]).await;
 
         // $_ is reset *after* the function body runs, to the last argument of
         // the invocation (or the function name itself if zero args). Any
         // mutations made inside the body are overwritten — this matches bash,
         // where the caller observes only the invocation's last argument.
-        shell.update_last_arg_variable(last_arg);
+        shell.target_mut().update_last_arg_variable(last_arg);
 
-        if let Some(post_execute) = self.post_execute {
-            let _ = post_execute(&mut shell);
+        if let Some(post_execute) = post_execute {
+            let _ = post_execute(shell.target_mut());
         }
 
         result
     }
 
     fn execute_via_external(self, path: &Path) -> Result<ExecutionSpawnResult, error::Error> {
-        let mut shell = self.shell;
-        let last_arg = Self::take_last_arg(&self.args);
+        let Self {
+            mut shell,
+            params,
+            command_name,
+            args,
+            process_group_id,
+            argv0,
+            post_execute,
+            ..
+        } = self;
+        let last_arg = Self::take_last_arg(&args);
 
         let cmd_context = ExecutionContext {
-            shell: &mut shell,
-            command_name: self.command_name,
-            params: self.params,
+            shell: shell.target_mut(),
+            command_name,
+            params,
         };
 
         let resolved_path = path.to_string_lossy();
         let result = execute_external_command(
             cmd_context,
             resolved_path.as_ref(),
-            self.process_group_id,
-            self.argv0.as_deref(),
-            &self.args[1..],
+            process_group_id,
+            argv0.as_deref(),
+            &args[1..],
         );
 
         // Update $_ after command execution.
-        shell.update_last_arg_variable(last_arg);
+        shell.target_mut().update_last_arg_variable(last_arg);
 
-        if let Some(post_execute) = self.post_execute {
-            let _ = post_execute(&mut shell);
+        if let Some(post_execute) = post_execute {
+            let _ = post_execute(shell.target_mut());
         }
 
         result
@@ -549,7 +633,7 @@ impl<'a, SE: extensions::ShellExtensions> SimpleCommand<'a, SE> {
 }
 
 pub(crate) fn execute_external_command(
-    context: ExecutionContext<'_, impl extensions::ShellExtensions>,
+    context: ExecutionContext<'_>,
     executable_path: &str,
     process_group_id: Option<i32>,
     argv0_override: Option<&str>,
@@ -662,9 +746,9 @@ pub(crate) fn execute_external_command(
     }
 }
 
-async fn execute_builtin_command<SE: extensions::ShellExtensions>(
-    builtin: &builtins::Registration<SE>,
-    context: ExecutionContext<'_, SE>,
+async fn execute_builtin_command(
+    builtin: &builtins::Registration,
+    context: ExecutionContext<'_>,
     args: Vec<CommandArg>,
 ) -> Result<ExecutionResult, error::Error> {
     match (builtin.execute_func)(context, args).await {
@@ -684,7 +768,7 @@ async fn execute_builtin_command<SE: extensions::ShellExtensions>(
 
 pub(crate) async fn invoke_shell_function(
     function: functions::Registration,
-    mut context: ExecutionContext<'_, impl extensions::ShellExtensions>,
+    mut context: ExecutionContext<'_>,
     args: &[CommandArg],
 ) -> Result<ExecutionSpawnResult, error::Error> {
     let ast::FunctionBody(body, redirects) = &function.definition().body;
@@ -738,7 +822,7 @@ pub(crate) async fn invoke_shell_function(
 }
 
 pub(crate) async fn invoke_command_in_subshell_and_get_output(
-    shell: &mut Shell<impl extensions::ShellExtensions>,
+    shell: &mut Shell,
     params: &ExecutionParameters,
     s: String,
 ) -> Result<String, error::Error> {
@@ -781,7 +865,7 @@ pub(crate) async fn invoke_command_in_subshell_and_get_output(
 }
 
 async fn run_substitution_command(
-    mut shell: Shell<impl extensions::ShellExtensions>,
+    mut shell: Shell,
     mut params: ExecutionParameters,
     command: String,
 ) -> Result<ExecutionResult, error::Error> {

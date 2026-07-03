@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use crate::engine::{Shell, error, extensions, interp};
+use crate::engine::{Shell, error, interp};
 
 /// Behavior for loading profile files.
 #[derive(Default)]
@@ -40,7 +40,7 @@ impl RcLoadBehavior {
     }
 }
 
-impl<SE: extensions::ShellExtensions> Shell<SE> {
+impl Shell {
     /// Loads and executes standard shell configuration files (i.e., rc and profile).
     ///
     /// # Arguments

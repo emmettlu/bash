@@ -1,6 +1,6 @@
 //! Module defining the builder for creating shell instances.
 
-use std::{collections::HashMap, path::PathBuf};
+use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 pub use shell_builder::State as ShellBuilderState;
 
@@ -11,10 +11,10 @@ use crate::engine::{
     shell::KeyBindingsHelper, traps,
 };
 
-impl<SE: extensions::ShellExtensions, S: shell_builder::IsComplete> ShellBuilder<SE, S> {
+impl<S: shell_builder::IsComplete> ShellBuilder<S> {
     /// Returns a new shell instance created with the options provided. Runs any
     /// configuration loading as well.
-    pub async fn build(self) -> Result<Shell<SE>, error::Error> {
+    pub async fn build(self) -> Result<Shell, error::Error> {
         let mut options = self.build_settings();
 
         let profile = std::mem::take(&mut options.profile);
@@ -63,7 +63,7 @@ macro_rules! define_option_methods {
     };
 }
 
-impl<SE: extensions::ShellExtensions, S: shell_builder::State> ShellBuilder<SE, S> {
+impl<S: shell_builder::State> ShellBuilder<S> {
     define_option_methods!(
         enable_option,
         enable_options,
@@ -82,7 +82,7 @@ impl<SE: extensions::ShellExtensions, S: shell_builder::State> ShellBuilder<SE, 
     );
 
     /// Add a single builtin registration
-    pub fn builtin(mut self, name: impl Into<String>, reg: builtins::Registration<SE>) -> Self {
+    pub fn builtin(mut self, name: impl Into<String>, reg: builtins::Registration) -> Self {
         self.builtins.insert(name.into(), reg);
         self
     }
@@ -90,7 +90,7 @@ impl<SE: extensions::ShellExtensions, S: shell_builder::State> ShellBuilder<SE, 
     /// Add many builtin registrations
     pub fn builtins(
         mut self,
-        builtins: impl IntoIterator<Item = (String, builtins::Registration<SE>)>,
+        builtins: impl IntoIterator<Item = (String, builtins::Registration)>,
     ) -> Self {
         self.builtins.extend(builtins);
         self
@@ -108,6 +108,7 @@ impl<SE: extensions::ShellExtensions, S: shell_builder::State> ShellBuilder<SE, 
 #[builder(
     builder_type(
         name = ShellBuilder,
+        vis = "pub",
         doc {
         /// Builder for [Shell]
     }),
@@ -119,7 +120,7 @@ impl<SE: extensions::ShellExtensions, S: shell_builder::State> ShellBuilder<SE, 
         vis = "pub(self)"
     )
 )]
-pub struct CreateOptions<SE: extensions::ShellExtensions = extensions::DefaultShellExtensions> {
+pub struct CreateOptions {
     /// Disabled options.
     #[builder(field)]
     pub disabled_options: Vec<String>,
@@ -134,14 +135,13 @@ pub struct CreateOptions<SE: extensions::ShellExtensions = extensions::DefaultSh
     pub enabled_shopt_options: Vec<String>,
     /// Registered builtins.
     #[builder(field)]
-    pub builtins: HashMap<String, builtins::Registration<SE>>,
+    pub builtins: HashMap<String, builtins::Registration>,
     /// Provides a set of variables to be initialized in the shell. If present, they
     /// are assigned *after* inherited or well-known variables are set (when applicable).
     #[builder(field)]
     pub vars: HashMap<String, ShellVariable>,
     /// 错误格式化器实现.
-    #[builder(default)]
-    pub error_formatter: SE,
+    pub error_formatter: Option<Arc<dyn extensions::ErrorFormatter>>,
     /// Disallow overwriting regular files via output redirection.
     #[builder(default)]
     pub disallow_overwriting_regular_files_via_output_redirection: bool,
@@ -219,10 +219,10 @@ pub struct CreateOptions<SE: extensions::ShellExtensions = extensions::DefaultSh
     pub shell_version: Option<String>,
 }
 
-impl<SE: extensions::ShellExtensions> Default for Shell<SE> {
+impl Default for Shell {
     fn default() -> Self {
         Self {
-            error_formatter: SE::default(),
+            error_formatter: Arc::new(extensions::DefaultErrorFormatter),
             traps: traps::TrapHandlerConfig::default(),
             open_files: openfiles::OpenFiles::default(),
             working_dir: PathBuf::default(),
@@ -256,13 +256,7 @@ impl<SE: extensions::ShellExtensions> Default for Shell<SE> {
 
 impl Shell {
     /// Create an instance of [Shell] using the builder syntax
-    pub fn builder() -> ShellBuilder<extensions::DefaultShellExtensions, shell_builder::Empty> {
-        CreateOptions::builder()
-    }
-
-    /// Create an instance of [Shell] using the builder syntax, with custom extensions.
-    pub fn builder_with_extensions<SE: extensions::ShellExtensions>()
-    -> ShellBuilder<SE, shell_builder::Empty> {
+    pub fn builder() -> ShellBuilder<shell_builder::Empty> {
         CreateOptions::builder()
     }
 }

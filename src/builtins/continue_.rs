@@ -13,9 +13,9 @@ pub(crate) struct ContinueCommand {
 impl builtins::Command for ContinueCommand {
     type Error = crate::engine::Error;
 
-    async fn execute<SE: crate::engine::ShellExtensions>(
+    async fn execute(
         &self,
-        _context: crate::engine::ExecutionContext<'_, SE>,
+        _context: crate::engine::ExecutionContext<'_>,
     ) -> Result<crate::engine::ExecutionResult, Self::Error> {
         // If specified, which_loop needs to be positive.
         if self.which_loop <= 0 {

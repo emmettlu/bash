@@ -4,7 +4,7 @@ use crate::engine::{
     ExecutionParameters, ExecutionResult, ProcessGroupPolicy, error, traps::TrapSignal,
 };
 
-impl<SE: crate::engine::extensions::ShellExtensions> crate::engine::Shell<SE> {
+impl crate::engine::Shell {
     /// Runs any exit steps for the shell.
     ///
     /// This currently includes invoking the `EXIT` trap handler, if any.

@@ -12,9 +12,9 @@ pub(crate) struct EvalCommand {
 impl builtins::Command for EvalCommand {
     type Error = crate::engine::Error;
 
-    async fn execute<SE: crate::engine::ShellExtensions>(
+    async fn execute(
         &self,
-        context: crate::engine::ExecutionContext<'_, SE>,
+        context: crate::engine::ExecutionContext<'_>,
     ) -> Result<crate::engine::ExecutionResult, Self::Error> {
         if !self.args.is_empty() {
             let args_concatenated = self.args.join(" ");

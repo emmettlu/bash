@@ -37,9 +37,9 @@ pub(crate) struct FcCommand {
 impl builtins::Command for FcCommand {
     type Error = crate::engine::Error;
 
-    async fn execute<SE: crate::engine::ShellExtensions>(
+    async fn execute(
         &self,
-        context: crate::engine::ExecutionContext<'_, SE>,
+        context: crate::engine::ExecutionContext<'_>,
     ) -> Result<ExecutionResult, Self::Error> {
         if self.substitute {
             return self.do_execute(context).await;
@@ -56,7 +56,7 @@ impl builtins::Command for FcCommand {
 impl FcCommand {
     fn do_list(
         &self,
-        context: &crate::engine::ExecutionContext<'_, impl crate::engine::ShellExtensions>,
+        context: &crate::engine::ExecutionContext<'_>,
     ) -> Result<ExecutionResult, crate::engine::Error> {
         let history = context.shell.history().ok_or_else(|| {
             crate::engine::Error::from(crate::engine::ErrorKind::HistoryNotEnabled)
@@ -79,7 +79,7 @@ impl FcCommand {
 
     async fn do_execute(
         &self,
-        context: crate::engine::ExecutionContext<'_, impl crate::engine::ShellExtensions>,
+        context: crate::engine::ExecutionContext<'_>,
     ) -> Result<ExecutionResult, crate::engine::Error> {
         let history = context.shell.history().ok_or_else(|| {
             crate::engine::Error::from(crate::engine::ErrorKind::HistoryNotEnabled)
@@ -146,7 +146,7 @@ impl FcCommand {
 
     fn write_history_item(
         &self,
-        context: &crate::engine::ExecutionContext<'_, impl crate::engine::ShellExtensions>,
+        context: &crate::engine::ExecutionContext<'_>,
         history: &history::History,
         idx: usize,
     ) -> Result<(), crate::engine::Error> {

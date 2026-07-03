@@ -35,9 +35,9 @@ impl CommandCommand {
 impl builtins::Command for CommandCommand {
     type Error = crate::engine::Error;
 
-    async fn execute<SE: crate::engine::ShellExtensions>(
+    async fn execute(
         &self,
-        context: crate::engine::ExecutionContext<'_, SE>,
+        context: crate::engine::ExecutionContext<'_>,
     ) -> Result<ExecutionResult, Self::Error> {
         // Silently exit if no command was provided.
         if let Some(command_name) = self.command() {
@@ -90,7 +90,7 @@ impl Display for FoundCommand<'_> {
 
 impl CommandCommand {
     fn try_find_command<'a>(
-        shell: &mut crate::engine::Shell<impl crate::engine::ShellExtensions>,
+        shell: &mut crate::engine::Shell,
         command_name: &'a str,
         use_default_path: bool,
     ) -> Option<FoundCommand<'a>> {
@@ -127,7 +127,7 @@ impl CommandCommand {
 
     async fn execute_command(
         &self,
-        mut context: crate::engine::ExecutionContext<'_, impl crate::engine::ShellExtensions>,
+        mut context: crate::engine::ExecutionContext<'_>,
         command_name: &str,
         use_default_path: bool,
     ) -> Result<ExecutionResult, crate::engine::Error> {
@@ -145,7 +145,7 @@ impl CommandCommand {
         };
 
         let mut cmd = commands::SimpleCommand::new(
-            commands::ShellForCommand::ParentShell(context.shell),
+            commands::ShellForCommand::parent(context.shell),
             context.params,
             context.command_name,
             command_and_args,

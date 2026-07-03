@@ -2,7 +2,7 @@
 
 use std::borrow::Cow;
 
-use crate::engine::{ExecutionParameters, Shell, env, expansion, extensions, variables};
+use crate::engine::{ExecutionParameters, Shell, env, expansion, variables};
 use crate::parser::ast;
 
 /// Maximum recursion depth for arithmetic variable dereference chains
@@ -59,7 +59,7 @@ pub(crate) trait ExpandAndEvaluate {
     /// * `trace_if_needed` - Whether to trace the evaluation.
     async fn eval(
         &self,
-        shell: &mut Shell<impl extensions::ShellExtensions>,
+        shell: &mut Shell,
         params: &ExecutionParameters,
         trace_if_needed: bool,
     ) -> Result<i64, EvalError>;
@@ -68,7 +68,7 @@ pub(crate) trait ExpandAndEvaluate {
 impl ExpandAndEvaluate for ast::UnexpandedArithmeticExpr {
     async fn eval(
         &self,
-        shell: &mut Shell<impl extensions::ShellExtensions>,
+        shell: &mut Shell,
         params: &ExecutionParameters,
         trace_if_needed: bool,
     ) -> Result<i64, EvalError> {
@@ -84,7 +84,7 @@ impl ExpandAndEvaluate for ast::UnexpandedArithmeticExpr {
 /// * `expr` - The unexpanded arithmetic expression to evaluate.
 /// * `trace_if_needed` - Whether to trace the evaluation.
 pub(crate) async fn expand_and_eval(
-    shell: &mut Shell<impl extensions::ShellExtensions>,
+    shell: &mut Shell,
     params: &ExecutionParameters,
     expr: &str,
     trace_if_needed: bool,
@@ -120,18 +120,18 @@ pub trait Evaluatable {
     /// # Arguments
     ///
     /// * `shell` - The shell to use for evaluation.
-    fn eval(&self, shell: &mut Shell<impl extensions::ShellExtensions>) -> Result<i64, EvalError>;
+    fn eval(&self, shell: &mut Shell) -> Result<i64, EvalError>;
 }
 
 impl Evaluatable for ast::ArithmeticExpr {
-    fn eval(&self, shell: &mut Shell<impl extensions::ShellExtensions>) -> Result<i64, EvalError> {
+    fn eval(&self, shell: &mut Shell) -> Result<i64, EvalError> {
         eval_expr_impl(self, shell, 0)
     }
 }
 
 fn eval_expr_impl(
     expr: &ast::ArithmeticExpr,
-    shell: &mut Shell<impl extensions::ShellExtensions>,
+    shell: &mut Shell,
     depth: u32,
 ) -> Result<i64, EvalError> {
     let value = match expr {
@@ -173,10 +173,7 @@ fn eval_expr_impl(
     Ok(value)
 }
 
-fn get_var_value<'a>(
-    shell: &'a Shell<impl extensions::ShellExtensions>,
-    name: &str,
-) -> Result<Cow<'a, str>, EvalError> {
+fn get_var_value<'a>(shell: &'a Shell, name: &str) -> Result<Cow<'a, str>, EvalError> {
     let value = shell.env_var(name).map(|var| var.resolve_value(shell));
 
     if let Some(value) = value
@@ -193,7 +190,7 @@ fn get_var_value<'a>(
 }
 
 fn deref_lvalue(
-    shell: &mut Shell<impl extensions::ShellExtensions>,
+    shell: &mut Shell,
     lvalue: &ast::ArithmeticTarget,
     depth: u32,
 ) -> Result<i64, EvalError> {
@@ -233,7 +230,7 @@ fn deref_lvalue(
 }
 
 fn apply_unary_op(
-    shell: &mut Shell<impl extensions::ShellExtensions>,
+    shell: &mut Shell,
     op: ast::UnaryOperator,
     operand: &ast::ArithmeticExpr,
     depth: u32,
@@ -249,7 +246,7 @@ fn apply_unary_op(
 }
 
 fn apply_binary_op(
-    shell: &mut Shell<impl extensions::ShellExtensions>,
+    shell: &mut Shell,
     op: ast::BinaryOperator,
     left: &ast::ArithmeticExpr,
     right: &ast::ArithmeticExpr,
@@ -330,7 +327,7 @@ fn apply_binary_op(
 }
 
 fn apply_unary_assignment_op(
-    shell: &mut Shell<impl extensions::ShellExtensions>,
+    shell: &mut Shell,
     lvalue: &ast::ArithmeticTarget,
     op: ast::UnaryAssignmentOperator,
     depth: u32,
@@ -362,7 +359,7 @@ fn apply_unary_assignment_op(
 }
 
 fn assign(
-    shell: &mut Shell<impl extensions::ShellExtensions>,
+    shell: &mut Shell,
     lvalue: &ast::ArithmeticTarget,
     value: i64,
     depth: u32,

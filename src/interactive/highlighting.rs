@@ -80,7 +80,7 @@ impl HighlightSpan {
 /// A vector of highlighted spans covering the entire input string.
 #[must_use]
 pub fn highlight_command(
-    shell: &crate::engine::Shell<impl crate::engine::ShellExtensions>,
+    shell: &crate::engine::Shell,
     line: &str,
     cursor: usize,
 ) -> Vec<HighlightSpan> {
@@ -99,8 +99,8 @@ enum CommandType {
     Unknown,
 }
 
-struct Highlighter<'a, SE: crate::engine::ShellExtensions> {
-    shell: &'a crate::engine::Shell<SE>,
+struct Highlighter<'a> {
+    shell: &'a crate::engine::Shell,
     cursor: usize,
     spans: Vec<HighlightSpan>,
     remaining_chars: Chars<'a>,
@@ -108,8 +108,8 @@ struct Highlighter<'a, SE: crate::engine::ShellExtensions> {
     next_missing_kind: Option<HighlightKind>,
 }
 
-impl<'a, SE: crate::engine::ShellExtensions> Highlighter<'a, SE> {
-    fn new(shell: &'a crate::engine::Shell<SE>, input_line: &'a str, cursor: usize) -> Self {
+impl<'a> Highlighter<'a> {
+    fn new(shell: &'a crate::engine::Shell, input_line: &'a str, cursor: usize) -> Self {
         Self {
             shell,
             cursor,

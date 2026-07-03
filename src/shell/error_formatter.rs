@@ -7,7 +7,7 @@ impl crate::engine::extensions::ErrorFormatter for Formatter {
     fn format_error(
         &self,
         err: &crate::engine::error::Error,
-        _shell: &crate::engine::Shell<impl crate::engine::ShellExtensions>,
+        _shell: &crate::engine::Shell,
     ) -> String {
         let prefix = if self.use_color {
             "\x1b[31merror:\x1b[0m "

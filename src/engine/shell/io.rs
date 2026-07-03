@@ -2,9 +2,9 @@
 
 use std::io::Write;
 
-use crate::engine::{error, extensions, ioutils};
+use crate::engine::{error, ioutils};
 
-impl<SE: extensions::ShellExtensions> crate::engine::Shell<SE> {
+impl crate::engine::Shell {
     /// Returns a value that can be used to write to the shell's currently configured
     /// standard output stream using `write!` et al.
     pub fn stdout(&self) -> impl std::io::Write + 'static {

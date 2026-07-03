@@ -4,7 +4,7 @@ use crate::engine::escape;
 
 #[allow(dead_code)]
 pub(crate) async fn complete_async(
-    shell: &mut crate::engine::Shell<impl crate::engine::ShellExtensions>,
+    shell: &mut crate::engine::Shell,
     line: &str,
     pos: usize,
 ) -> crate::engine::completion::Completions {

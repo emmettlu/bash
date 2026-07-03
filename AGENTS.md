@@ -29,11 +29,11 @@
 
 **架构模式:**
 
-- 使用 `Shell::builder()` / `CreateOptions::builder()` 创建 shell 实例
-- 强烈使用 builder 模式实现类型安全配置
+- 使用 `Shell::builder()` 创建 shell 实例, `CreateOptions` 仅作为 crate 内部 builder backing 类型
+- 使用 builder 模式集中配置 shell 初始化参数
 - 解析基于 peg crate (token 流驱动)
 - 执行全程异步 (compio runtime)
-- 扩展点通过 `ShellExtensions` trait 静态注入
+- 错误格式化通过对象安全的 `ErrorFormatter` 注入, 避免泛型扩展污染执行路径
 - Windows 平台代码集中放在 `engine::sys`
 
 ### 模块依赖关系

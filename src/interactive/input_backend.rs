@@ -10,7 +10,7 @@ pub trait InputBackend: Send {
     /// * `prompt` - The prompt to display to the user.
     fn read_line(
         &mut self,
-        shell: &crate::interactive::ShellRef<impl crate::engine::ShellExtensions>,
+        shell: &crate::interactive::ShellRef,
         prompt: InteractivePrompt,
     ) -> Result<ReadResult, ShellError>;
 

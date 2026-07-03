@@ -97,9 +97,9 @@ impl builtins::Command for GetOptsCommand {
         Ok(this)
     }
 
-    async fn execute<SE: crate::engine::ShellExtensions>(
+    async fn execute(
         &self,
-        mut context: crate::engine::ExecutionContext<'_, SE>,
+        mut context: crate::engine::ExecutionContext<'_>,
     ) -> Result<crate::engine::ExecutionResult, Self::Error> {
         // Validate the target variable name.
         if !env::valid_variable_name(&self.variable_name) {
@@ -158,8 +158,8 @@ impl builtins::Command for GetOptsCommand {
 /// `-pVALUE` and `-p VALUE` forms), and error reporting for unknown options or
 /// missing arguments. Tracks position within combined flags via the
 /// `__GETOPTS_NEXT_CHAR` shell variable.
-fn parse_next_option<SE: crate::engine::ShellExtensions>(
-    context: &mut crate::engine::ExecutionContext<'_, SE>,
+fn parse_next_option(
+    context: &mut crate::engine::ExecutionContext<'_>,
     spec: &OptionSpec,
     args_to_parse: &[String],
     mut next_index: usize,
@@ -277,8 +277,8 @@ fn parse_next_option<SE: crate::engine::ShellExtensions>(
 /// Resolves the argument for an option that takes a value. Returns the updated
 /// `(variable_value, optarg, is_last_char, next_index)` tuple.
 #[allow(clippy::too_many_arguments)]
-fn resolve_option_argument<SE: crate::engine::ShellExtensions>(
-    context: &crate::engine::ExecutionContext<'_, SE>,
+fn resolve_option_argument(
+    context: &crate::engine::ExecutionContext<'_>,
     spec: &OptionSpec,
     c: char,
     arg: &str,
@@ -320,8 +320,8 @@ fn resolve_option_argument<SE: crate::engine::ShellExtensions>(
 }
 
 /// Handles an unknown option character, reporting an error if appropriate.
-fn report_unknown_option<SE: crate::engine::ShellExtensions>(
-    context: &crate::engine::ExecutionContext<'_, SE>,
+fn report_unknown_option(
+    context: &crate::engine::ExecutionContext<'_>,
     spec: &OptionSpec,
     c: char,
 ) -> Result<(String, Option<String>), crate::engine::Error> {
@@ -340,8 +340,8 @@ fn report_unknown_option<SE: crate::engine::ShellExtensions>(
 
 /// Writes the parsing result back into shell variables: the target variable,
 /// OPTARG, OPTIND, and the internal `__GETOPTS_LAST_OPTIND` tracker.
-fn update_variables<SE: crate::engine::ShellExtensions>(
-    context: &mut crate::engine::ExecutionContext<'_, SE>,
+fn update_variables(
+    context: &mut crate::engine::ExecutionContext<'_>,
     variable_name: &str,
     result: GetOptsResult,
 ) -> Result<ExecutionResult, crate::engine::Error> {
@@ -392,9 +392,7 @@ fn update_variables<SE: crate::engine::ShellExtensions>(
 
 /// Returns whether OPTERR is enabled (i.e., getopts should print error messages).
 /// OPTERR defaults to 1; any nonzero value means errors are enabled.
-fn is_opterr_enabled<SE: crate::engine::ShellExtensions>(
-    context: &crate::engine::ExecutionContext<'_, SE>,
-) -> bool {
+fn is_opterr_enabled(context: &crate::engine::ExecutionContext<'_>) -> bool {
     context
         .shell
         .env_str("OPTERR")

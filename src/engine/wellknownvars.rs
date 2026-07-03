@@ -3,8 +3,8 @@ use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::engine::shell::ShellState;
-use crate::engine::{Shell, ShellValue, ShellVariable, error, extensions, sys, variables};
+use crate::engine::variables::{self, DynamicVariable};
+use crate::engine::{Shell, ShellValue, ShellVariable, error, sys};
 
 const BASH_MAJOR: u32 = 5;
 const BASH_MINOR: u32 = 2;
@@ -24,9 +24,7 @@ static RANDOM_STATE: AtomicU64 = AtomicU64::new(0);
 /// # Arguments
 ///
 /// * `shell` - The shell instance to inherit environment variables into.
-pub(crate) fn inherit_env_vars(
-    shell: &mut Shell<impl extensions::ShellExtensions>,
-) -> Result<(), error::Error> {
+pub(crate) fn inherit_env_vars(shell: &mut Shell) -> Result<(), error::Error> {
     for (k, v) in sys::env::get_host_env_vars() {
         // See if it's a function exported by an ancestor process.
         if let Some(func_name) = k.strip_prefix("BASH_FUNC_")
@@ -57,9 +55,7 @@ pub(crate) fn inherit_env_vars(
 }
 
 #[expect(clippy::too_many_lines)]
-pub(crate) fn init_well_known_vars(
-    shell: &mut Shell<impl extensions::ShellExtensions>,
-) -> Result<(), error::Error> {
+pub(crate) fn init_well_known_vars(shell: &mut Shell) -> Result<(), error::Error> {
     // BASH
     if let Some(shell_name) = shell.current_shell_name().map(|s| s.to_string()) {
         shell
@@ -70,10 +66,7 @@ pub(crate) fn init_well_known_vars(
     }
 
     // BASHOPTS
-    let mut bashopts_var = ShellVariable::new(ShellValue::Dynamic {
-        getter: |shell| shell.options().shopt_optstr().into(),
-        setter: |_| (),
-    });
+    let mut bashopts_var = ShellVariable::new(ShellValue::Dynamic(DynamicVariable::BashOpts));
     bashopts_var.set_readonly();
     shell.env_mut().set_global("BASHOPTS", bashopts_var)?;
 
@@ -85,66 +78,31 @@ pub(crate) fn init_well_known_vars(
     // BASH_ALIASES
     shell.env_mut().set_global(
         "BASH_ALIASES",
-        ShellVariable::new(ShellValue::Dynamic {
-            getter: |shell| {
-                let values = variables::ArrayLiteral(
-                    shell
-                        .aliases()
-                        .iter()
-                        .map(|(k, v)| (Some(k.to_owned()), v.to_owned()))
-                        .collect::<Vec<_>>(),
-                );
-
-                ShellValue::associative_array_from_literals(values)
-                    .unwrap_or_else(|_error| ShellValue::AssociativeArray(BTreeMap::new()))
-            },
-            setter: |_| (),
-        }),
+        ShellVariable::new(ShellValue::Dynamic(DynamicVariable::BashAliases)),
     )?;
 
     // BASH_ARGC
     shell.env_mut().set_global(
         "BASH_ARGC",
-        ShellVariable::new(ShellValue::Dynamic {
-            getter: |shell| get_bash_argc_value(shell),
-            setter: |_| (),
-        }),
+        ShellVariable::new(ShellValue::Dynamic(DynamicVariable::BashArgc)),
     )?;
 
     // BASH_ARGV
     shell.env_mut().set_global(
         "BASH_ARGV",
-        ShellVariable::new(ShellValue::Dynamic {
-            getter: |shell| get_bash_argv_value(shell),
-            setter: |_| (),
-        }),
+        ShellVariable::new(ShellValue::Dynamic(DynamicVariable::BashArgv)),
     )?;
 
     // BASH_ARGV0
     shell.env_mut().set_global(
         "BASH_ARGV0",
-        ShellVariable::new(ShellValue::Dynamic {
-            getter: |shell| {
-                let argv0 = shell.current_shell_name().unwrap_or_default();
-                argv0.to_string().into()
-            },
-            // TODO(vars): implement updating BASH_ARGV0
-            setter: |_| (),
-        }),
+        ShellVariable::new(ShellValue::Dynamic(DynamicVariable::BashArgv0)),
     )?;
 
     // TODO(vars): implement mutation of BASH_CMDS
     shell.env_mut().set_global(
         "BASH_CMDS",
-        ShellVariable::new(ShellValue::Dynamic {
-            getter: |shell| {
-                shell
-                    .program_location_cache()
-                    .to_value()
-                    .unwrap_or_else(|_error| ShellValue::AssociativeArray(BTreeMap::new()))
-            },
-            setter: |_| (),
-        }),
+        ShellVariable::new(ShellValue::Dynamic(DynamicVariable::BashCmds)),
     )?;
 
     // TODO(vars): implement BASH_COMMAND
@@ -153,28 +111,19 @@ pub(crate) fn init_well_known_vars(
     // BASH_LINENO
     shell.env_mut().set_global(
         "BASH_LINENO",
-        ShellVariable::new(ShellValue::Dynamic {
-            getter: |shell| get_bash_lineno_value(shell),
-            setter: |_| (),
-        }),
+        ShellVariable::new(ShellValue::Dynamic(DynamicVariable::BashLineno)),
     )?;
 
     // BASH_SOURCE
     shell.env_mut().set_global(
         "BASH_SOURCE",
-        ShellVariable::new(ShellValue::Dynamic {
-            getter: |shell| get_bash_source_value(shell),
-            setter: |_| (),
-        }),
+        ShellVariable::new(ShellValue::Dynamic(DynamicVariable::BashSource)),
     )?;
 
     // BASH_SUBSHELL
     shell.env_mut().set_global(
         "BASH_SUBSHELL",
-        ShellVariable::new(ShellValue::Dynamic {
-            getter: |shell| shell.depth().to_string().into(),
-            setter: |_| (),
-        }),
+        ShellVariable::new(ShellValue::Dynamic(DynamicVariable::BashSubshell)),
     )?;
 
     // BASH_VERSINFO
@@ -217,47 +166,19 @@ pub(crate) fn init_well_known_vars(
     // DIRSTACK
     shell.env_mut().set_global(
         "DIRSTACK",
-        ShellVariable::new(ShellValue::Dynamic {
-            getter: |shell| {
-                shell
-                    .directory_stack()
-                    .iter()
-                    .map(|p| p.to_string_lossy().to_string())
-                    .collect::<Vec<_>>()
-                    .into()
-            },
-            setter: |_| (),
-        }),
+        ShellVariable::new(ShellValue::Dynamic(DynamicVariable::DirStack)),
     )?;
 
     // EPOCHREALTIME
     shell.env_mut().set_global(
         "EPOCHREALTIME",
-        ShellVariable::new(ShellValue::Dynamic {
-            getter: |_shell| {
-                let now = std::time::SystemTime::now();
-                let since_epoch = now
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default();
-                since_epoch.as_secs_f64().to_string().into()
-            },
-            setter: |_| (),
-        }),
+        ShellVariable::new(ShellValue::Dynamic(DynamicVariable::EpochRealtime)),
     )?;
 
     // EPOCHSECONDS
     shell.env_mut().set_global(
         "EPOCHSECONDS",
-        ShellVariable::new(ShellValue::Dynamic {
-            getter: |_shell| {
-                let now = std::time::SystemTime::now();
-                let since_epoch = now
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap_or_default();
-                since_epoch.as_secs().to_string().into()
-            },
-            setter: |_| (),
-        }),
+        ShellVariable::new(ShellValue::Dynamic(DynamicVariable::EpochSeconds)),
     )?;
 
     // EUID
@@ -270,10 +191,7 @@ pub(crate) fn init_well_known_vars(
     // FUNCNAME
     shell.env_mut().set_global(
         "FUNCNAME",
-        ShellVariable::new(ShellValue::Dynamic {
-            getter: |shell| get_funcname_value(shell),
-            setter: |_| (),
-        }),
+        ShellVariable::new(ShellValue::Dynamic(DynamicVariable::FuncName)),
     )?;
 
     // GROUPS
@@ -281,26 +199,11 @@ pub(crate) fn init_well_known_vars(
     // don't have to make costly system calls if the user never accesses it.
     shell.env_mut().set_global(
         "GROUPS",
-        ShellVariable::new(ShellValue::Dynamic {
-            getter: |_shell| {
-                let groups = get_current_user_gids();
-                ShellValue::indexed_array_from_strings(
-                    groups.into_iter().map(|gid| gid.to_string()),
-                )
-            },
-            setter: |_| (),
-        }),
+        ShellVariable::new(ShellValue::Dynamic(DynamicVariable::Groups)),
     )?;
 
     // HISTCMD
-    let mut histcmd_var = ShellVariable::new(ShellValue::Dynamic {
-        getter: |shell| {
-            shell
-                .history()
-                .map_or_else(|| "0".into(), |h| h.count().to_string().into())
-        },
-        setter: |_| (),
-    });
+    let mut histcmd_var = ShellVariable::new(ShellValue::Dynamic(DynamicVariable::HistCmd));
     histcmd_var.treat_as_integer();
     shell.env_mut().set_global("HISTCMD", histcmd_var)?;
 
@@ -340,10 +243,7 @@ pub(crate) fn init_well_known_vars(
     // LINENO
     shell.env_mut().set_global(
         "LINENO",
-        ShellVariable::new(ShellValue::Dynamic {
-            getter: |shell| get_lineno(shell).to_string().into(),
-            setter: |_| (),
-        }),
+        ShellVariable::new(ShellValue::Dynamic(DynamicVariable::LineNo)),
     )?;
 
     // MACHTYPE
@@ -403,14 +303,7 @@ pub(crate) fn init_well_known_vars(
     // TODO(well-known-vars): Investigate if this needs to be saved/preserved across prompt display.
     shell.env_mut().set_global(
         "PIPESTATUS",
-        ShellVariable::new(ShellValue::Dynamic {
-            getter: |shell| {
-                ShellValue::indexed_array_from_strings(
-                    shell.last_pipeline_statuses().iter().map(|s| s.to_string()),
-                )
-            },
-            setter: |_| (),
-        }),
+        ShellVariable::new(ShellValue::Dynamic(DynamicVariable::PipeStatus)),
     )?;
 
     // PPID
@@ -421,28 +314,14 @@ pub(crate) fn init_well_known_vars(
     }
 
     // RANDOM
-    let mut random_var = ShellVariable::new(ShellValue::Dynamic {
-        getter: get_random_value,
-        setter: |_| (),
-    });
+    let mut random_var = ShellVariable::new(ShellValue::Dynamic(DynamicVariable::Random));
     random_var.treat_as_integer();
     shell.env_mut().set_global("RANDOM", random_var)?;
 
     // SECONDS
     shell.env_mut().set_global(
         "SECONDS",
-        ShellVariable::new(ShellValue::Dynamic {
-            getter: |shell| {
-                let now = std::time::SystemTime::now();
-                let since_last = now
-                    .duration_since(shell.last_stopwatch_time())
-                    .unwrap_or_default();
-                let total_seconds = since_last.as_secs() + u64::from(shell.last_stopwatch_offset());
-                total_seconds.to_string().into()
-            },
-            // TODO(vars): implement updating SECONDS
-            setter: |_| (),
-        }),
+        ShellVariable::new(ShellValue::Dynamic(DynamicVariable::Seconds)),
     )?;
 
     // SHELL (if not already set)
@@ -457,10 +336,7 @@ pub(crate) fn init_well_known_vars(
     }
 
     // SHELLOPTS
-    let mut shellopts_var = ShellVariable::new(ShellValue::Dynamic {
-        getter: |shell| shell.options().seto_optstr().into(),
-        setter: |_| (),
-    });
+    let mut shellopts_var = ShellVariable::new(ShellValue::Dynamic(DynamicVariable::ShellOpts));
     shellopts_var.set_readonly();
     shell.env_mut().set_global("SHELLOPTS", shellopts_var)?;
 
@@ -472,10 +348,7 @@ pub(crate) fn init_well_known_vars(
     shell.env_mut().set_global("SHLVL", shlvl_var)?;
 
     // SRANDOM
-    let mut random_var = ShellVariable::new(ShellValue::Dynamic {
-        getter: get_srandom_value,
-        setter: |_| (),
-    });
+    let mut random_var = ShellVariable::new(ShellValue::Dynamic(DynamicVariable::SRandom));
     random_var.treat_as_integer();
     shell.env_mut().set_global("SRANDOM", random_var)?;
 
@@ -523,6 +396,80 @@ pub(crate) fn init_well_known_vars(
     Ok(())
 }
 
+impl DynamicVariable {
+    pub(crate) fn resolve(self, shell: &Shell) -> ShellValue {
+        match self {
+            Self::BashOpts => shell.options().shopt_optstr().into(),
+            Self::BashAliases => {
+                let values = variables::ArrayLiteral(
+                    shell
+                        .aliases()
+                        .iter()
+                        .map(|(k, v)| (Some(k.to_owned()), v.to_owned()))
+                        .collect::<Vec<_>>(),
+                );
+
+                ShellValue::associative_array_from_literals(values)
+                    .unwrap_or_else(|_error| ShellValue::AssociativeArray(BTreeMap::new()))
+            }
+            Self::BashArgc => get_bash_argc_value(shell),
+            Self::BashArgv => get_bash_argv_value(shell),
+            Self::BashArgv0 => {
+                let argv0 = shell.current_shell_name().unwrap_or_default();
+                argv0.to_string().into()
+            }
+            Self::BashCmds => shell
+                .program_location_cache()
+                .to_value()
+                .unwrap_or_else(|_error| ShellValue::AssociativeArray(BTreeMap::new())),
+            Self::BashLineno => get_bash_lineno_value(shell),
+            Self::BashSource => get_bash_source_value(shell),
+            Self::BashSubshell => shell.depth().to_string().into(),
+            Self::DirStack => shell
+                .directory_stack()
+                .iter()
+                .map(|p| p.to_string_lossy().to_string())
+                .collect::<Vec<_>>()
+                .into(),
+            Self::EpochRealtime => {
+                let now = SystemTime::now();
+                let since_epoch = now.duration_since(UNIX_EPOCH).unwrap_or_default();
+                since_epoch.as_secs_f64().to_string().into()
+            }
+            Self::EpochSeconds => {
+                let now = SystemTime::now();
+                let since_epoch = now.duration_since(UNIX_EPOCH).unwrap_or_default();
+                since_epoch.as_secs().to_string().into()
+            }
+            Self::FuncName => get_funcname_value(shell),
+            Self::Groups => {
+                let groups = get_current_user_gids();
+                ShellValue::indexed_array_from_strings(
+                    groups.into_iter().map(|gid| gid.to_string()),
+                )
+            }
+            Self::HistCmd => shell
+                .history()
+                .map_or_else(|| "0".into(), |h| h.count().to_string().into()),
+            Self::LineNo => get_lineno(shell).to_string().into(),
+            Self::PipeStatus => ShellValue::indexed_array_from_strings(
+                shell.last_pipeline_statuses().iter().map(|s| s.to_string()),
+            ),
+            Self::Random => get_random_value(),
+            Self::Seconds => {
+                let now = SystemTime::now();
+                let since_last = now
+                    .duration_since(shell.last_stopwatch_time())
+                    .unwrap_or_default();
+                let total_seconds = since_last.as_secs() + u64::from(shell.last_stopwatch_offset());
+                total_seconds.to_string().into()
+            }
+            Self::ShellOpts => shell.options().seto_optstr().into(),
+            Self::SRandom => get_srandom_value(),
+        }
+    }
+}
+
 /// Returns a list of the current user's group IDs, with the effective GID at the front.
 fn get_current_user_gids() -> Vec<u32> {
     let mut groups = sys::users::get_user_group_ids().unwrap_or_default();
@@ -541,12 +488,12 @@ fn get_current_user_gids() -> Vec<u32> {
     groups
 }
 
-fn get_random_value(_shell: &dyn ShellState) -> ShellValue {
+fn get_random_value() -> ShellValue {
     let num = next_random_u64() % 32_768;
     num.to_string().into()
 }
 
-fn get_srandom_value(_shell: &dyn ShellState) -> ShellValue {
+fn get_srandom_value() -> ShellValue {
     let num = next_random_u64() as u32;
     num.to_string().into()
 }
@@ -582,7 +529,7 @@ fn initial_random_seed() -> u64 {
     (time_seed ^ u64::from(std::process::id())).max(1)
 }
 
-fn get_funcname_value(shell: &dyn ShellState) -> variables::ShellValue {
+fn get_funcname_value(shell: &Shell) -> variables::ShellValue {
     let stack = shell.call_stack();
 
     if stack.iter_function_calls().next().is_none() {
@@ -616,7 +563,7 @@ fn get_funcname_value(shell: &dyn ShellState) -> variables::ShellValue {
     }
 }
 
-fn get_bash_lineno_value(shell: &dyn ShellState) -> variables::ShellValue {
+fn get_bash_lineno_value(shell: &Shell) -> variables::ShellValue {
     let stack = shell.call_stack();
 
     // BASH_LINENO[$i] contains the line number where FUNCNAME[$i] was called
@@ -653,7 +600,7 @@ fn get_bash_lineno_value(shell: &dyn ShellState) -> variables::ShellValue {
     }
 }
 
-fn get_bash_source_value(shell: &dyn ShellState) -> variables::ShellValue {
+fn get_bash_source_value(shell: &Shell) -> variables::ShellValue {
     let stack = shell.call_stack();
 
     if stack.iter_function_calls().next().is_none() {
@@ -691,7 +638,7 @@ fn get_bash_source_value(shell: &dyn ShellState) -> variables::ShellValue {
     }
 }
 
-fn get_bash_argc_value(shell: &dyn ShellState) -> variables::ShellValue {
+fn get_bash_argc_value(shell: &Shell) -> variables::ShellValue {
     if !shell.options().enable_debugger {
         return ShellValue::indexed_array_from_strs(&[]);
     }
@@ -713,7 +660,7 @@ fn get_bash_argc_value(shell: &dyn ShellState) -> variables::ShellValue {
         .into()
 }
 
-fn get_bash_argv_value(shell: &dyn ShellState) -> variables::ShellValue {
+fn get_bash_argv_value(shell: &Shell) -> variables::ShellValue {
     if !shell.options().enable_debugger {
         return ShellValue::indexed_array_from_strs(&[]);
     }
@@ -742,7 +689,7 @@ fn get_bash_argv_value(shell: &dyn ShellState) -> variables::ShellValue {
     argv.into()
 }
 
-fn get_lineno(shell: &dyn ShellState) -> usize {
+fn get_lineno(shell: &Shell) -> usize {
     shell
         .call_stack()
         .current_frame()

@@ -124,9 +124,9 @@ impl builtins::Command for DeclareCommand {
 
     type Error = crate::engine::Error;
 
-    async fn execute<SE: crate::engine::ShellExtensions>(
+    async fn execute(
         &self,
-        mut context: crate::engine::ExecutionContext<'_, SE>,
+        mut context: crate::engine::ExecutionContext<'_>,
     ) -> Result<crate::engine::ExecutionResult, Self::Error> {
         let verb = match context.command_name.as_str() {
             "local" => DeclareVerb::Local,
@@ -177,7 +177,7 @@ impl builtins::Command for DeclareCommand {
 impl DeclareCommand {
     fn try_display_declaration(
         &self,
-        context: &crate::engine::ExecutionContext<'_, impl crate::engine::ShellExtensions>,
+        context: &crate::engine::ExecutionContext<'_>,
         declaration: &crate::engine::CommandArg,
         verb: DeclareVerb,
     ) -> Result<bool, crate::engine::Error> {
@@ -239,7 +239,7 @@ impl DeclareCommand {
 
     fn process_declaration(
         &self,
-        context: &mut crate::engine::ExecutionContext<'_, impl crate::engine::ShellExtensions>,
+        context: &mut crate::engine::ExecutionContext<'_>,
         declaration: &crate::engine::CommandArg,
         verb: DeclareVerb,
     ) -> Result<bool, crate::engine::Error> {
@@ -414,7 +414,7 @@ impl DeclareCommand {
 
     fn display_matching_env_declarations(
         &self,
-        context: &crate::engine::ExecutionContext<'_, impl crate::engine::ShellExtensions>,
+        context: &crate::engine::ExecutionContext<'_>,
         verb: DeclareVerb,
     ) -> Result<(), crate::engine::Error> {
         //
@@ -532,7 +532,7 @@ impl DeclareCommand {
 
     fn display_matching_functions(
         &self,
-        context: &crate::engine::ExecutionContext<'_, impl crate::engine::ShellExtensions>,
+        context: &crate::engine::ExecutionContext<'_>,
     ) -> Result<(), crate::engine::Error> {
         for (name, registration) in context.shell.funcs().iter().sorted_by_key(|v| v.0) {
             if self.function_names_only {

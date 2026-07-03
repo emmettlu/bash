@@ -3,9 +3,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::engine::{builtins, extensions};
+use crate::engine::builtins;
 
-impl<SE: extensions::ShellExtensions> crate::engine::Shell<SE> {
+impl crate::engine::Shell {
     /// Register a builtin to the shell's environment, replacing any existing
     /// registration with the same name.
     ///
@@ -16,7 +16,7 @@ impl<SE: extensions::ShellExtensions> crate::engine::Shell<SE> {
     pub fn register_builtin<S: Into<String>>(
         &mut self,
         name: S,
-        registration: builtins::Registration<SE>,
+        registration: builtins::Registration,
     ) {
         Arc::make_mut(&mut self.builtins).insert(name.into(), registration);
     }
@@ -30,7 +30,7 @@ impl<SE: extensions::ShellExtensions> crate::engine::Shell<SE> {
     pub fn register_builtin_if_unset<S: Into<String>>(
         &mut self,
         name: S,
-        registration: builtins::Registration<SE>,
+        registration: builtins::Registration,
     ) {
         Arc::make_mut(&mut self.builtins)
             .entry(name.into())
@@ -43,12 +43,12 @@ impl<SE: extensions::ShellExtensions> crate::engine::Shell<SE> {
     /// # Arguments
     ///
     /// * `name` - The name of the builtin to lookup.
-    pub fn builtin_mut(&mut self, name: &str) -> Option<&mut builtins::Registration<SE>> {
+    pub fn builtin_mut(&mut self, name: &str) -> Option<&mut builtins::Registration> {
         Arc::make_mut(&mut self.builtins).get_mut(name)
     }
 
     /// Returns the registered builtins for the shell.
-    pub fn builtins(&self) -> &HashMap<String, builtins::Registration<SE>> {
+    pub fn builtins(&self) -> &HashMap<String, builtins::Registration> {
         self.builtins.as_ref()
     }
 }

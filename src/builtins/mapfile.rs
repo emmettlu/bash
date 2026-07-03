@@ -2,9 +2,7 @@ use std::io::{Read, Write};
 
 use clap::Parser;
 
-use crate::engine::{
-    ErrorKind, ExecutionResult, builtins, env, error, variables,
-};
+use crate::engine::{ErrorKind, ExecutionResult, builtins, env, error, variables};
 
 /// Read lines from standard input into an indexed array variable.
 #[derive(Parser)]
@@ -49,9 +47,9 @@ pub(crate) struct MapFileCommand {
 impl builtins::Command for MapFileCommand {
     type Error = crate::engine::Error;
 
-    async fn execute<SE: crate::engine::ShellExtensions>(
+    async fn execute(
         &self,
-        context: crate::engine::ExecutionContext<'_, SE>,
+        context: crate::engine::ExecutionContext<'_>,
     ) -> Result<crate::engine::ExecutionResult, Self::Error> {
         if self.callback_group_size != 5000 || self.callback.is_some() {
             return error::unimp("mapfile -C/-c is not yet implemented");

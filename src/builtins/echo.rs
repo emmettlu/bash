@@ -41,9 +41,9 @@ impl builtins::Command for EchoCommand {
         Ok(this)
     }
 
-    async fn execute<SE: crate::engine::ShellExtensions>(
+    async fn execute(
         &self,
-        context: crate::engine::ExecutionContext<'_, SE>,
+        context: crate::engine::ExecutionContext<'_>,
     ) -> Result<crate::engine::ExecutionResult, Self::Error> {
         let mut trailing_newline = !self.no_trailing_newline;
         let mut stdout = context.stdout();

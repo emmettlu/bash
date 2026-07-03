@@ -41,9 +41,9 @@ impl builtins::DeclarationCommand for ExportCommand {
 impl builtins::Command for ExportCommand {
     type Error = crate::engine::Error;
 
-    async fn execute<SE: crate::engine::ShellExtensions>(
+    async fn execute(
         &self,
-        mut context: crate::engine::ExecutionContext<'_, SE>,
+        mut context: crate::engine::ExecutionContext<'_>,
     ) -> Result<crate::engine::ExecutionResult, Self::Error> {
         if self.declarations.is_empty() {
             display_all_exported_vars(&context)?;
@@ -65,7 +65,7 @@ impl builtins::Command for ExportCommand {
 impl ExportCommand {
     fn process_decl(
         &self,
-        context: &mut crate::engine::ExecutionContext<'_, impl crate::engine::ShellExtensions>,
+        context: &mut crate::engine::ExecutionContext<'_>,
         decl: &crate::engine::CommandArg,
     ) -> Result<ExecutionResult, crate::engine::Error> {
         match decl {
@@ -140,7 +140,7 @@ impl ExportCommand {
 }
 
 fn display_all_exported_vars(
-    context: &crate::engine::ExecutionContext<'_, impl crate::engine::ShellExtensions>,
+    context: &crate::engine::ExecutionContext<'_>,
 ) -> Result<(), crate::engine::Error> {
     // Enumerate variables, sorted by key.
     for (name, variable) in context.shell.env().iter().sorted_by_key(|v| v.0) {

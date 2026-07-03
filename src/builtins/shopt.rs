@@ -35,9 +35,9 @@ impl builtins::Command for ShoptCommand {
     type Error = crate::engine::Error;
 
     #[allow(clippy::too_many_lines)]
-    async fn execute<SE: crate::engine::ShellExtensions>(
+    async fn execute(
         &self,
-        context: crate::engine::ExecutionContext<'_, SE>,
+        context: crate::engine::ExecutionContext<'_>,
     ) -> Result<crate::engine::ExecutionResult, Self::Error> {
         if self.set && self.unset {
             writeln!(

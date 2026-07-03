@@ -1,30 +1,16 @@
 //! Definition of shell behavior traits and defaults.
 
-use crate::engine::{Shell, error, extensions};
-
-/// Shell 行为扩展 trait, 是 `ErrorFormatter` 的 supertrait 别名.
-/// 所有实现了 `ErrorFormatter` 的类型自动满足此 trait.
-pub trait ShellExtensions: ErrorFormatter {}
-
-/// 对所有 ErrorFormatter 实现提供 ShellExtensions 的自动 blanket 实现.
-impl<T: ErrorFormatter> ShellExtensions for T {}
-
-/// 默认的 shell 扩展实现, 等同于 `DefaultErrorFormatter`.
-pub type DefaultShellExtensions = DefaultErrorFormatter;
+use crate::engine::{Shell, error};
 
 /// 定义 shell 错误格式化行为的 trait.
-pub trait ErrorFormatter: Clone + Default + Send + Sync + 'static {
+pub trait ErrorFormatter: Send + Sync + 'static {
     /// 在给定 shell 上下文中格式化错误.
     ///
     /// # Arguments
     ///
     /// * `error` - 要格式化的错误
     /// * `shell` - 发生错误的 shell 上下文
-    fn format_error(
-        &self,
-        error: &error::Error,
-        shell: &Shell<impl extensions::ShellExtensions>,
-    ) -> String {
+    fn format_error(&self, error: &error::Error, shell: &Shell) -> String {
         let _ = shell;
         std::format!("error: {error:#}\n")
     }

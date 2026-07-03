@@ -10,9 +10,9 @@ pub(crate) struct TimesCommand {}
 impl builtins::Command for TimesCommand {
     type Error = crate::engine::Error;
 
-    async fn execute<SE: crate::engine::ShellExtensions>(
+    async fn execute(
         &self,
-        context: crate::engine::ExecutionContext<'_, SE>,
+        context: crate::engine::ExecutionContext<'_>,
     ) -> Result<ExecutionResult, Self::Error> {
         let (self_user, self_system) =
             crate::engine::sys::resource::get_self_user_and_system_time()?;

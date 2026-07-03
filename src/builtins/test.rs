@@ -1,9 +1,7 @@
 use clap::Parser;
 use std::io::Write;
 
-use crate::engine::{
-    ErrorKind, ExecutionParameters, ExecutionResult, Shell, builtins, tests,
-};
+use crate::engine::{ErrorKind, ExecutionParameters, ExecutionResult, Shell, builtins, tests};
 
 /// Evaluate test expression.
 #[derive(Parser)]
@@ -30,9 +28,9 @@ impl builtins::Command for TestCommand {
         Ok(this)
     }
 
-    async fn execute<SE: crate::engine::ShellExtensions>(
+    async fn execute(
         &self,
-        context: crate::engine::ExecutionContext<'_, SE>,
+        context: crate::engine::ExecutionContext<'_>,
     ) -> Result<crate::engine::ExecutionResult, Self::Error> {
         let mut args = self.args.as_slice();
 
@@ -57,7 +55,7 @@ impl builtins::Command for TestCommand {
 }
 
 fn execute_test(
-    shell: &mut Shell<impl crate::engine::ShellExtensions>,
+    shell: &mut Shell,
     params: &ExecutionParameters,
     args: &[String],
 ) -> Result<bool, crate::engine::Error> {

@@ -16,8 +16,8 @@ impl builtins::SimpleCommand for FalseCommand {
         }
     }
 
-    fn execute<SE: crate::engine::ShellExtensions, I: Iterator<Item = S>, S: AsRef<str>>(
-        _context: crate::engine::ExecutionContext<'_, SE>,
+    fn execute<I: Iterator<Item = S>, S: AsRef<str>>(
+        _context: crate::engine::ExecutionContext<'_>,
         _args: I,
     ) -> Result<ExecutionResult, crate::engine::Error> {
         Ok(ExecutionResult::general_error())

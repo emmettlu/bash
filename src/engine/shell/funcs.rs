@@ -1,10 +1,10 @@
 //! Function support for shells.
 
 use crate::engine::{
-    ExecutionParameters, commands, error, extensions, functions, results::ExecutionWaitResult,
+    ExecutionParameters, commands, error, functions, results::ExecutionWaitResult,
 };
 
-impl<SE: extensions::ShellExtensions> crate::engine::Shell<SE> {
+impl crate::engine::Shell {
     /// Returns the function definition environment for this shell.
     pub const fn funcs(&self) -> &functions::FunctionEnv {
         &self.funcs

@@ -5,8 +5,8 @@ use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fmt::{Display, Write};
 
-use crate::engine::shell::{Shell, ShellState};
-use crate::engine::{error, escape, extensions};
+use crate::engine::shell::Shell;
+use crate::engine::{error, escape};
 
 /// A shell variable.
 #[derive(Clone, Debug)]
@@ -308,7 +308,7 @@ impl ShellVariable {
                 },
                 ShellValue::Unset(_) => unreachable!("covered in conversion above"),
                 // TODO(dynamic): implement appending to dynamic vars
-                ShellValue::Dynamic { .. } => Ok(()),
+                ShellValue::Dynamic(_) => Ok(()),
             }
         } else {
             match (&self.value, value) {
@@ -332,7 +332,7 @@ impl ShellVariable {
                         ShellValueUnsetType::IndexedArray | ShellValueUnsetType::Untyped,
                     )
                     | ShellValue::String(_)
-                    | ShellValue::Dynamic { .. },
+                    | ShellValue::Dynamic(_),
                     ShellValueLiteral::Array(literal_values),
                 ) => {
                     self.value = ShellValue::indexed_array_from_literals(literal_values);
@@ -352,7 +352,7 @@ impl ShellVariable {
 
                 // Handle updates to dynamic values; for now we just drop them.
                 // TODO(dynamic): Allow updates to dynamic values
-                (ShellValue::Dynamic { .. }, _) => Ok(()),
+                (ShellValue::Dynamic(_), _) => Ok(()),
 
                 // Assign a scalar value to a scalar or unset (and untyped) variable.
                 (ShellValue::String(_) | ShellValue::Unset(_), ShellValueLiteral::Scalar(s)) => {
@@ -512,7 +512,7 @@ impl ShellVariable {
                 let key = get_key_for_indexed_array(values, index)?;
                 Ok(values.remove(&key).is_some())
             }
-            ShellValue::Dynamic { .. } => Ok(false),
+            ShellValue::Dynamic(_) => Ok(false),
         }
     }
 
@@ -521,16 +521,16 @@ impl ShellVariable {
     /// # Arguments
     ///
     /// * `shell` - The shell in which the variable is being resolved.
-    pub fn resolve_value(&self, shell: &Shell<impl extensions::ShellExtensions>) -> ShellValue {
+    pub fn resolve_value(&self, shell: &Shell) -> ShellValue {
         // N.B. We do *not* specially handle a dynamic value that resolves to a dynamic value.
         match &self.value {
-            ShellValue::Dynamic { getter, .. } => getter(shell),
+            ShellValue::Dynamic(dynamic) => dynamic.resolve(shell),
             _ => self.value.clone(),
         }
     }
 
     /// Returns the canonical attribute flag string for this variable.
-    pub fn attribute_flags(&self, shell: &Shell<impl extensions::ShellExtensions>) -> String {
+    pub fn attribute_flags(&self, shell: &Shell) -> String {
         let value = self.resolve_value(shell);
 
         let mut result = String::new();
@@ -586,8 +586,31 @@ impl ShellVariable {
     }
 }
 
-type DynamicValueGetter = fn(&dyn ShellState) -> ShellValue;
-type DynamicValueSetter = fn(&dyn ShellState) -> ();
+/// 可动态解析的 shell 变量.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DynamicVariable {
+    BashOpts,
+    BashAliases,
+    BashArgc,
+    BashArgv,
+    BashArgv0,
+    BashCmds,
+    BashLineno,
+    BashSource,
+    BashSubshell,
+    DirStack,
+    EpochRealtime,
+    EpochSeconds,
+    FuncName,
+    Groups,
+    HistCmd,
+    LineNo,
+    PipeStatus,
+    Random,
+    Seconds,
+    ShellOpts,
+    SRandom,
+}
 
 /// A shell value.
 #[derive(Clone, Debug)]
@@ -601,12 +624,7 @@ pub enum ShellValue {
     /// An indexed array.
     IndexedArray(BTreeMap<u64, String>),
     /// A value that is dynamically computed.
-    Dynamic {
-        /// Function that can query the value.
-        getter: DynamicValueGetter,
-        /// Function that receives value update requests.
-        setter: DynamicValueSetter,
-    },
+    Dynamic(DynamicVariable),
 }
 
 /// The type of an unset shell value.
@@ -820,11 +838,7 @@ impl ShellValue {
     /// # Arguments
     ///
     /// * `style` - The style to use for formatting the value.
-    pub fn format(
-        &self,
-        style: FormatStyle,
-        shell: &Shell<impl extensions::ShellExtensions>,
-    ) -> Result<Cow<'_, str>, error::Error> {
+    pub fn format(&self, style: FormatStyle, shell: &Shell) -> Result<Cow<'_, str>, error::Error> {
         match self {
             Self::Unset(_) => Ok("".into()),
             Self::String(s) => match style {
@@ -872,8 +886,8 @@ impl ShellValue {
                 result.push(')');
                 Ok(result.into())
             }
-            Self::Dynamic { getter, .. } => {
-                let dynamic_value = getter(shell);
+            Self::Dynamic(dynamic) => {
+                let dynamic_value = dynamic.resolve(shell);
                 let result = dynamic_value.format(style, shell)?.to_string();
                 Ok(result.into())
             }
@@ -885,11 +899,7 @@ impl ShellValue {
     /// # Arguments
     ///
     /// * `index` - The index at which to retrieve the value.
-    pub fn get_at(
-        &self,
-        index: &str,
-        shell: &Shell<impl extensions::ShellExtensions>,
-    ) -> Result<Option<Cow<'_, str>>, error::Error> {
+    pub fn get_at(&self, index: &str, shell: &Shell) -> Result<Option<Cow<'_, str>>, error::Error> {
         match self {
             Self::Unset(_) => Ok(None),
             Self::String(s) => {
@@ -906,8 +916,8 @@ impl ShellValue {
                 let key = get_key_for_indexed_array(values, index)?;
                 Ok(values.get(&key).map(|s| Cow::Borrowed(s.as_str())))
             }
-            Self::Dynamic { getter, .. } => {
-                let dynamic_value = getter(shell);
+            Self::Dynamic(dynamic) => {
+                let dynamic_value = dynamic.resolve(shell);
                 let result = dynamic_value.get_at(index, shell)?;
                 Ok(result.map(|s| s.to_string().into()))
             }
@@ -915,29 +925,29 @@ impl ShellValue {
     }
 
     /// Returns the keys of the elements in this variable.
-    pub fn element_keys(&self, shell: &Shell<impl extensions::ShellExtensions>) -> Vec<String> {
+    pub fn element_keys(&self, shell: &Shell) -> Vec<String> {
         match self {
             Self::Unset(_) => vec![],
             Self::String(_) => vec!["0".to_owned()],
             Self::AssociativeArray(array) => array.keys().map(|k| k.to_owned()).collect(),
             Self::IndexedArray(array) => array.keys().map(|k| k.to_string()).collect(),
-            Self::Dynamic { getter, .. } => getter(shell).element_keys(shell),
+            Self::Dynamic(dynamic) => dynamic.resolve(shell).element_keys(shell),
         }
     }
 
     /// Returns the values of the elements in this variable.
-    pub fn element_values(&self, shell: &Shell<impl extensions::ShellExtensions>) -> Vec<String> {
+    pub fn element_values(&self, shell: &Shell) -> Vec<String> {
         match self {
             Self::Unset(_) => vec![],
             Self::String(s) => vec![s.to_owned()],
             Self::AssociativeArray(array) => array.values().map(|v| v.to_owned()).collect(),
             Self::IndexedArray(array) => array.values().map(|v| v.to_owned()).collect(),
-            Self::Dynamic { getter, .. } => getter(shell).element_values(shell),
+            Self::Dynamic(dynamic) => dynamic.resolve(shell).element_values(shell),
         }
     }
 
     /// Converts this value to a string.
-    pub fn to_cow_str(&self, shell: &Shell<impl extensions::ShellExtensions>) -> Cow<'_, str> {
+    pub fn to_cow_str(&self, shell: &Shell) -> Cow<'_, str> {
         self.try_get_cow_str(shell).unwrap_or(Cow::Borrowed(""))
     }
 
@@ -948,13 +958,10 @@ impl ShellValue {
 
     /// Tries to convert this value to a string; returns `None` if the value is unset
     /// or otherwise doesn't exist.
-    pub fn try_get_cow_str(
-        &self,
-        shell: &Shell<impl extensions::ShellExtensions>,
-    ) -> Option<Cow<'_, str>> {
+    pub fn try_get_cow_str(&self, shell: &Shell) -> Option<Cow<'_, str>> {
         match self {
-            Self::Dynamic { getter, .. } => {
-                let dynamic_value = getter(shell);
+            Self::Dynamic(dynamic) => {
+                let dynamic_value = dynamic.resolve(shell);
                 dynamic_value
                     .try_get_cow_str(shell)
                     .map(|s| s.to_string().into())
@@ -969,7 +976,7 @@ impl ShellValue {
             Self::String(s) => Some(Cow::Borrowed(s.as_str())),
             Self::AssociativeArray(values) => values.get("0").map(|s| Cow::Borrowed(s.as_str())),
             Self::IndexedArray(values) => values.get(&0).map(|s| Cow::Borrowed(s.as_str())),
-            Self::Dynamic { .. } => None,
+            Self::Dynamic(_) => None,
         }
     }
 
@@ -981,7 +988,7 @@ impl ShellValue {
     pub fn to_assignable_str(
         &self,
         index: Option<&str>,
-        shell: &Shell<impl extensions::ShellExtensions>,
+        shell: &Shell,
     ) -> Result<String, error::Error> {
         match self {
             Self::Unset(_) => Ok(String::new()),
@@ -1003,7 +1010,7 @@ impl ShellValue {
                     Ok(self.format(FormatStyle::DeclarePrint, shell)?.into_owned())
                 }
             }
-            Self::Dynamic { getter, .. } => getter(shell).to_assignable_str(index, shell),
+            Self::Dynamic(dynamic) => dynamic.resolve(shell).to_assignable_str(index, shell),
         }
     }
 }

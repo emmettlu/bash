@@ -21,9 +21,9 @@ pub(crate) struct HelpCommand {
 impl builtins::Command for HelpCommand {
     type Error = crate::engine::Error;
 
-    async fn execute<SE: crate::engine::ShellExtensions>(
+    async fn execute(
         &self,
-        context: crate::engine::ExecutionContext<'_, SE>,
+        context: crate::engine::ExecutionContext<'_>,
     ) -> Result<crate::engine::ExecutionResult, Self::Error> {
         if self.topic_patterns.is_empty() {
             Self::display_general_help(&context)?;
@@ -39,7 +39,7 @@ impl builtins::Command for HelpCommand {
 
 impl HelpCommand {
     fn display_general_help(
-        context: &crate::engine::ExecutionContext<'_, impl crate::engine::ShellExtensions>,
+        context: &crate::engine::ExecutionContext<'_>,
     ) -> Result<(), crate::engine::Error> {
         const COLUMN_COUNT: usize = 3;
 
@@ -71,7 +71,7 @@ impl HelpCommand {
 
     fn display_help_for_topic_pattern(
         &self,
-        context: &crate::engine::ExecutionContext<'_, impl crate::engine::ShellExtensions>,
+        context: &crate::engine::ExecutionContext<'_>,
         topic_pattern: &str,
     ) -> Result<(), crate::engine::Error> {
         let pattern = crate::engine::patterns::Pattern::from(topic_pattern)
@@ -97,11 +97,11 @@ impl HelpCommand {
         Ok(())
     }
 
-    fn display_help_for_builtin<SE: crate::engine::ShellExtensions>(
+    fn display_help_for_builtin(
         &self,
-        context: &crate::engine::ExecutionContext<'_, SE>,
+        context: &crate::engine::ExecutionContext<'_>,
         name: &str,
-        registration: &builtins::Registration<SE>,
+        registration: &builtins::Registration,
     ) -> Result<(), crate::engine::Error> {
         let content_type = if self.short_description {
             builtins::ContentType::ShortDescription
@@ -131,9 +131,9 @@ impl HelpCommand {
     }
 }
 
-fn get_builtins_sorted_by_name<'a, SE: crate::engine::ShellExtensions>(
-    context: &'a crate::engine::ExecutionContext<'_, SE>,
-) -> Vec<(&'a String, &'a builtins::Registration<SE>)> {
+fn get_builtins_sorted_by_name<'a>(
+    context: &'a crate::engine::ExecutionContext<'_>,
+) -> Vec<(&'a String, &'a builtins::Registration)> {
     context
         .shell
         .builtins()

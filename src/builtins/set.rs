@@ -189,9 +189,9 @@ impl builtins::Command for SetCommand {
 
     #[expect(clippy::too_many_lines)]
     #[allow(clippy::useless_let_if_seq)]
-    async fn execute<SE: crate::engine::ShellExtensions>(
+    async fn execute(
         &self,
-        context: crate::engine::ExecutionContext<'_, SE>,
+        context: crate::engine::ExecutionContext<'_>,
     ) -> Result<ExecutionResult, Self::Error> {
         let mut result = ExecutionResult::success();
 
@@ -413,9 +413,7 @@ impl builtins::Command for SetCommand {
     }
 }
 
-fn display_all(
-    context: &crate::engine::ExecutionContext<'_, impl crate::engine::ShellExtensions>,
-) -> Result<(), crate::engine::Error> {
+fn display_all(context: &crate::engine::ExecutionContext<'_>) -> Result<(), crate::engine::Error> {
     // Display variables.
     for (name, var) in context.shell.env().iter().sorted_by_key(|v| v.0) {
         if !var.is_enumerable() {
@@ -426,7 +424,7 @@ fn display_all(
         // of bash is not quite clear. We've empirically found that some
         // special variables don't get displayed until they're observed
         // at least once.
-        if matches!(var.value(), variables::ShellValue::Dynamic { .. }) {
+        if matches!(var.value(), variables::ShellValue::Dynamic(_)) {
             continue;
         }
 

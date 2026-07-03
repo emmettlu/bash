@@ -12,7 +12,7 @@ use crate::engine::{
     variables,
 };
 
-impl<SE: crate::engine::extensions::ShellExtensions> crate::engine::Shell<SE> {
+impl crate::engine::Shell {
     /// Sets the shell's current working directory to the given path.
     ///
     /// # Arguments

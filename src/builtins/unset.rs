@@ -39,9 +39,9 @@ impl UnsetNameInterpretation {
 impl builtins::Command for UnsetCommand {
     type Error = crate::engine::Error;
 
-    async fn execute<SE: crate::engine::ShellExtensions>(
+    async fn execute(
         &self,
-        context: crate::engine::ExecutionContext<'_, SE>,
+        context: crate::engine::ExecutionContext<'_>,
     ) -> Result<crate::engine::ExecutionResult, Self::Error> {
         //
         // TODO(nameref): implement nameref
@@ -94,7 +94,7 @@ impl builtins::Command for UnsetCommand {
 }
 
 fn unset_array_index(
-    shell: &mut Shell<impl crate::engine::ShellExtensions>,
+    shell: &mut Shell,
     name: &str,
     index: &str,
 ) -> Result<bool, crate::engine::Error> {

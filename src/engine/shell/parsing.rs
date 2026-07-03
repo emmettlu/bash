@@ -9,9 +9,9 @@ thread_local! {
         RefCell::new(crate::engine::cache::FixedCache::new(64));
 }
 
-use crate::engine::{Shell, extensions, trace_categories};
+use crate::engine::{Shell, trace_categories};
 
-impl<SE: extensions::ShellExtensions> Shell<SE> {
+impl Shell {
     /// Parses the given reader as a shell program, returning the resulting Abstract Syntax Tree
     /// for the program.
     pub fn parse<R: Read>(

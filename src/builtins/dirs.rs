@@ -51,9 +51,9 @@ pub(crate) struct DirsCommand {
 impl builtins::Command for DirsCommand {
     type Error = crate::engine::Error;
 
-    async fn execute<SE: crate::engine::ShellExtensions>(
+    async fn execute(
         &self,
-        context: crate::engine::ExecutionContext<'_, SE>,
+        context: crate::engine::ExecutionContext<'_>,
     ) -> Result<crate::engine::ExecutionResult, Self::Error> {
         if self.clear {
             context.shell.directory_stack_mut().clear();

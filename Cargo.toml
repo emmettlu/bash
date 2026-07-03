@@ -19,14 +19,13 @@ compio = { version = "0", default-features = false, features = [
   "process",
   "runtime",
   "signal",
-  "time"
+  "time",
 ] }
 fancy-regex = "0"
 futures = "0"
 git-version = "0"
 indenter = "0"
 indexmap = "2"
-inherent = "1"
 itertools = "0"
 
 normalize-path = "0"
@@ -36,16 +35,12 @@ serde = { version = "1", features = ["derive"] }
 strum = "0"
 strum_macros = "0"
 thiserror = "2"
-toml = { version = "1", default-features = false, features = [
-  "parse",
-  "serde",
-  "std"
-] }
+toml = { version = "1", default-features = false, features = ["parse", "serde", "std"] }
 tracing = { version = "0", default-features = false, features = ["std"] }
 tracing-subscriber = { version = "0", default-features = false, features = [
   "fmt",
   "registry",
-  "std"
+  "std",
 ] }
 utf8-chars = "3"
 windows-sys = { version = "0", features = [
@@ -53,7 +48,7 @@ windows-sys = { version = "0", features = [
   "Win32_Security",
   "Win32_System_Console",
   "Win32_System_Threading",
-  "Win32_UI_Input_KeyboardAndMouse"
+  "Win32_UI_Input_KeyboardAndMouse",
 ] }
 
 [dev-dependencies]

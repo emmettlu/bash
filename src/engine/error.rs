@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use crate::engine::{Shell, ShellFd, extensions, results, sys};
+use crate::engine::{Shell, ShellFd, results, sys};
 
 /// Unified error type for this crate. Contains just a kind for now,
 /// but will be extended later with additional context.
@@ -422,10 +422,7 @@ impl Error {
     /// # Arguments
     ///
     /// * `shell` - The shell instance, used to check interactive mode and script call stack.
-    pub fn to_control_flow(
-        &self,
-        shell: &Shell<impl extensions::ShellExtensions>,
-    ) -> results::ExecutionControlFlow {
+    pub fn to_control_flow(&self, shell: &Shell) -> results::ExecutionControlFlow {
         if self.is_fatal() && !shell.options().interactive {
             results::ExecutionControlFlow::ExitShell
         } else {
@@ -438,10 +435,7 @@ impl Error {
     /// # Arguments
     ///
     /// * `shell` - The shell instance, used to determine control flow.
-    pub fn into_result(
-        self,
-        shell: &Shell<impl extensions::ShellExtensions>,
-    ) -> results::ExecutionResult {
+    pub fn into_result(self, shell: &Shell) -> results::ExecutionResult {
         let next_control_flow = self.to_control_flow(shell);
         let exit_code = u8::from(&self);
 

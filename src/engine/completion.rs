@@ -9,8 +9,7 @@ use std::{
 use strum::IntoEnumIterator;
 
 use crate::engine::{
-    Shell, commands, env, error, escape, expansion, extensions, interfaces, jobs, namedoptions,
-    patterns,
+    Shell, commands, env, error, escape, expansion, interfaces, jobs, namedoptions, patterns,
     sys::{self, users},
     trace_categories, traps,
     variables::{self, ShellValueLiteral},
@@ -287,7 +286,7 @@ impl Spec {
     #[expect(clippy::too_many_lines)]
     pub async fn get_completions(
         &self,
-        shell: &mut Shell<impl extensions::ShellExtensions>,
+        shell: &mut Shell,
         context: &Context<'_>,
     ) -> Result<Answer, crate::engine::error::Error> {
         // Store the current options in the shell; this is needed since the compopt
@@ -448,7 +447,7 @@ impl Spec {
     #[expect(clippy::too_many_lines)]
     async fn generate_action_completions(
         &self,
-        shell: &mut Shell<impl extensions::ShellExtensions>,
+        shell: &mut Shell,
         context: &Context<'_>,
     ) -> Result<Vec<String>, error::Error> {
         let mut candidates = Vec::new();
@@ -647,7 +646,7 @@ impl Spec {
 
     async fn call_completion_command(
         &self,
-        shell: &Shell<impl extensions::ShellExtensions>,
+        shell: &Shell,
         command_name: &str,
         context: &Context<'_>,
     ) -> Result<Vec<String>, error::Error> {
@@ -710,7 +709,7 @@ impl Spec {
 
     async fn call_completion_function(
         &self,
-        shell: &mut Shell<impl extensions::ShellExtensions>,
+        shell: &mut Shell,
         function_name: &str,
         context: &Context<'_>,
     ) -> Result<Answer, error::Error> {
@@ -1007,7 +1006,7 @@ impl Config {
     #[expect(clippy::string_slice)]
     pub async fn get_completions(
         &self,
-        shell: &mut Shell<impl extensions::ShellExtensions>,
+        shell: &mut Shell,
         input: &str,
         position: usize,
     ) -> Result<Completions, error::Error> {
@@ -1116,7 +1115,7 @@ impl Config {
     }
 
     fn tokenize_input_for_completion<'a>(
-        shell: &Shell<impl extensions::ShellExtensions>,
+        shell: &Shell,
         input: &'a str,
     ) -> Vec<CompletionToken<'a>> {
         const FALLBACK: &str = " \t\n\"\'@><=;|&(:";
@@ -1128,11 +1127,7 @@ impl Config {
         simple_tokenize_by_delimiters(input, delimiter_str.as_ref())
     }
 
-    async fn get_completions_for_token(
-        &self,
-        shell: &mut Shell<impl extensions::ShellExtensions>,
-        context: Context<'_>,
-    ) -> Answer {
+    async fn get_completions_for_token(&self, shell: &mut Shell, context: Context<'_>) -> Answer {
         // See if we can find a completion spec matching the current command.
         let mut found_spec: Option<&Spec> = None;
 
@@ -1179,7 +1174,7 @@ impl Config {
 }
 
 async fn get_file_completions(
-    shell: &Shell<impl extensions::ShellExtensions>,
+    shell: &Shell,
     token_to_complete: &str,
     must_be_dir: bool,
 ) -> Vec<String> {
@@ -1243,10 +1238,7 @@ async fn get_file_completions(
     completions
 }
 
-fn get_external_command_completions(
-    shell: &mut Shell<impl extensions::ShellExtensions>,
-    prefix: &str,
-) -> Vec<String> {
+fn get_external_command_completions(shell: &mut Shell, prefix: &str) -> Vec<String> {
     shell.find_executable_names_in_path_with_prefix_using_cache(
         prefix,
         shell.options().case_insensitive_pathname_expansion,
@@ -1261,10 +1253,7 @@ fn get_external_command_completions(
 ///
 /// * `shell` - The shell instance to use for variable lookup.
 /// * `token` - The token being completed. May be empty.
-fn try_get_variable_completions(
-    shell: &Shell<impl extensions::ShellExtensions>,
-    token: &str,
-) -> Option<Answer> {
+fn try_get_variable_completions(shell: &Shell, token: &str) -> Option<Answer> {
     // Determine if this is a braced or unbraced variable reference
     let (var_prefix, use_braces) = if let Some(prefix) = token.strip_prefix("${") {
         // For braced: only complete if brace isn't closed yet
@@ -1309,11 +1298,7 @@ fn try_get_variable_completions(
 
 /// Adds command-position completions to candidates.
 /// This includes external commands, builtins, functions, aliases, and keywords.
-fn add_command_completions(
-    shell: &mut Shell<impl extensions::ShellExtensions>,
-    prefix: &str,
-    candidates: &mut Vec<String>,
-) {
+fn add_command_completions(shell: &mut Shell, prefix: &str, candidates: &mut Vec<String>) {
     // Add external commands.
     let mut command_completions = get_external_command_completions(shell, prefix);
     candidates.append(&mut command_completions);
@@ -1347,10 +1332,7 @@ fn add_command_completions(
     }
 }
 
-async fn get_completions_using_basic_lookup(
-    shell: &mut Shell<impl extensions::ShellExtensions>,
-    context: &Context<'_>,
-) -> Answer {
+async fn get_completions_using_basic_lookup(shell: &mut Shell, context: &Context<'_>) -> Answer {
     let token = context.token_to_complete;
 
     // Try variable completion first (e.g., $HO -> $HOME, ${HO -> ${HOME})
@@ -1472,7 +1454,7 @@ fn completion_filter_pattern_matches(
     pattern: &str,
     candidate: &str,
     token_being_completed: &str,
-    shell: &Shell<impl extensions::ShellExtensions>,
+    shell: &Shell,
 ) -> Result<bool, error::Error> {
     let pattern = replace_unescaped_ampersands(pattern, token_being_completed);
 

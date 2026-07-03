@@ -53,13 +53,13 @@ pub mod parser {
 
 pub use commands::{CommandArg, ExecutionContext};
 pub use error::{BuiltinError, Error, ErrorKind};
-pub use extensions::ShellExtensions;
+pub use extensions::ErrorFormatter;
 pub use interp::{ExecutionParameters, ProcessGroupPolicy};
 pub use parser::{SourcePosition, SourcePositionOffset, SourceSpan};
 pub use results::{ExecutionControlFlow, ExecutionResult, ExecutionSpawnResult, exit_code};
+pub(crate) use shell::CreateOptions;
 pub use shell::{
-    CreateOptions, ProfileLoadBehavior, RcLoadBehavior, Shell, ShellBuilder, ShellBuilderState,
-    ShellFd, ShellState,
+    ProfileLoadBehavior, RcLoadBehavior, Shell, ShellBuilder, ShellBuilderState, ShellFd,
 };
 pub use sourceinfo::SourceInfo;
 pub use variables::{ShellValue, ShellVariable};

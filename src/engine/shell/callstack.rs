@@ -2,7 +2,7 @@
 
 use crate::engine::{ExecutionParameters, callstack, env, error, functions, trace_categories};
 
-impl<SE: crate::engine::extensions::ShellExtensions> crate::engine::Shell<SE> {
+impl crate::engine::Shell {
     /// Returns whether or not the shell is actively executing in a sourced script.
     pub fn in_sourced_script(&self) -> bool {
         self.call_stack.in_sourced_script()

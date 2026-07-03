@@ -10,9 +10,9 @@ pub(crate) struct ClearCommand {}
 impl builtins::Command for ClearCommand {
     type Error = crate::engine::Error;
 
-    async fn execute<SE: crate::engine::ShellExtensions>(
+    async fn execute(
         &self,
-        context: crate::engine::ExecutionContext<'_, SE>,
+        context: crate::engine::ExecutionContext<'_>,
     ) -> Result<ExecutionResult, Self::Error> {
         write!(context.stdout(), "\x1B[2J\x1B[H")?;
         context.stdout().flush()?;

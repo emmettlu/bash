@@ -1,8 +1,8 @@
 //! Command completion support for shell instances.
 
-use crate::engine::{completion, error, extensions};
+use crate::engine::{completion, error};
 
-impl<SE: extensions::ShellExtensions> crate::engine::Shell<SE> {
+impl crate::engine::Shell {
     /// Generates command completions for the shell.
     ///
     /// # Arguments

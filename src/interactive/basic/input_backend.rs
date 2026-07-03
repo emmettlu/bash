@@ -17,7 +17,7 @@ pub struct BasicInputBackend;
 impl InputBackend for BasicInputBackend {
     fn read_line(
         &mut self,
-        shell: &crate::interactive::ShellRef<impl crate::engine::ShellExtensions>,
+        shell: &crate::interactive::ShellRef,
         prompt: InteractivePrompt,
     ) -> Result<ReadResult, ShellError> {
         if std::io::stdin().is_terminal() {
@@ -29,9 +29,9 @@ impl InputBackend for BasicInputBackend {
 }
 
 impl BasicInputBackend {
-    fn read_line_via<R: super::LineReader, SE: crate::engine::ShellExtensions>(
+    fn read_line_via<R: super::LineReader>(
         &self,
-        shell_ref: &crate::interactive::ShellRef<SE>,
+        shell_ref: &crate::interactive::ShellRef,
         reader: &R,
         prompt: &InteractivePrompt,
     ) -> Result<ReadResult, ShellError> {
@@ -79,7 +79,7 @@ impl BasicInputBackend {
         std::io::stdin().is_terminal()
     }
 
-    fn is_valid_input(shell: &Shell<impl crate::engine::ShellExtensions>, input: &str) -> bool {
+    fn is_valid_input(shell: &Shell, input: &str) -> bool {
         match shell.parse_string(input.to_owned()) {
             // Incomplete tokenizing (unclosed quotes, etc.) - need more input
             Err(crate::parser::ParseError::Tokenizing { inner, position: _ })
@@ -95,7 +95,7 @@ impl BasicInputBackend {
     }
 
     fn generate_completions(
-        shell: &mut Shell<impl crate::engine::ShellExtensions>,
+        shell: &mut Shell,
         line: &str,
         cursor: usize,
     ) -> Result<crate::engine::completion::Completions, ShellError> {
@@ -105,7 +105,7 @@ impl BasicInputBackend {
     }
 
     async fn generate_completions_async(
-        shell: &mut Shell<impl crate::engine::ShellExtensions>,
+        shell: &mut Shell,
         line: &str,
         cursor: usize,
     ) -> Result<crate::engine::completion::Completions, ShellError> {

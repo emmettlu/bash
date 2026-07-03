@@ -2,9 +2,9 @@
 
 use std::borrow::Cow;
 
-use crate::engine::{error, expansion, extensions, interp::ExecutionParameters};
+use crate::engine::{error, expansion, interp::ExecutionParameters};
 
-impl<SE: extensions::ShellExtensions> crate::engine::Shell<SE> {
+impl crate::engine::Shell {
     /// Returns the current value of the IFS variable, or the default value if it is not set.
     pub fn ifs(&self) -> Cow<'_, str> {
         self.env_str("IFS").unwrap_or_else(|| " \t\n".into())

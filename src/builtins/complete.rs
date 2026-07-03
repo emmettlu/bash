@@ -221,9 +221,9 @@ pub(crate) struct CompleteCommand {
 impl builtins::Command for CompleteCommand {
     type Error = crate::engine::Error;
 
-    async fn execute<SE: crate::engine::ShellExtensions>(
+    async fn execute(
         &self,
-        mut context: crate::engine::ExecutionContext<'_, SE>,
+        mut context: crate::engine::ExecutionContext<'_>,
     ) -> Result<crate::engine::ExecutionResult, Self::Error> {
         let mut result = ExecutionResult::success();
 
@@ -249,7 +249,7 @@ impl builtins::Command for CompleteCommand {
 impl CompleteCommand {
     fn process_global(
         &self,
-        context: &mut crate::engine::ExecutionContext<'_, impl crate::engine::ShellExtensions>,
+        context: &mut crate::engine::ExecutionContext<'_>,
     ) -> Result<(), crate::engine::Error> {
         // Read options before taking mutable borrow on completion_config
         let extended_globbing = context.shell.options().extended_globbing;
@@ -304,7 +304,7 @@ impl CompleteCommand {
     }
 
     fn try_display_spec_for_command(
-        context: &crate::engine::ExecutionContext<'_, impl crate::engine::ShellExtensions>,
+        context: &crate::engine::ExecutionContext<'_>,
         name: &str,
     ) -> Result<bool, crate::engine::Error> {
         if let Some(spec) = context.shell.completion_config().get(name) {
@@ -318,7 +318,7 @@ impl CompleteCommand {
 
     #[expect(clippy::too_many_lines)]
     fn display_spec(
-        context: &crate::engine::ExecutionContext<'_, impl crate::engine::ShellExtensions>,
+        context: &crate::engine::ExecutionContext<'_>,
         special_name: Option<&str>,
         command_name: Option<&str>,
         spec: &Spec,
@@ -446,7 +446,7 @@ impl CompleteCommand {
 
     fn try_process_for_command(
         &self,
-        context: &mut crate::engine::ExecutionContext<'_, impl crate::engine::ShellExtensions>,
+        context: &mut crate::engine::ExecutionContext<'_>,
         name: &str,
     ) -> Result<bool, crate::engine::Error> {
         if self.print {
@@ -490,9 +490,9 @@ pub(crate) struct CompGenCommand {
 impl builtins::Command for CompGenCommand {
     type Error = crate::engine::Error;
 
-    async fn execute<SE: crate::engine::ShellExtensions>(
+    async fn execute(
         &self,
-        context: crate::engine::ExecutionContext<'_, SE>,
+        context: crate::engine::ExecutionContext<'_>,
     ) -> Result<crate::engine::ExecutionResult, Self::Error> {
         let mut spec = self
             .common_args
@@ -571,9 +571,9 @@ pub(crate) struct CompOptCommand {
 impl builtins::Command for CompOptCommand {
     type Error = crate::engine::Error;
 
-    async fn execute<SE: crate::engine::ShellExtensions>(
+    async fn execute(
         &self,
-        context: crate::engine::ExecutionContext<'_, SE>,
+        context: crate::engine::ExecutionContext<'_>,
     ) -> Result<crate::engine::ExecutionResult, Self::Error> {
         let mut options = HashMap::new();
         for option in &self.disabled_options {

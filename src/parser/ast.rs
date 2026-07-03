@@ -1,11 +1,32 @@
 //! Defines the Abstract Syntax Tree (ast) for shell programs. Includes types and utilities
 //! for manipulating the AST.
 
-use std::fmt::{Display, Write};
+use std::fmt::{Display, Formatter, Write};
 
 use crate::parser::{SourceSpan, tokenizer};
 
 const DISPLAY_INDENT: &str = "    ";
+
+struct Indented<'a, 'b>(&'a mut Formatter<'b>, &'static str, bool);
+
+impl Write for Indented<'_, '_> {
+    fn write_str(&mut self, s: &str) -> std::fmt::Result {
+        for segment in s.split_inclusive('\n') {
+            if self.2 && segment != "\n" {
+                self.0.write_str(self.1)?;
+            }
+
+            self.0.write_str(segment)?;
+            self.2 = segment.ends_with('\n');
+        }
+
+        Ok(())
+    }
+}
+
+fn indented<'a, 'b>(formatter: &'a mut Formatter<'b>) -> Indented<'a, 'b> {
+    Indented(formatter, DISPLAY_INDENT, true)
+}
 
 /// Trait implemented by all AST nodes. Used to aggregate traits expected
 /// to be implemented.
@@ -627,7 +648,7 @@ impl Display for CaseClauseCommand {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "case {} in", self.value)?;
         for case in &self.cases {
-            write!(indenter::indented(f).with_str(DISPLAY_INDENT), "{case}")?;
+            write!(indented(f), "{case}")?;
         }
         writeln!(f)?;
         write!(f, "esac")
@@ -725,11 +746,7 @@ impl SourceLocation for IfClauseCommand {
 impl Display for IfClauseCommand {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "if {}; then", self.condition)?;
-        write!(
-            indenter::indented(f).with_str(DISPLAY_INDENT),
-            "{}",
-            self.then
-        )?;
+        write!(indented(f), "{}", self.then)?;
         if let Some(elses) = &self.elses {
             for else_clause in elses {
                 write!(f, "{else_clause}")?;
@@ -763,11 +780,7 @@ impl Display for ElseClause {
             writeln!(f, "else")?;
         }
 
-        write!(
-            indenter::indented(f).with_str(DISPLAY_INDENT),
-            "{}",
-            self.body
-        )
+        write!(indented(f), "{}", self.body)
     }
 }
 
@@ -838,7 +851,7 @@ impl Display for CaseItem {
         writeln!(f, ")")?;
 
         if let Some(cmd) = &self.cmd {
-            write!(indenter::indented(f).with_str(DISPLAY_INDENT), "{cmd}")?;
+            write!(indented(f), "{cmd}")?;
         }
         writeln!(f)?;
         write!(f, "{}", self.post_action)
@@ -979,11 +992,7 @@ impl SourceLocation for BraceGroupCommand {
 impl Display for BraceGroupCommand {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "{{ ")?;
-        write!(
-            indenter::indented(f).with_str(DISPLAY_INDENT),
-            "{}",
-            self.list
-        )?;
+        write!(indented(f), "{}", self.list)?;
         writeln!(f)?;
         write!(f, "}}")?;
 
@@ -1004,11 +1013,7 @@ pub struct DoGroupCommand {
 impl Display for DoGroupCommand {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         writeln!(f, "do")?;
-        write!(
-            indenter::indented(f).with_str(DISPLAY_INDENT),
-            "{}",
-            self.list
-        )?;
+        write!(indented(f), "{}", self.list)?;
         writeln!(f)?;
         write!(f, "done")
     }

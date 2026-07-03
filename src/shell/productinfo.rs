@@ -18,12 +18,7 @@ pub const PRODUCT_DISPLAY_URI: &str = if !PRODUCT_HOMEPAGE.is_empty() {
 pub const PRODUCT_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// Info regarding the specific version of sources used to build this product.
-pub const PRODUCT_GIT_VERSION: &str = git_version::git_version!(
-    prefix = "git:",
-    cargo_prefix = "cargo:",
-    fallback = "unknown:",
-    args = ["--always", "--dirty=-modified", "--match", ""]
-);
+pub const PRODUCT_GIT_VERSION: &str = concat!("cargo:", env!("CARGO_PKG_VERSION"));
 
 pub(crate) fn get_product_display_str() -> String {
     std::format!(

@@ -9,26 +9,13 @@ categories = ["command-line-utilities", "development-tools"]
 
 [dependencies]
 anyhow = "1"
-async-recursion = "1"
-async-trait = "0"
 bon = "3"
 chrono = "0"
 clap = { version = "4", features = ["derive", "wrap_help"] }
-compio = { version = "0", default-features = false, features = [
-  "macros",
-  "process",
-  "runtime",
-  "signal",
-  "time",
-] }
+compio = { version = "0", default-features = false, features = ["macros", "runtime"] }
 fancy-regex = "0"
 futures = "0"
-git-version = "0"
-indenter = "0"
-indexmap = "2"
 itertools = "0"
-
-normalize-path = "0"
 peg = "0"
 serde = { version = "1", features = ["derive"] }
 
@@ -52,9 +39,8 @@ windows-sys = { version = "0", features = [
 ] }
 
 [dev-dependencies]
-insta = { version = "1", features = ["glob", "redactions", "ron", "yaml"] }
+insta = { version = "1", features = ["redactions", "ron"] }
 pretty_assertions = { version = "1", features = ["unstable"] }
-serde_yaml = "0"
 tempfile = "3"
 
 [features]

@@ -1,4 +1,5 @@
 use crate::parser::ast::{self, CommandPrefixOrSuffixItem};
+use futures::future::BoxFuture;
 use itertools::Itertools;
 use std::collections::VecDeque;
 use std::io::Write;
@@ -164,93 +165,93 @@ pub enum ProcessGroupPolicy {
     SameProcessGroup,
 }
 
-#[async_trait::async_trait]
 pub trait Execute {
-    async fn execute(
-        &self,
-        shell: &mut Shell,
-        params: &ExecutionParameters,
-    ) -> Result<ExecutionResult, error::Error>;
+    fn execute<'a>(
+        &'a self,
+        shell: &'a mut Shell,
+        params: &'a ExecutionParameters,
+    ) -> BoxFuture<'a, Result<ExecutionResult, error::Error>>;
 }
 
-#[async_trait::async_trait]
 trait ExecuteInPipeline {
-    async fn execute_in_pipeline(
-        &self,
-        context: PipelineExecutionContext<'_>,
+    fn execute_in_pipeline<'a>(
+        &'a self,
+        context: PipelineExecutionContext<'a>,
         params: ExecutionParameters,
-    ) -> Result<ExecutionSpawnResult, error::Error>;
+    ) -> BoxFuture<'a, Result<ExecutionSpawnResult, error::Error>>;
 }
 
-#[async_trait::async_trait]
 impl Execute for ast::Program {
-    async fn execute(
-        &self,
-        shell: &mut Shell,
-        params: &ExecutionParameters,
-    ) -> Result<ExecutionResult, error::Error> {
-        let mut result = ExecutionResult::success();
+    fn execute<'a>(
+        &'a self,
+        shell: &'a mut Shell,
+        params: &'a ExecutionParameters,
+    ) -> BoxFuture<'a, Result<ExecutionResult, error::Error>> {
+        Box::pin(async move {
+            let mut result = ExecutionResult::success();
 
-        for command in &self.complete_commands {
-            // Execute the command and handle any errors without immediately propagating them.
-            // This allows interactive shells to continue executing subsequent commands even after
-            // errors.
-            match command.execute(shell, params).await {
-                Ok(exec_result) => result = exec_result,
-                Err(err) => {
-                    // Display the error and convert to an execution result.
-                    let _ = shell.display_error(&mut params.stderr(shell), &err);
-                    result = err.into_result(shell);
+            for command in &self.complete_commands {
+                // Execute the command and handle any errors without immediately propagating them.
+                // This allows interactive shells to continue executing subsequent commands even after
+                // errors.
+                match command.execute(shell, params).await {
+                    Ok(exec_result) => result = exec_result,
+                    Err(err) => {
+                        // Display the error and convert to an execution result.
+                        let _ = shell.display_error(&mut params.stderr(shell), &err);
+                        result = err.into_result(shell);
+                    }
                 }
-            }
-
-            // Update status
-            shell.set_last_exit_status(result.exit_code);
-
-            // Check if we should stop executing subsequent commands
-            if !result.is_normal_flow() {
-                break;
-            }
-        }
-
-        Ok(result)
-    }
-}
-
-#[async_trait::async_trait]
-impl Execute for ast::CompoundList {
-    async fn execute(
-        &self,
-        shell: &mut Shell,
-        params: &ExecutionParameters,
-    ) -> Result<ExecutionResult, error::Error> {
-        let mut result = ExecutionResult::success();
-
-        for ast::CompoundListItem(ao_list, sep) in &self.0 {
-            let run_async = matches!(sep, ast::SeparatorOperator::Async);
-
-            if run_async {
-                let job = spawn_async_ao_list_in_task(ao_list, shell, params);
-                let job_formatted = job.to_pid_style_string();
-
-                if shell.options().interactive && !shell.is_subshell() {
-                    writeln!(params.stderr(shell), "{job_formatted}")?;
-                }
-
-                result = ExecutionResult::success();
-            } else {
-                result = ao_list.execute(shell, params).await?;
 
                 // Update status
                 shell.set_last_exit_status(result.exit_code);
+
+                // Check if we should stop executing subsequent commands
+                if !result.is_normal_flow() {
+                    break;
+                }
             }
 
-            if !result.is_normal_flow() {
-                break;
-            }
-        }
+            Ok(result)
+        })
+    }
+}
 
-        Ok(result)
+impl Execute for ast::CompoundList {
+    fn execute<'a>(
+        &'a self,
+        shell: &'a mut Shell,
+        params: &'a ExecutionParameters,
+    ) -> BoxFuture<'a, Result<ExecutionResult, error::Error>> {
+        Box::pin(async move {
+            let mut result = ExecutionResult::success();
+
+            for ast::CompoundListItem(ao_list, sep) in &self.0 {
+                let run_async = matches!(sep, ast::SeparatorOperator::Async);
+
+                if run_async {
+                    let job = spawn_async_ao_list_in_task(ao_list, shell, params);
+                    let job_formatted = job.to_pid_style_string();
+
+                    if shell.options().interactive && !shell.is_subshell() {
+                        writeln!(params.stderr(shell), "{job_formatted}")?;
+                    }
+
+                    result = ExecutionResult::success();
+                } else {
+                    result = ao_list.execute(shell, params).await?;
+
+                    // Update status
+                    shell.set_last_exit_status(result.exit_code);
+                }
+
+                if !result.is_normal_flow() {
+                    break;
+                }
+            }
+
+            Ok(result)
+        })
     }
 }
 
@@ -285,144 +286,146 @@ fn spawn_async_ao_list_in_task<'a>(
     ))
 }
 
-#[async_trait::async_trait]
 impl Execute for ast::AndOrList {
-    async fn execute(
-        &self,
-        shell: &mut Shell,
-        params: &ExecutionParameters,
-    ) -> Result<ExecutionResult, error::Error> {
-        let has_operators = !self.additional.is_empty();
+    fn execute<'a>(
+        &'a self,
+        shell: &'a mut Shell,
+        params: &'a ExecutionParameters,
+    ) -> BoxFuture<'a, Result<ExecutionResult, error::Error>> {
+        Box::pin(async move {
+            let has_operators = !self.additional.is_empty();
 
-        // For the first command, suppress errexit if there are more commands after it
-        let mut first_params = params.clone();
-        if has_operators {
-            first_params.suppress_errexit = true;
-        }
-
-        let mut result = self.first.execute(shell, &first_params).await?;
-
-        for (index, next_ao) in self.additional.iter().enumerate() {
-            // Check for non-normal control flow.
-            if !result.is_normal_flow() {
-                break;
+            // For the first command, suppress errexit if there are more commands after it
+            let mut first_params = params.clone();
+            if has_operators {
+                first_params.suppress_errexit = true;
             }
 
-            let (is_and, pipeline) = match next_ao {
-                ast::AndOr::And(p) => (true, p),
-                ast::AndOr::Or(p) => (false, p),
-            };
+            let mut result = self.first.execute(shell, &first_params).await?;
 
-            // If we short-circuit, then we don't break out of the whole loop
-            // but we skip evaluating the current pipeline. We'll then continue
-            // on and possibly evaluate a subsequent one (depending on the
-            // operator before it).
-            if is_and {
-                if !result.is_success() {
+            for (index, next_ao) in self.additional.iter().enumerate() {
+                // Check for non-normal control flow.
+                if !result.is_normal_flow() {
+                    break;
+                }
+
+                let (is_and, pipeline) = match next_ao {
+                    ast::AndOr::And(p) => (true, p),
+                    ast::AndOr::Or(p) => (false, p),
+                };
+
+                // If we short-circuit, then we don't break out of the whole loop
+                // but we skip evaluating the current pipeline. We'll then continue
+                // on and possibly evaluate a subsequent one (depending on the
+                // operator before it).
+                if is_and {
+                    if !result.is_success() {
+                        continue;
+                    }
+                } else if result.is_success() {
                     continue;
                 }
-            } else if result.is_success() {
-                continue;
+
+                // For the last command in the chain, use original params (errexit not suppressed)
+                // For earlier commands, suppress errexit
+                let mut params = params.clone();
+
+                let is_last = index == self.additional.len() - 1;
+                if !is_last {
+                    params.suppress_errexit = true;
+                }
+
+                result = pipeline.execute(shell, &params).await?;
             }
 
-            // For the last command in the chain, use original params (errexit not suppressed)
-            // For earlier commands, suppress errexit
-            let mut params = params.clone();
-
-            let is_last = index == self.additional.len() - 1;
-            if !is_last {
-                params.suppress_errexit = true;
-            }
-
-            result = pipeline.execute(shell, &params).await?;
-        }
-
-        Ok(result)
+            Ok(result)
+        })
     }
 }
 
-#[async_trait::async_trait]
 impl Execute for ast::Pipeline {
-    async fn execute(
-        &self,
-        shell: &mut Shell,
-        params: &ExecutionParameters,
-    ) -> Result<ExecutionResult, error::Error> {
-        // Capture current timing if so requested.
-        let stopwatch = self
-            .timed
-            .is_some()
-            .then(timing::start_timing)
-            .transpose()?;
+    fn execute<'a>(
+        &'a self,
+        shell: &'a mut Shell,
+        params: &'a ExecutionParameters,
+    ) -> BoxFuture<'a, Result<ExecutionResult, error::Error>> {
+        Box::pin(async move {
+            // Capture current timing if so requested.
+            let stopwatch = self
+                .timed
+                .is_some()
+                .then(timing::start_timing)
+                .transpose()?;
 
-        let mut params = params.clone();
+            let mut params = params.clone();
 
-        // If this pipeline is negated, suppress errexit for commands within it
-        if self.bang {
-            params.suppress_errexit = true;
-        }
-
-        // Spawn all the processes required for the pipeline, connecting outputs/inputs with pipes
-        // as needed.
-        let spawn_results = spawn_pipeline_processes(self, shell, &params).await?;
-
-        // Wait for the processes. This also has a side effect of updating pipeline status.
-        let mut result =
-            wait_for_pipeline_processes_and_update_status(self, spawn_results, shell, &params)
-                .await?;
-
-        // Invert the exit code if requested.
-        if self.bang {
-            result.exit_code = if result.is_success() { 1 } else { 0 };
-        }
-
-        // Update exit status.
-        shell.set_last_exit_status(result.exit_code);
-
-        // Fire the ERR trap if the pipeline failed in a non-conditional context.
-        // We reuse `suppress_errexit` here because bash suppresses the ERR trap in
-        // exactly the same contexts it suppresses errexit (conditionals, `!`-prefixed
-        // pipelines, etc.).
-        if !result.is_success()
-            && !params.suppress_errexit
-            && !self.bang
-            && shell.traps().handles(crate::engine::traps::TrapSignal::Err)
-        {
-            shell
-                .invoke_trap_handler(crate::engine::traps::TrapSignal::Err, &params)
-                .await?;
-        }
-
-        // Apply errexit if not suppressed (and not negated)
-        if !params.suppress_errexit && !self.bang {
-            shell.apply_errexit_if_enabled(&mut result);
-        }
-
-        // If requested, report timing.
-        if let (Some(timed), Some(stopwatch)) = (&self.timed, &stopwatch)
-            && let Some(mut stderr) = params.try_fd(shell, openfiles::OpenFiles::STDERR_FD)
-        {
-            let timing = stopwatch.stop()?;
-            if timed.is_posix_output() {
-                std::write!(
-                    stderr,
-                    "real {}\nuser {}\nsys {}\n",
-                    timing::format_duration_posixly(&timing.wall),
-                    timing::format_duration_posixly(&timing.user),
-                    timing::format_duration_posixly(&timing.system),
-                )?;
-            } else {
-                std::write!(
-                    stderr,
-                    "\nreal\t{}\nuser\t{}\nsys\t{}\n",
-                    timing::format_duration_non_posixly(&timing.wall),
-                    timing::format_duration_non_posixly(&timing.user),
-                    timing::format_duration_non_posixly(&timing.system),
-                )?;
+            // If this pipeline is negated, suppress errexit for commands within it
+            if self.bang {
+                params.suppress_errexit = true;
             }
-        }
 
-        Ok(result)
+            // Spawn all the processes required for the pipeline, connecting outputs/inputs with pipes
+            // as needed.
+            let spawn_results = spawn_pipeline_processes(self, shell, &params).await?;
+
+            // Wait for the processes. This also has a side effect of updating pipeline status.
+            let mut result =
+                wait_for_pipeline_processes_and_update_status(self, spawn_results, shell, &params)
+                    .await?;
+
+            // Invert the exit code if requested.
+            if self.bang {
+                result.exit_code = if result.is_success() { 1 } else { 0 };
+            }
+
+            // Update exit status.
+            shell.set_last_exit_status(result.exit_code);
+
+            // Fire the ERR trap if the pipeline failed in a non-conditional context.
+            // We reuse `suppress_errexit` here because bash suppresses the ERR trap in
+            // exactly the same contexts it suppresses errexit (conditionals, `!`-prefixed
+            // pipelines, etc.).
+            if !result.is_success()
+                && !params.suppress_errexit
+                && !self.bang
+                && shell.traps().handles(crate::engine::traps::TrapSignal::Err)
+            {
+                shell
+                    .invoke_trap_handler(crate::engine::traps::TrapSignal::Err, &params)
+                    .await?;
+            }
+
+            // Apply errexit if not suppressed (and not negated)
+            if !params.suppress_errexit && !self.bang {
+                shell.apply_errexit_if_enabled(&mut result);
+            }
+
+            // If requested, report timing.
+            if let (Some(timed), Some(stopwatch)) = (&self.timed, &stopwatch)
+                && let Some(mut stderr) = params.try_fd(shell, openfiles::OpenFiles::STDERR_FD)
+            {
+                let timing = stopwatch.stop()?;
+                if timed.is_posix_output() {
+                    std::write!(
+                        stderr,
+                        "real {}\nuser {}\nsys {}\n",
+                        timing::format_duration_posixly(&timing.wall),
+                        timing::format_duration_posixly(&timing.user),
+                        timing::format_duration_posixly(&timing.system),
+                    )?;
+                } else {
+                    std::write!(
+                        stderr,
+                        "\nreal\t{}\nuser\t{}\nsys\t{}\n",
+                        timing::format_duration_non_posixly(&timing.wall),
+                        timing::format_duration_non_posixly(&timing.user),
+                        timing::format_duration_non_posixly(&timing.system),
+                    )?;
+                }
+            }
+
+            Ok(result)
+        })
     }
 }
 
@@ -579,69 +582,78 @@ async fn wait_for_pipeline_processes_and_update_status(
     Ok(result)
 }
 
-#[async_trait::async_trait]
 impl ExecuteInPipeline for ast::Command {
-    async fn execute_in_pipeline(
-        &self,
-        mut pipeline_context: PipelineExecutionContext<'_>,
+    fn execute_in_pipeline<'a>(
+        &'a self,
+        mut pipeline_context: PipelineExecutionContext<'a>,
         mut params: ExecutionParameters,
-    ) -> Result<ExecutionSpawnResult, error::Error> {
-        if pipeline_context
-            .shell
-            .target()
-            .options()
-            .do_not_execute_commands
-        {
-            return Ok(ExecutionSpawnResult::Completed(ExecutionResult::success()));
-        }
+    ) -> BoxFuture<'a, Result<ExecutionSpawnResult, error::Error>> {
+        Box::pin(async move {
+            if pipeline_context
+                .shell
+                .target()
+                .options()
+                .do_not_execute_commands
+            {
+                return Ok(ExecutionSpawnResult::Completed(ExecutionResult::success()));
+            }
 
-        // Updates the shell with information about the currently executing command.
-        pipeline_context.shell.target_mut().set_current_cmd(self);
+            // Updates the shell with information about the currently executing command.
+            pipeline_context.shell.target_mut().set_current_cmd(self);
 
-        match self {
-            Self::Simple(simple) => simple.execute_in_pipeline(pipeline_context, params).await,
-            Self::Compound(compound, redirects) => {
-                // Set up any additional redirects.
-                if let Some(redirects) = redirects {
-                    for redirect in &redirects.0 {
-                        setup_redirect(pipeline_context.shell.target_mut(), &mut params, redirect)
+            match self {
+                Self::Simple(simple) => simple.execute_in_pipeline(pipeline_context, params).await,
+                Self::Compound(compound, redirects) => {
+                    // Set up any additional redirects.
+                    if let Some(redirects) = redirects {
+                        for redirect in &redirects.0 {
+                            setup_redirect(
+                                pipeline_context.shell.target_mut(),
+                                &mut params,
+                                redirect,
+                            )
                             .await?;
+                        }
                     }
-                }
 
-                Ok(compound
+                    Ok(compound
+                        .execute(pipeline_context.shell.target_mut(), &params)
+                        .await?
+                        .into())
+                }
+                Self::Function(func) => Ok(func
                     .execute(pipeline_context.shell.target_mut(), &params)
                     .await?
-                    .into())
-            }
-            Self::Function(func) => Ok(func
-                .execute(pipeline_context.shell.target_mut(), &params)
-                .await?
-                .into()),
-            Self::ExtendedTest(e, redirects) => {
-                // Set up any additional redirects.
-                if let Some(redirects) = redirects {
-                    for redirect in &redirects.0 {
-                        setup_redirect(pipeline_context.shell.target_mut(), &mut params, redirect)
+                    .into()),
+                Self::ExtendedTest(e, redirects) => {
+                    // Set up any additional redirects.
+                    if let Some(redirects) = redirects {
+                        for redirect in &redirects.0 {
+                            setup_redirect(
+                                pipeline_context.shell.target_mut(),
+                                &mut params,
+                                redirect,
+                            )
                             .await?;
+                        }
                     }
-                }
 
-                // Evaluate the extended test expression.
-                let result = if extendedtests::eval_extended_test_expr(
-                    &e.expr,
-                    pipeline_context.shell.target_mut(),
-                    &params,
-                )
-                .await?
-                {
-                    0
-                } else {
-                    1
-                };
-                Ok(ExecutionResult::new(result).into())
+                    // Evaluate the extended test expression.
+                    let result = if extendedtests::eval_extended_test_expr(
+                        &e.expr,
+                        pipeline_context.shell.target_mut(),
+                        &params,
+                    )
+                    .await?
+                    {
+                        0
+                    } else {
+                        1
+                    };
+                    Ok(ExecutionResult::new(result).into())
+                }
             }
-        }
+        })
     }
 }
 
@@ -650,666 +662,684 @@ enum WhileOrUntil {
     Until,
 }
 
-#[async_trait::async_trait]
 impl Execute for ast::CompoundCommand {
-    async fn execute(
-        &self,
-        shell: &mut Shell,
-        params: &ExecutionParameters,
-    ) -> Result<ExecutionResult, error::Error> {
-        match self {
-            Self::BraceGroup(ast::BraceGroupCommand { list, .. }) => {
-                list.execute(shell, params).await
+    fn execute<'a>(
+        &'a self,
+        shell: &'a mut Shell,
+        params: &'a ExecutionParameters,
+    ) -> BoxFuture<'a, Result<ExecutionResult, error::Error>> {
+        Box::pin(async move {
+            match self {
+                Self::BraceGroup(ast::BraceGroupCommand { list, .. }) => {
+                    list.execute(shell, params).await
+                }
+                Self::Subshell(ast::SubshellCommand { list, .. }) => {
+                    // Clone off a new subshell, and run the body of the subshell there.
+                    // TODO(source-info): Do we need to reset the line number?
+                    let mut subshell = shell.clone();
+
+                    // Handle errors within the subshell context to prevent fatal errors
+                    // from propagating to the parent shell.
+                    let subshell_result = match list.execute(&mut subshell, params).await {
+                        Ok(result) => result,
+                        Err(error) => {
+                            // Display the error to stderr, but prevent fatal error propagation
+                            let mut stderr = params.stderr(shell);
+                            let _ = shell.display_error(&mut stderr, &error);
+
+                            // Convert error to result in subshell context
+                            error.into_result(&subshell)
+                        }
+                    };
+
+                    // Preserve the subshell's exit code, but don't honor any of its requests to exit
+                    // the shell, break out of loops, etc.
+                    Ok(ExecutionResult::new(subshell_result.exit_code))
+                }
+                Self::ForClause(f) => f.execute(shell, params).await,
+                Self::CaseClause(c) => c.execute(shell, params).await,
+                Self::IfClause(i) => i.execute(shell, params).await,
+                Self::WhileClause(w) => (WhileOrUntil::While, w).execute(shell, params).await,
+                Self::UntilClause(u) => (WhileOrUntil::Until, u).execute(shell, params).await,
+                Self::Arithmetic(a) => a.execute(shell, params).await,
+                Self::ArithmeticForClause(a) => a.execute(shell, params).await,
+                Self::Coprocess(c) => c.execute(shell, params).await,
             }
-            Self::Subshell(ast::SubshellCommand { list, .. }) => {
-                // Clone off a new subshell, and run the body of the subshell there.
-                // TODO(source-info): Do we need to reset the line number?
-                let mut subshell = shell.clone();
-
-                // Handle errors within the subshell context to prevent fatal errors
-                // from propagating to the parent shell.
-                let subshell_result = match list.execute(&mut subshell, params).await {
-                    Ok(result) => result,
-                    Err(error) => {
-                        // Display the error to stderr, but prevent fatal error propagation
-                        let mut stderr = params.stderr(shell);
-                        let _ = shell.display_error(&mut stderr, &error);
-
-                        // Convert error to result in subshell context
-                        error.into_result(&subshell)
-                    }
-                };
-
-                // Preserve the subshell's exit code, but don't honor any of its requests to exit
-                // the shell, break out of loops, etc.
-                Ok(ExecutionResult::new(subshell_result.exit_code))
-            }
-            Self::ForClause(f) => f.execute(shell, params).await,
-            Self::CaseClause(c) => c.execute(shell, params).await,
-            Self::IfClause(i) => i.execute(shell, params).await,
-            Self::WhileClause(w) => (WhileOrUntil::While, w).execute(shell, params).await,
-            Self::UntilClause(u) => (WhileOrUntil::Until, u).execute(shell, params).await,
-            Self::Arithmetic(a) => a.execute(shell, params).await,
-            Self::ArithmeticForClause(a) => a.execute(shell, params).await,
-            Self::Coprocess(c) => c.execute(shell, params).await,
-        }
+        })
     }
 }
 
-#[async_trait::async_trait]
 impl Execute for ast::CoprocessCommand {
-    async fn execute(
-        &self,
-        shell: &mut Shell,
-        params: &ExecutionParameters,
-    ) -> Result<ExecutionResult, error::Error> {
-        if shell.options().do_not_execute_commands {
-            return Ok(ExecutionResult::success());
-        }
-
-        // Resolve the name of the variable that will receive the coprocess's file descriptors.
-        let name = self
-            .name
-            .as_ref()
-            .map_or_else(|| "COPROC".to_string(), |w| w.to_string());
-
-        if !valid_variable_name(&name) {
-            writeln!(
-                params.stderr(shell),
-                "coproc {name}: not a valid identifier"
-            )?;
-            return Ok(ExecutionResult::general_error());
-        }
-
-        // Set up the pipes that we'll use to communicate with the coprocess.
-        let (stdin_reader, stdin_writer) = std::io::pipe()?;
-        let (stdout_reader, stdout_writer) = std::io::pipe()?;
-
-        // Allocate new fds in the (parent) shell for the read end of the coprocess's stdout
-        // and the write end of the coprocess's stdin.
-        let stdout_fd = shell.open_files_mut().add(stdout_reader.into())?;
-        let stdin_fd = shell.open_files_mut().add(stdin_writer.into())?;
-
-        // Crete a subshell that the coprocess will own and run in.
-        let mut child_shell = shell.clone();
-        child_shell.options_mut().interactive = false;
-
-        // Setup redirection for the coprocess's shell's stdin/stdout.
-        let mut child_params = params.clone();
-        child_params
-            .open_files
-            .set_fd(OpenFiles::STDIN_FD, stdin_reader.into());
-        child_params
-            .open_files
-            .set_fd(OpenFiles::STDOUT_FD, stdout_writer.into());
-
-        let body = self.body.clone();
-        let join_handle = compio::runtime::spawn(async move {
-            let pipeline_context = PipelineExecutionContext {
-                shell: commands::ShellForCommand::parent(&mut child_shell),
-                process_group_id: None,
-            };
-            let spawn_result = body
-                .execute_in_pipeline(pipeline_context, child_params)
-                .await?;
-            match spawn_result.wait().await? {
-                ExecutionWaitResult::Completed(result) => Ok(result),
-                ExecutionWaitResult::Stopped(_) => Ok(ExecutionResult::stopped()),
+    fn execute<'a>(
+        &'a self,
+        shell: &'a mut Shell,
+        params: &'a ExecutionParameters,
+    ) -> BoxFuture<'a, Result<ExecutionResult, error::Error>> {
+        Box::pin(async move {
+            if shell.options().do_not_execute_commands {
+                return Ok(ExecutionResult::success());
             }
-        });
 
-        let job = shell.jobs_mut().add_as_current(jobs::Job::new(
-            [jobs::JobTask::Internal(join_handle)],
-            format!("coproc {name}"),
-            jobs::JobState::Running,
-        ));
-        let job_id = job.id;
+            // Resolve the name of the variable that will receive the coprocess's file descriptors.
+            let name = self
+                .name
+                .as_ref()
+                .map_or_else(|| "COPROC".to_string(), |w| w.to_string());
 
-        // Fill out the fd variable.
-        let arr_value = ShellValue::from(vec![stdout_fd.to_string(), stdin_fd.to_string()]);
-        shell
-            .env_mut()
-            .set_global(name.clone(), ShellVariable::new(arr_value))?;
-
-        // Set the job ID for the coprocess in a separate variable with the _PID suffix.
-        let pid_name = format!("{name}_PID");
-        shell
-            .env_mut()
-            .set_global(pid_name, ShellVariable::new(job_id.to_string()))?;
-
-        Ok(ExecutionResult::success())
-    }
-}
-
-#[async_trait::async_trait]
-impl Execute for ast::ForClauseCommand {
-    async fn execute(
-        &self,
-        shell: &mut Shell,
-        params: &ExecutionParameters,
-    ) -> Result<ExecutionResult, error::Error> {
-        let mut result = ExecutionResult::success();
-
-        // If we were given explicit words to iterate over, then expand them all, with splitting
-        // enabled.
-        let mut expanded_values = vec![];
-        if let Some(unexpanded_values) = &self.values {
-            for value in unexpanded_values {
-                let mut expanded =
-                    expansion::full_expand_and_split_word(shell, params, value).await?;
-                expanded_values.append(&mut expanded);
+            if !valid_variable_name(&name) {
+                writeln!(
+                    params.stderr(shell),
+                    "coproc {name}: not a valid identifier"
+                )?;
+                return Ok(ExecutionResult::general_error());
             }
-        } else {
-            // Otherwise, we use the current positional parameters.
-            expanded_values.extend_from_slice(shell.current_shell_args());
-        }
 
-        for value in expanded_values {
-            if shell.options().print_commands_and_arguments {
-                if let Some(unexpanded_values) = &self.values {
-                    shell
-                        .trace_command(
-                            params,
-                            std::format!(
-                                "for {} in {}",
-                                self.variable_name,
-                                unexpanded_values.iter().join(" ")
-                            ),
-                        )
-                        .await;
-                } else {
-                    shell
-                        .trace_command(params, std::format!("for {}", self.variable_name))
-                        .await;
+            // Set up the pipes that we'll use to communicate with the coprocess.
+            let (stdin_reader, stdin_writer) = std::io::pipe()?;
+            let (stdout_reader, stdout_writer) = std::io::pipe()?;
+
+            // Allocate new fds in the (parent) shell for the read end of the coprocess's stdout
+            // and the write end of the coprocess's stdin.
+            let stdout_fd = shell.open_files_mut().add(stdout_reader.into())?;
+            let stdin_fd = shell.open_files_mut().add(stdin_writer.into())?;
+
+            // Crete a subshell that the coprocess will own and run in.
+            let mut child_shell = shell.clone();
+            child_shell.options_mut().interactive = false;
+
+            // Setup redirection for the coprocess's shell's stdin/stdout.
+            let mut child_params = params.clone();
+            child_params
+                .open_files
+                .set_fd(OpenFiles::STDIN_FD, stdin_reader.into());
+            child_params
+                .open_files
+                .set_fd(OpenFiles::STDOUT_FD, stdout_writer.into());
+
+            let body = self.body.clone();
+            let join_handle = compio::runtime::spawn(async move {
+                let pipeline_context = PipelineExecutionContext {
+                    shell: commands::ShellForCommand::parent(&mut child_shell),
+                    process_group_id: None,
+                };
+                let spawn_result = body
+                    .execute_in_pipeline(pipeline_context, child_params)
+                    .await?;
+                match spawn_result.wait().await? {
+                    ExecutionWaitResult::Completed(result) => Ok(result),
+                    ExecutionWaitResult::Stopped(_) => Ok(ExecutionResult::stopped()),
                 }
-            }
+            });
 
-            // Update the variable.
-            shell.env_mut().update_or_add(
-                &self.variable_name,
-                ShellValueLiteral::Scalar(value),
-                |_| Ok(()),
-                EnvironmentLookup::Anywhere,
-                EnvironmentScope::Global,
-            )?;
+            let job = shell.jobs_mut().add_as_current(jobs::Job::new(
+                [jobs::JobTask::Internal(join_handle)],
+                format!("coproc {name}"),
+                jobs::JobState::Running,
+            ));
+            let job_id = job.id;
 
-            result = self.body.list.execute(shell, params).await?;
-            if result.is_return_or_exit() {
-                break;
-            }
-
-            let is_break = result.is_break();
-
-            result.next_control_flow = result.next_control_flow.try_decrement_loop_levels();
-
-            if is_break || result.is_continue() {
-                break;
-            }
-        }
-
-        shell.set_last_exit_status(result.exit_code);
-        Ok(result)
-    }
-}
-
-#[async_trait::async_trait]
-impl Execute for ast::CaseClauseCommand {
-    async fn execute(
-        &self,
-        shell: &mut Shell,
-        params: &ExecutionParameters,
-    ) -> Result<ExecutionResult, error::Error> {
-        // N.B. One would think it makes sense to trace the expanded value being switched
-        // on, but that's not it.
-        if shell.options().print_commands_and_arguments {
+            // Fill out the fd variable.
+            let arr_value = ShellValue::from(vec![stdout_fd.to_string(), stdin_fd.to_string()]);
             shell
-                .trace_command(params, std::format!("case {} in", &self.value))
-                .await;
-        }
+                .env_mut()
+                .set_global(name.clone(), ShellVariable::new(arr_value))?;
 
-        let expanded_value = expansion::basic_expand_word(shell, params, &self.value).await?;
-        let mut result: ExecutionResult = ExecutionResult::success();
-        let mut force_execute_next_case = false;
+            // Set the job ID for the coprocess in a separate variable with the _PID suffix.
+            let pid_name = format!("{name}_PID");
+            shell
+                .env_mut()
+                .set_global(pid_name, ShellVariable::new(job_id.to_string()))?;
 
-        for case in &self.cases {
-            if force_execute_next_case {
-                force_execute_next_case = false;
-            } else {
-                let mut matches = false;
-                for pattern in &case.patterns {
-                    let expanded_pattern = expansion::basic_expand_pattern(shell, params, pattern)
-                        .await?
-                        .set_extended_globbing(shell.options().extended_globbing)
-                        .set_case_insensitive(shell.options().case_insensitive_conditionals);
-
-                    if expanded_pattern.exactly_matches(expanded_value.as_str())? {
-                        matches = true;
-                        break;
-                    }
-                }
-
-                if !matches {
-                    continue;
-                }
-            }
-
-            result = if let Some(case_cmd) = &case.cmd {
-                case_cmd.execute(shell, params).await?
-            } else {
-                ExecutionResult::success()
-            };
-
-            // Check for early return (return/exit) or loop control flow (break/continue)
-            if !result.is_normal_flow() {
-                break;
-            }
-
-            match case.post_action {
-                ast::CaseItemPostAction::ExitCase => break,
-                ast::CaseItemPostAction::UnconditionallyExecuteNextCaseItem => {
-                    force_execute_next_case = true;
-                }
-                ast::CaseItemPostAction::ContinueEvaluatingCases => (),
-            }
-        }
-
-        shell.set_last_exit_status(result.exit_code);
-
-        Ok(result)
+            Ok(ExecutionResult::success())
+        })
     }
 }
 
-#[async_trait::async_trait]
-impl Execute for ast::IfClauseCommand {
-    async fn execute(
-        &self,
-        shell: &mut Shell,
-        params: &ExecutionParameters,
-    ) -> Result<ExecutionResult, error::Error> {
-        // Execute condition with errexit suppressed
-        let mut condition_params = params.clone();
-        condition_params.suppress_errexit = true;
-        let condition = self.condition.execute(shell, &condition_params).await?;
+impl Execute for ast::ForClauseCommand {
+    fn execute<'a>(
+        &'a self,
+        shell: &'a mut Shell,
+        params: &'a ExecutionParameters,
+    ) -> BoxFuture<'a, Result<ExecutionResult, error::Error>> {
+        Box::pin(async move {
+            let mut result = ExecutionResult::success();
 
-        // Check if the condition itself resulted in non-normal control flow.
-        if !condition.is_normal_flow() {
-            return Ok(condition);
-        }
+            // If we were given explicit words to iterate over, then expand them all, with splitting
+            // enabled.
+            let mut expanded_values = vec![];
+            if let Some(unexpanded_values) = &self.values {
+                for value in unexpanded_values {
+                    let mut expanded =
+                        expansion::full_expand_and_split_word(shell, params, value).await?;
+                    expanded_values.append(&mut expanded);
+                }
+            } else {
+                // Otherwise, we use the current positional parameters.
+                expanded_values.extend_from_slice(shell.current_shell_args());
+            }
 
-        if condition.is_success() {
-            return self.then.execute(shell, params).await;
-        }
-
-        if let Some(elses) = &self.elses {
-            for else_clause in elses {
-                match &else_clause.condition {
-                    Some(else_condition) => {
-                        let else_condition_result =
-                            else_condition.execute(shell, &condition_params).await?;
-
-                        // Check if the elif condition caused non-normal control flow.
-                        if !else_condition_result.is_normal_flow() {
-                            return Ok(else_condition_result);
-                        }
-
-                        if else_condition_result.is_success() {
-                            return else_clause.body.execute(shell, params).await;
-                        }
-                    }
-                    None => {
-                        return else_clause.body.execute(shell, params).await;
+            for value in expanded_values {
+                if shell.options().print_commands_and_arguments {
+                    if let Some(unexpanded_values) = &self.values {
+                        shell
+                            .trace_command(
+                                params,
+                                std::format!(
+                                    "for {} in {}",
+                                    self.variable_name,
+                                    unexpanded_values.iter().join(" ")
+                                ),
+                            )
+                            .await;
+                    } else {
+                        shell
+                            .trace_command(params, std::format!("for {}", self.variable_name))
+                            .await;
                     }
                 }
-            }
-        }
 
-        // If we got down here, then no branch was taken; we make sure to
-        // reset the last exit status to success and then return success.
-        let result = ExecutionResult::success();
-        shell.set_last_exit_status(result.exit_code);
+                // Update the variable.
+                shell.env_mut().update_or_add(
+                    &self.variable_name,
+                    ShellValueLiteral::Scalar(value),
+                    |_| Ok(()),
+                    EnvironmentLookup::Anywhere,
+                    EnvironmentScope::Global,
+                )?;
 
-        Ok(result)
-    }
-}
+                result = self.body.list.execute(shell, params).await?;
+                if result.is_return_or_exit() {
+                    break;
+                }
 
-#[async_trait::async_trait]
-impl Execute for (WhileOrUntil, &ast::WhileOrUntilClauseCommand) {
-    async fn execute(
-        &self,
-        shell: &mut Shell,
-        params: &ExecutionParameters,
-    ) -> Result<ExecutionResult, error::Error> {
-        let is_while = match self.0 {
-            WhileOrUntil::While => true,
-            WhileOrUntil::Until => false,
-        };
-        let test_condition = &self.1.0;
-        let body = &self.1.1;
+                let is_break = result.is_break();
 
-        let mut result = ExecutionResult::success();
-
-        // Execute loop condition with errexit suppressed
-        let mut condition_params = params.clone();
-        condition_params.suppress_errexit = true;
-
-        loop {
-            let condition_result = test_condition.execute(shell, &condition_params).await?;
-
-            // Update status for condition
-            shell.set_last_exit_status(condition_result.exit_code);
-
-            if !condition_result.is_normal_flow() {
-                result = condition_result;
-
-                // If the condition has break/continue, the while/until loop itself
-                // consumes one level. We need to decrement the level before returning.
                 result.next_control_flow = result.next_control_flow.try_decrement_loop_levels();
-                break;
-            }
 
-            if condition_result.is_success() != is_while {
-                break;
-            }
-
-            result = body.list.execute(shell, params).await?;
-            if result.is_return_or_exit() {
-                break;
-            }
-
-            let is_break = result.is_break();
-
-            result.next_control_flow = result.next_control_flow.try_decrement_loop_levels();
-
-            if is_break || result.is_continue() {
-                break;
-            }
-        }
-
-        shell.set_last_exit_status(result.exit_code);
-        Ok(result)
-    }
-}
-
-#[async_trait::async_trait]
-impl Execute for ast::ArithmeticCommand {
-    async fn execute(
-        &self,
-        shell: &mut Shell,
-        params: &ExecutionParameters,
-    ) -> Result<ExecutionResult, error::Error> {
-        let value = self.expr.eval(shell, params, true).await?;
-        let result = if value != 0 {
-            ExecutionResult::success()
-        } else {
-            ExecutionResult::general_error()
-        };
-
-        shell.set_last_exit_status(result.exit_code);
-
-        Ok(result)
-    }
-}
-
-#[async_trait::async_trait]
-impl Execute for ast::ArithmeticForClauseCommand {
-    async fn execute(
-        &self,
-        shell: &mut Shell,
-        params: &ExecutionParameters,
-    ) -> Result<ExecutionResult, error::Error> {
-        let mut result = ExecutionResult::success();
-        if let Some(initializer) = &self.initializer {
-            initializer.eval(shell, params, true).await?;
-        }
-
-        loop {
-            if let Some(condition) = &self.condition {
-                // An empty condition (e.g., `for (( ; ; ))`) means "always true".
-                if !condition.value.is_empty() && condition.eval(shell, params, true).await? == 0 {
+                if is_break || result.is_continue() {
                     break;
                 }
             }
 
-            result = self.body.list.execute(shell, params).await?;
-            if result.is_return_or_exit() {
-                break;
-            }
-
-            let is_break = result.is_break();
-
-            result.next_control_flow = result.next_control_flow.try_decrement_loop_levels();
-
-            if is_break || result.is_continue() {
-                break;
-            }
-
-            if let Some(updater) = &self.updater {
-                updater.eval(shell, params, true).await?;
-            }
-        }
-
-        shell.set_last_exit_status(result.exit_code);
-        Ok(result)
+            shell.set_last_exit_status(result.exit_code);
+            Ok(result)
+        })
     }
 }
 
-#[async_trait::async_trait]
+impl Execute for ast::CaseClauseCommand {
+    fn execute<'a>(
+        &'a self,
+        shell: &'a mut Shell,
+        params: &'a ExecutionParameters,
+    ) -> BoxFuture<'a, Result<ExecutionResult, error::Error>> {
+        Box::pin(async move {
+            // N.B. One would think it makes sense to trace the expanded value being switched
+            // on, but that's not it.
+            if shell.options().print_commands_and_arguments {
+                shell
+                    .trace_command(params, std::format!("case {} in", &self.value))
+                    .await;
+            }
+
+            let expanded_value = expansion::basic_expand_word(shell, params, &self.value).await?;
+            let mut result: ExecutionResult = ExecutionResult::success();
+            let mut force_execute_next_case = false;
+
+            for case in &self.cases {
+                if force_execute_next_case {
+                    force_execute_next_case = false;
+                } else {
+                    let mut matches = false;
+                    for pattern in &case.patterns {
+                        let expanded_pattern =
+                            expansion::basic_expand_pattern(shell, params, pattern)
+                                .await?
+                                .set_extended_globbing(shell.options().extended_globbing)
+                                .set_case_insensitive(
+                                    shell.options().case_insensitive_conditionals,
+                                );
+
+                        if expanded_pattern.exactly_matches(expanded_value.as_str())? {
+                            matches = true;
+                            break;
+                        }
+                    }
+
+                    if !matches {
+                        continue;
+                    }
+                }
+
+                result = if let Some(case_cmd) = &case.cmd {
+                    case_cmd.execute(shell, params).await?
+                } else {
+                    ExecutionResult::success()
+                };
+
+                // Check for early return (return/exit) or loop control flow (break/continue)
+                if !result.is_normal_flow() {
+                    break;
+                }
+
+                match case.post_action {
+                    ast::CaseItemPostAction::ExitCase => break,
+                    ast::CaseItemPostAction::UnconditionallyExecuteNextCaseItem => {
+                        force_execute_next_case = true;
+                    }
+                    ast::CaseItemPostAction::ContinueEvaluatingCases => (),
+                }
+            }
+
+            shell.set_last_exit_status(result.exit_code);
+
+            Ok(result)
+        })
+    }
+}
+
+impl Execute for ast::IfClauseCommand {
+    fn execute<'a>(
+        &'a self,
+        shell: &'a mut Shell,
+        params: &'a ExecutionParameters,
+    ) -> BoxFuture<'a, Result<ExecutionResult, error::Error>> {
+        Box::pin(async move {
+            // Execute condition with errexit suppressed
+            let mut condition_params = params.clone();
+            condition_params.suppress_errexit = true;
+            let condition = self.condition.execute(shell, &condition_params).await?;
+
+            // Check if the condition itself resulted in non-normal control flow.
+            if !condition.is_normal_flow() {
+                return Ok(condition);
+            }
+
+            if condition.is_success() {
+                return self.then.execute(shell, params).await;
+            }
+
+            if let Some(elses) = &self.elses {
+                for else_clause in elses {
+                    match &else_clause.condition {
+                        Some(else_condition) => {
+                            let else_condition_result =
+                                else_condition.execute(shell, &condition_params).await?;
+
+                            // Check if the elif condition caused non-normal control flow.
+                            if !else_condition_result.is_normal_flow() {
+                                return Ok(else_condition_result);
+                            }
+
+                            if else_condition_result.is_success() {
+                                return else_clause.body.execute(shell, params).await;
+                            }
+                        }
+                        None => {
+                            return else_clause.body.execute(shell, params).await;
+                        }
+                    }
+                }
+            }
+
+            // If we got down here, then no branch was taken; we make sure to
+            // reset the last exit status to success and then return success.
+            let result = ExecutionResult::success();
+            shell.set_last_exit_status(result.exit_code);
+
+            Ok(result)
+        })
+    }
+}
+
+impl Execute for (WhileOrUntil, &ast::WhileOrUntilClauseCommand) {
+    fn execute<'a>(
+        &'a self,
+        shell: &'a mut Shell,
+        params: &'a ExecutionParameters,
+    ) -> BoxFuture<'a, Result<ExecutionResult, error::Error>> {
+        Box::pin(async move {
+            let is_while = match self.0 {
+                WhileOrUntil::While => true,
+                WhileOrUntil::Until => false,
+            };
+            let test_condition = &self.1.0;
+            let body = &self.1.1;
+
+            let mut result = ExecutionResult::success();
+
+            // Execute loop condition with errexit suppressed
+            let mut condition_params = params.clone();
+            condition_params.suppress_errexit = true;
+
+            loop {
+                let condition_result = test_condition.execute(shell, &condition_params).await?;
+
+                // Update status for condition
+                shell.set_last_exit_status(condition_result.exit_code);
+
+                if !condition_result.is_normal_flow() {
+                    result = condition_result;
+
+                    // If the condition has break/continue, the while/until loop itself
+                    // consumes one level. We need to decrement the level before returning.
+                    result.next_control_flow = result.next_control_flow.try_decrement_loop_levels();
+                    break;
+                }
+
+                if condition_result.is_success() != is_while {
+                    break;
+                }
+
+                result = body.list.execute(shell, params).await?;
+                if result.is_return_or_exit() {
+                    break;
+                }
+
+                let is_break = result.is_break();
+
+                result.next_control_flow = result.next_control_flow.try_decrement_loop_levels();
+
+                if is_break || result.is_continue() {
+                    break;
+                }
+            }
+
+            shell.set_last_exit_status(result.exit_code);
+            Ok(result)
+        })
+    }
+}
+
+impl Execute for ast::ArithmeticCommand {
+    fn execute<'a>(
+        &'a self,
+        shell: &'a mut Shell,
+        params: &'a ExecutionParameters,
+    ) -> BoxFuture<'a, Result<ExecutionResult, error::Error>> {
+        Box::pin(async move {
+            let value = self.expr.eval(shell, params, true).await?;
+            let result = if value != 0 {
+                ExecutionResult::success()
+            } else {
+                ExecutionResult::general_error()
+            };
+
+            shell.set_last_exit_status(result.exit_code);
+
+            Ok(result)
+        })
+    }
+}
+
+impl Execute for ast::ArithmeticForClauseCommand {
+    fn execute<'a>(
+        &'a self,
+        shell: &'a mut Shell,
+        params: &'a ExecutionParameters,
+    ) -> BoxFuture<'a, Result<ExecutionResult, error::Error>> {
+        Box::pin(async move {
+            let mut result = ExecutionResult::success();
+            if let Some(initializer) = &self.initializer {
+                initializer.eval(shell, params, true).await?;
+            }
+
+            loop {
+                if let Some(condition) = &self.condition {
+                    // An empty condition (e.g., `for (( ; ; ))`) means "always true".
+                    if !condition.value.is_empty()
+                        && condition.eval(shell, params, true).await? == 0
+                    {
+                        break;
+                    }
+                }
+
+                result = self.body.list.execute(shell, params).await?;
+                if result.is_return_or_exit() {
+                    break;
+                }
+
+                let is_break = result.is_break();
+
+                result.next_control_flow = result.next_control_flow.try_decrement_loop_levels();
+
+                if is_break || result.is_continue() {
+                    break;
+                }
+
+                if let Some(updater) = &self.updater {
+                    updater.eval(shell, params, true).await?;
+                }
+            }
+
+            shell.set_last_exit_status(result.exit_code);
+            Ok(result)
+        })
+    }
+}
+
 impl Execute for ast::FunctionDefinition {
-    async fn execute(
-        &self,
-        shell: &mut Shell,
-        _params: &ExecutionParameters,
-    ) -> Result<ExecutionResult, error::Error> {
-        let func_name = self.fname.value.clone();
+    fn execute<'a>(
+        &'a self,
+        shell: &'a mut Shell,
+        _params: &'a ExecutionParameters,
+    ) -> BoxFuture<'a, Result<ExecutionResult, error::Error>> {
+        Box::pin(async move {
+            let func_name = self.fname.value.clone();
 
-        // The function definition's source context should be the same as the current frame
-        // so we directly pass that through.
-        let source_info = shell
-            .call_stack()
-            .current_frame()
-            .map_or_else(crate::engine::SourceInfo::default, |frame| {
-                frame.adjusted_source_info()
-            });
-        shell.define_func(func_name, self.clone(), &source_info);
+            // The function definition's source context should be the same as the current frame
+            // so we directly pass that through.
+            let source_info = shell
+                .call_stack()
+                .current_frame()
+                .map_or_else(crate::engine::SourceInfo::default, |frame| {
+                    frame.adjusted_source_info()
+                });
+            shell.define_func(func_name, self.clone(), &source_info);
 
-        let result = ExecutionResult::success();
-        shell.set_last_exit_status(result.exit_code);
+            let result = ExecutionResult::success();
+            shell.set_last_exit_status(result.exit_code);
 
-        Ok(result)
+            Ok(result)
+        })
     }
 }
 
-#[async_trait::async_trait]
 #[allow(clippy::too_many_lines)]
 impl ExecuteInPipeline for ast::SimpleCommand {
-    async fn execute_in_pipeline(
-        &self,
-        mut context: PipelineExecutionContext<'_>,
+    fn execute_in_pipeline<'a>(
+        &'a self,
+        mut context: PipelineExecutionContext<'a>,
         mut params: ExecutionParameters,
-    ) -> Result<ExecutionSpawnResult, error::Error> {
-        let prefix_iter = self.prefix.as_ref().map(|s| s.0.iter()).unwrap_or_default();
-        let suffix_iter = self.suffix.as_ref().map(|s| s.0.iter()).unwrap_or_default();
-        let cmd_name_items = self
-            .word_or_name
-            .as_ref()
-            .map(|won| CommandPrefixOrSuffixItem::Word(won.clone()));
+    ) -> BoxFuture<'a, Result<ExecutionSpawnResult, error::Error>> {
+        Box::pin(async move {
+            let prefix_iter = self.prefix.as_ref().map(|s| s.0.iter()).unwrap_or_default();
+            let suffix_iter = self.suffix.as_ref().map(|s| s.0.iter()).unwrap_or_default();
+            let cmd_name_items = self
+                .word_or_name
+                .as_ref()
+                .map(|won| CommandPrefixOrSuffixItem::Word(won.clone()));
 
-        let mut assignments = vec![];
-        let mut args: Vec<CommandArg> = vec![];
-        let mut command_takes_assignments = false;
+            let mut assignments = vec![];
+            let mut args: Vec<CommandArg> = vec![];
+            let mut command_takes_assignments = false;
 
-        // Capture the status change count before expansion, so we can detect
-        // if expansion (e.g., command substitution) set an exit status.
-        let status_change_count_before_expansion =
-            context.shell.target().last_exit_status_change_count();
+            // Capture the status change count before expansion, so we can detect
+            // if expansion (e.g., command substitution) set an exit status.
+            let status_change_count_before_expansion =
+                context.shell.target().last_exit_status_change_count();
 
-        for item in prefix_iter.chain(cmd_name_items.iter()).chain(suffix_iter) {
-            match item {
-                CommandPrefixOrSuffixItem::IoRedirect(redirect) => {
-                    if let Err(e) =
-                        setup_redirect(context.shell.target_mut(), &mut params, redirect).await
-                    {
-                        writeln!(params.stderr(context.shell.target()), "error: {e}")?;
-                        return Ok(ExecutionResult::general_error().into());
-                    }
-                }
-                CommandPrefixOrSuffixItem::ProcessSubstitution(kind, subshell_command) => {
-                    let (installed_fd_num, substitution_file) = setup_process_substitution(
-                        context.shell.target(),
-                        &params,
-                        kind,
-                        subshell_command,
-                    )?;
-
-                    params
-                        .open_files
-                        .set_fd(installed_fd_num, substitution_file);
-
-                    args.push(CommandArg::String(std::format!(
-                        "/dev/fd/{installed_fd_num}"
-                    )));
-                }
-                CommandPrefixOrSuffixItem::AssignmentWord(assignment, word) => {
-                    if args.is_empty() {
-                        // If we haven't yet seen any arguments, then this must be a proper
-                        // scoped assignment. Add it to the list we're accumulating.
-                        assignments.push(assignment);
-                    } else {
-                        if command_takes_assignments {
-                            // This looks like an assignment, and the command being invoked is a
-                            // well-known builtin that takes arguments that need to function like
-                            // assignments (but which are processed by the builtin).
-                            let expanded =
-                                expand_assignment(context.shell.target_mut(), &params, assignment)
-                                    .await?;
-                            args.push(CommandArg::Assignment(expanded));
-                        } else {
-                            // This *looks* like an assignment, but it's really a string we should
-                            // fully treat as a regular looking
-                            // argument.
-                            let mut next_args = expansion::full_expand_and_split_word(
-                                context.shell.target_mut(),
-                                &params,
-                                word,
-                            )
-                            .await?
-                            .into_iter()
-                            .map(CommandArg::String)
-                            .collect();
-                            args.append(&mut next_args);
+            for item in prefix_iter.chain(cmd_name_items.iter()).chain(suffix_iter) {
+                match item {
+                    CommandPrefixOrSuffixItem::IoRedirect(redirect) => {
+                        if let Err(e) =
+                            setup_redirect(context.shell.target_mut(), &mut params, redirect).await
+                        {
+                            writeln!(params.stderr(context.shell.target()), "error: {e}")?;
+                            return Ok(ExecutionResult::general_error().into());
                         }
                     }
+                    CommandPrefixOrSuffixItem::ProcessSubstitution(kind, subshell_command) => {
+                        let (installed_fd_num, substitution_file) = setup_process_substitution(
+                            context.shell.target(),
+                            &params,
+                            kind,
+                            subshell_command,
+                        )?;
+
+                        params
+                            .open_files
+                            .set_fd(installed_fd_num, substitution_file);
+
+                        args.push(CommandArg::String(std::format!(
+                            "/dev/fd/{installed_fd_num}"
+                        )));
+                    }
+                    CommandPrefixOrSuffixItem::AssignmentWord(assignment, word) => {
+                        if args.is_empty() {
+                            // If we haven't yet seen any arguments, then this must be a proper
+                            // scoped assignment. Add it to the list we're accumulating.
+                            assignments.push(assignment);
+                        } else {
+                            if command_takes_assignments {
+                                // This looks like an assignment, and the command being invoked is a
+                                // well-known builtin that takes arguments that need to function like
+                                // assignments (but which are processed by the builtin).
+                                let expanded = expand_assignment(
+                                    context.shell.target_mut(),
+                                    &params,
+                                    assignment,
+                                )
+                                .await?;
+                                args.push(CommandArg::Assignment(expanded));
+                            } else {
+                                // This *looks* like an assignment, but it's really a string we should
+                                // fully treat as a regular looking
+                                // argument.
+                                let mut next_args = expansion::full_expand_and_split_word(
+                                    context.shell.target_mut(),
+                                    &params,
+                                    word,
+                                )
+                                .await?
+                                .into_iter()
+                                .map(CommandArg::String)
+                                .collect();
+                                args.append(&mut next_args);
+                            }
+                        }
+                    }
+                    CommandPrefixOrSuffixItem::Word(arg) => {
+                        let mut next_args = expansion::full_expand_and_split_word(
+                            context.shell.target_mut(),
+                            &params,
+                            arg,
+                        )
+                        .await?;
+
+                        if args.is_empty()
+                            && let Some(cmd_name) = next_args.first()
+                        {
+                            if let Some(alias_value) =
+                                context.shell.target().aliases().get(cmd_name.as_str())
+                            {
+                                //
+                                // TODO(#57): This is a total hack; aliases are supposed to be
+                                // handled much earlier in the process.
+                                //
+                                let mut alias_pieces: Vec<_> = alias_value
+                                    .split_ascii_whitespace()
+                                    .map(|i| i.to_owned())
+                                    .collect();
+
+                                next_args.remove(0);
+                                alias_pieces.append(&mut next_args);
+
+                                next_args = alias_pieces;
+                            }
+
+                            let first_arg = next_args[0].as_str();
+
+                            // Check if we're going to be invoking a special declaration builtin.
+                            // That will change how we parse and process args.
+                            if context
+                                .shell
+                                .target()
+                                .builtins()
+                                .get(first_arg)
+                                .is_some_and(|r| !r.disabled && r.declaration_builtin)
+                            {
+                                command_takes_assignments = true;
+                            }
+                        }
+
+                        let mut next_args = next_args.into_iter().map(CommandArg::String).collect();
+                        args.append(&mut next_args);
+                    }
                 }
-                CommandPrefixOrSuffixItem::Word(arg) => {
-                    let mut next_args = expansion::full_expand_and_split_word(
+            }
+
+            // If we have a command, then execute it.
+            if let Some(CommandArg::String(cmd_name)) = args.first().cloned() {
+                let mut stderr = params.stderr(context.shell.target());
+
+                let (owned_shell, parent_shell) = context.shell.into_owned_and_parent();
+                let shell = if let Some(owned_shell) = owned_shell {
+                    commands::ShellForCommand::subshell(owned_shell, parent_shell)
+                } else {
+                    commands::ShellForCommand::parent(parent_shell)
+                };
+
+                let context = PipelineExecutionContext {
+                    shell,
+                    process_group_id: context.process_group_id,
+                };
+
+                match execute_command(context, params, cmd_name, assignments, args).await {
+                    Ok(result) => Ok(result),
+                    Err(err) => {
+                        let _ = parent_shell.display_error(&mut stderr, &err);
+
+                        let result = err.into_result(parent_shell);
+                        Ok(result.into())
+                    }
+                }
+            } else {
+                // No command to run; assignments must be applied to this shell.
+                for assignment in assignments {
+                    // Apply the assignment. Don't mark as fatal - let errors be handled
+                    // at the program level so multiple complete_commands can execute independently.
+                    apply_assignment(
+                        assignment,
                         context.shell.target_mut(),
                         &params,
-                        arg,
+                        false,
+                        None,
+                        EnvironmentScope::Global,
                     )
                     .await?;
-
-                    if args.is_empty()
-                        && let Some(cmd_name) = next_args.first()
-                    {
-                        if let Some(alias_value) =
-                            context.shell.target().aliases().get(cmd_name.as_str())
-                        {
-                            //
-                            // TODO(#57): This is a total hack; aliases are supposed to be
-                            // handled much earlier in the process.
-                            //
-                            let mut alias_pieces: Vec<_> = alias_value
-                                .split_ascii_whitespace()
-                                .map(|i| i.to_owned())
-                                .collect();
-
-                            next_args.remove(0);
-                            alias_pieces.append(&mut next_args);
-
-                            next_args = alias_pieces;
-                        }
-
-                        let first_arg = next_args[0].as_str();
-
-                        // Check if we're going to be invoking a special declaration builtin.
-                        // That will change how we parse and process args.
-                        if context
-                            .shell
-                            .target()
-                            .builtins()
-                            .get(first_arg)
-                            .is_some_and(|r| !r.disabled && r.declaration_builtin)
-                        {
-                            command_takes_assignments = true;
-                        }
-                    }
-
-                    let mut next_args = next_args.into_iter().map(CommandArg::String).collect();
-                    args.append(&mut next_args);
                 }
-            }
-        }
 
-        // If we have a command, then execute it.
-        if let Some(CommandArg::String(cmd_name)) = args.first().cloned() {
-            let mut stderr = params.stderr(context.shell.target());
+                // Assignment-only statements clear $_ (set to empty string).
+                // This matches bash behavior where assignments don't have a "last
+                // argument".
+                context.shell.target_mut().update_last_arg_variable(None);
 
-            let (owned_shell, parent_shell) = context.shell.into_owned_and_parent();
-            let shell = if let Some(owned_shell) = owned_shell {
-                commands::ShellForCommand::subshell(owned_shell, parent_shell)
-            } else {
-                commands::ShellForCommand::parent(parent_shell)
-            };
-
-            let context = PipelineExecutionContext {
-                shell,
-                process_group_id: context.process_group_id,
-            };
-
-            match execute_command(context, params, cmd_name, assignments, args).await {
-                Ok(result) => Ok(result),
-                Err(err) => {
-                    let _ = parent_shell.display_error(&mut stderr, &err);
-
-                    let result = err.into_result(parent_shell);
-                    Ok(result.into())
+                // We need to set the last exit status to indicate assignment success,
+                // but only if there was no status set during expansion. We use the
+                // status count captured before expansion to detect if command
+                // substitution (or other expansion) set an exit status.
+                if status_change_count_before_expansion
+                    == context.shell.target().last_exit_status_change_count()
+                {
+                    context.shell.target_mut().set_last_exit_status(0);
                 }
-            }
-        } else {
-            // No command to run; assignments must be applied to this shell.
-            for assignment in assignments {
-                // Apply the assignment. Don't mark as fatal - let errors be handled
-                // at the program level so multiple complete_commands can execute independently.
-                apply_assignment(
-                    assignment,
-                    context.shell.target_mut(),
-                    &params,
-                    false,
-                    None,
-                    EnvironmentScope::Global,
-                )
-                .await?;
-            }
 
-            // Assignment-only statements clear $_ (set to empty string).
-            // This matches bash behavior where assignments don't have a "last
-            // argument".
-            context.shell.target_mut().update_last_arg_variable(None);
-
-            // We need to set the last exit status to indicate assignment success,
-            // but only if there was no status set during expansion. We use the
-            // status count captured before expansion to detect if command
-            // substitution (or other expansion) set an exit status.
-            if status_change_count_before_expansion
-                == context.shell.target().last_exit_status_change_count()
-            {
-                context.shell.target_mut().set_last_exit_status(0);
+                // Return the last exit status we have; in some cases, an expansion
+                // might result in a non-zero exit status stored in the shell.
+                Ok(ExecutionResult::new(context.shell.target().last_exit_status()).into())
             }
-
-            // Return the last exit status we have; in some cases, an expansion
-            // might result in a non-zero exit status stored in the shell.
-            Ok(ExecutionResult::new(context.shell.target().last_exit_status()).into())
-        }
+        })
     }
 }
 

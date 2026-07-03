@@ -1,4 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::{
+    collections::HashSet,
+    path::{Path, PathBuf},
+};
 
 use crate::engine::escape;
 
@@ -48,10 +51,12 @@ pub(crate) async fn complete_async(
     let completing_end_of_line = pos == line.len();
 
     // Deduplicate the candidates (retaining order), then postprocess them.
+    let mut seen_candidates = HashSet::new();
+    completions
+        .candidates
+        .retain(|candidate| seen_candidates.insert(candidate.clone()));
     completions.candidates = completions
         .candidates
-        .into_iter()
-        .collect::<indexmap::IndexSet<_>>()
         .into_iter()
         .map(|candidate| {
             postprocess_completion_candidate(

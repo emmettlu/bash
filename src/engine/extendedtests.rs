@@ -1,4 +1,5 @@
 use crate::parser::ast;
+use futures::future::BoxFuture;
 use std::path::Path;
 
 use crate::engine::{
@@ -8,37 +9,38 @@ use crate::engine::{
     variables::{self, ArrayLiteral},
 };
 
-#[async_recursion::async_recursion]
-pub(crate) async fn eval_extended_test_expr(
-    expr: &ast::ExtendedTestExpr,
-    shell: &mut Shell,
-    params: &ExecutionParameters,
-) -> Result<bool, error::Error> {
-    match expr {
-        ast::ExtendedTestExpr::UnaryTest(op, operand) => {
-            apply_unary_predicate(op, operand, shell, params).await
+pub(crate) fn eval_extended_test_expr<'a>(
+    expr: &'a ast::ExtendedTestExpr,
+    shell: &'a mut Shell,
+    params: &'a ExecutionParameters,
+) -> BoxFuture<'a, Result<bool, error::Error>> {
+    Box::pin(async move {
+        match expr {
+            ast::ExtendedTestExpr::UnaryTest(op, operand) => {
+                apply_unary_predicate(op, operand, shell, params).await
+            }
+            ast::ExtendedTestExpr::BinaryTest(op, left, right) => {
+                apply_binary_predicate(op, left, right, shell, params).await
+            }
+            ast::ExtendedTestExpr::And(left, right) => {
+                let result = eval_extended_test_expr(left, shell, params).await?
+                    && eval_extended_test_expr(right, shell, params).await?;
+                Ok(result)
+            }
+            ast::ExtendedTestExpr::Or(left, right) => {
+                let result = eval_extended_test_expr(left, shell, params).await?
+                    || eval_extended_test_expr(right, shell, params).await?;
+                Ok(result)
+            }
+            ast::ExtendedTestExpr::Not(expr) => {
+                let result = !eval_extended_test_expr(expr, shell, params).await?;
+                Ok(result)
+            }
+            ast::ExtendedTestExpr::Parenthesized(expr) => {
+                eval_extended_test_expr(expr, shell, params).await
+            }
         }
-        ast::ExtendedTestExpr::BinaryTest(op, left, right) => {
-            apply_binary_predicate(op, left, right, shell, params).await
-        }
-        ast::ExtendedTestExpr::And(left, right) => {
-            let result = eval_extended_test_expr(left, shell, params).await?
-                && eval_extended_test_expr(right, shell, params).await?;
-            Ok(result)
-        }
-        ast::ExtendedTestExpr::Or(left, right) => {
-            let result = eval_extended_test_expr(left, shell, params).await?
-                || eval_extended_test_expr(right, shell, params).await?;
-            Ok(result)
-        }
-        ast::ExtendedTestExpr::Not(expr) => {
-            let result = !eval_extended_test_expr(expr, shell, params).await?;
-            Ok(result)
-        }
-        ast::ExtendedTestExpr::Parenthesized(expr) => {
-            eval_extended_test_expr(expr, shell, params).await
-        }
-    }
+    })
 }
 
 async fn apply_unary_predicate(

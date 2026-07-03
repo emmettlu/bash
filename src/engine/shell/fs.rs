@@ -1,8 +1,6 @@
 //! Filesystem interaction in the shell.
 
-use std::path::{Path, PathBuf};
-
-use normalize_path::NormalizePath as _;
+use std::path::{Component, Path, PathBuf};
 
 use crate::engine::{
     ExecutionParameters, ShellFd,
@@ -11,6 +9,30 @@ use crate::engine::{
     sys::users,
     variables,
 };
+
+fn clean_path_lexically(path: &Path) -> PathBuf {
+    let mut normalized = PathBuf::new();
+
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::ParentDir => match normalized.components().next_back() {
+                Some(Component::Normal(_)) => {
+                    normalized.pop();
+                }
+                Some(Component::RootDir | Component::Prefix(_)) => {}
+                Some(Component::CurDir | Component::ParentDir) | None => {
+                    normalized.push(component.as_os_str());
+                }
+            },
+            Component::Prefix(_) | Component::RootDir | Component::Normal(_) => {
+                normalized.push(component.as_os_str());
+            }
+        }
+    }
+
+    normalized
+}
 
 impl crate::engine::Shell {
     /// Sets the shell's current working directory to the given path.
@@ -33,7 +55,7 @@ impl crate::engine::Shell {
         }
 
         // Normalize the path (but don't canonicalize it).
-        let cleaned_path = abs_path.normalize();
+        let cleaned_path = clean_path_lexically(&abs_path);
 
         let pwd = cleaned_path.to_string_lossy().to_string();
 

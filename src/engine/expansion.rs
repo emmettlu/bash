@@ -5,6 +5,7 @@ use std::cmp::min;
 use std::io::Write as _;
 
 use crate::parser::word::{ParameterTransformOp, SubstringMatchKind};
+use futures::future::BoxFuture;
 use itertools::Itertools;
 
 use crate::engine::ExecutionParameters;
@@ -849,110 +850,115 @@ impl<'a> WordExpander<'a> {
         }
     }
 
-    #[async_recursion::async_recursion]
-    async fn expand_word_piece(
-        &mut self,
+    fn expand_word_piece<'b>(
+        &'b mut self,
         word_piece: crate::parser::word::WordPiece,
-    ) -> Result<Expansion, error::Error> {
-        let expansion: Expansion = match word_piece {
-            crate::parser::word::WordPiece::Text(s) => {
-                Expansion::from(ExpansionPiece::Splittable(s))
-            }
-            crate::parser::word::WordPiece::SingleQuotedText(s) => {
-                Expansion::from(ExpansionPiece::Unsplittable(s))
-            }
-            crate::parser::word::WordPiece::AnsiCQuotedText(s) => {
-                let (expanded, _) = escape::expand_backslash_escapes(
-                    s.as_str(),
-                    escape::EscapeExpansionMode::AnsiCQuotes,
-                )?;
-                Expansion::from(ExpansionPiece::Unsplittable(
-                    String::from_utf8_lossy(expanded.as_slice()).into_owned(),
-                ))
-            }
-            crate::parser::word::WordPiece::DoubleQuotedSequence(pieces)
-            | crate::parser::word::WordPiece::GettextDoubleQuotedSequence(pieces) => {
-                let pieces_is_empty = pieces.is_empty();
-
-                // Save the previous state and set the flag
-                let previously_in_double_quotes = self.in_double_quotes;
-                self.in_double_quotes = true;
-
-                // Process pieces; don't inspect the result yet, so we can make
-                // sure we restore the previous value of the 'in_double_quotes' flag.
-                let result = self.process_double_quoted_pieces(pieces).await;
-
-                // Restore the previous state
-                self.in_double_quotes = previously_in_double_quotes;
-
-                // Now we can inspect the result.
-                let mut fields = result?;
-
-                // If there were no pieces, then make sure we yield a single field containing an
-                // empty, unsplittable string.
-                if pieces_is_empty {
-                    fields.push(WordField::from(ExpansionPiece::Unsplittable(String::new())));
+    ) -> BoxFuture<'b, Result<Expansion, error::Error>> {
+        Box::pin(async move {
+            let expansion: Expansion = match word_piece {
+                crate::parser::word::WordPiece::Text(s) => {
+                    Expansion::from(ExpansionPiece::Splittable(s))
                 }
-
-                Expansion {
-                    fields,
-                    concatenate: false,
-                    undefined: false,
-                    from_array: false,
-                }
-            }
-            crate::parser::word::WordPiece::TildeExpansion(tilde_expr) => Expansion::from(
-                ExpansionPiece::Unsplittable(self.expand_tilde_expression(&tilde_expr)?),
-            ),
-            crate::parser::word::WordPiece::ParameterExpansion(p) => {
-                self.expand_parameter_expr(p).await?
-            }
-            crate::parser::word::WordPiece::BackquotedCommandSubstitution(s)
-            | crate::parser::word::WordPiece::CommandSubstitution(s) => {
-                let mut cmd_output = if !self.disable_command_substitutions {
-                    commands::invoke_command_in_subshell_and_get_output(self.shell, self.params, s)
-                        .await?
-                } else {
-                    String::new()
-                };
-
-                // Strips null bytes from command substitution output for compatibility.
-                if cmd_output.contains('\0') {
-                    writeln!(
-                        self.params.stderr(self.shell),
-                        "warning: command substitution: ignored null byte in input",
-                    )?;
-                    cmd_output.retain(|c| c != '\0');
-                }
-
-                // We trim trailing newlines, per spec.
-                let trimmed_len = cmd_output.trim_end_matches('\n').len();
-                cmd_output.truncate(trimmed_len);
-
-                Expansion::from(ExpansionPiece::Splittable(cmd_output))
-            }
-            crate::parser::word::WordPiece::EscapeSequence(s) => {
-                if let Some(escaped) = s.strip_prefix('\\') {
-                    // If we are *not* in a double-quoted context and we were requested to skip
-                    // unquoted backslash removal, then we need to skip removing backslashes here.
-                    if !self.in_double_quotes && self.disable_unquoted_backslash_removal {
-                        return Ok(Expansion::from(ExpansionPiece::Splittable(s)));
-                    }
-
-                    // Otherwise, we expect a backslash here; remove it.
-                    Expansion::from(ExpansionPiece::Unsplittable(escaped.to_owned()))
-                } else {
-                    // We don't ever expect this case, as it breaks our invariant--but
-                    // we handle it to avoid panicking.
+                crate::parser::word::WordPiece::SingleQuotedText(s) => {
                     Expansion::from(ExpansionPiece::Unsplittable(s))
                 }
-            }
-            crate::parser::word::WordPiece::ArithmeticExpression(e) => Expansion::from(
-                ExpansionPiece::Splittable(self.expand_arithmetic_expr(e).await?),
-            ),
-        };
+                crate::parser::word::WordPiece::AnsiCQuotedText(s) => {
+                    let (expanded, _) = escape::expand_backslash_escapes(
+                        s.as_str(),
+                        escape::EscapeExpansionMode::AnsiCQuotes,
+                    )?;
+                    Expansion::from(ExpansionPiece::Unsplittable(
+                        String::from_utf8_lossy(expanded.as_slice()).into_owned(),
+                    ))
+                }
+                crate::parser::word::WordPiece::DoubleQuotedSequence(pieces)
+                | crate::parser::word::WordPiece::GettextDoubleQuotedSequence(pieces) => {
+                    let pieces_is_empty = pieces.is_empty();
 
-        Ok(expansion)
+                    // Save the previous state and set the flag
+                    let previously_in_double_quotes = self.in_double_quotes;
+                    self.in_double_quotes = true;
+
+                    // Process pieces; don't inspect the result yet, so we can make
+                    // sure we restore the previous value of the 'in_double_quotes' flag.
+                    let result = self.process_double_quoted_pieces(pieces).await;
+
+                    // Restore the previous state
+                    self.in_double_quotes = previously_in_double_quotes;
+
+                    // Now we can inspect the result.
+                    let mut fields = result?;
+
+                    // If there were no pieces, then make sure we yield a single field containing an
+                    // empty, unsplittable string.
+                    if pieces_is_empty {
+                        fields.push(WordField::from(ExpansionPiece::Unsplittable(String::new())));
+                    }
+
+                    Expansion {
+                        fields,
+                        concatenate: false,
+                        undefined: false,
+                        from_array: false,
+                    }
+                }
+                crate::parser::word::WordPiece::TildeExpansion(tilde_expr) => Expansion::from(
+                    ExpansionPiece::Unsplittable(self.expand_tilde_expression(&tilde_expr)?),
+                ),
+                crate::parser::word::WordPiece::ParameterExpansion(p) => {
+                    self.expand_parameter_expr(p).await?
+                }
+                crate::parser::word::WordPiece::BackquotedCommandSubstitution(s)
+                | crate::parser::word::WordPiece::CommandSubstitution(s) => {
+                    let mut cmd_output = if !self.disable_command_substitutions {
+                        commands::invoke_command_in_subshell_and_get_output(
+                            self.shell,
+                            self.params,
+                            s,
+                        )
+                        .await?
+                    } else {
+                        String::new()
+                    };
+
+                    // Strips null bytes from command substitution output for compatibility.
+                    if cmd_output.contains('\0') {
+                        writeln!(
+                            self.params.stderr(self.shell),
+                            "warning: command substitution: ignored null byte in input",
+                        )?;
+                        cmd_output.retain(|c| c != '\0');
+                    }
+
+                    // We trim trailing newlines, per spec.
+                    let trimmed_len = cmd_output.trim_end_matches('\n').len();
+                    cmd_output.truncate(trimmed_len);
+
+                    Expansion::from(ExpansionPiece::Splittable(cmd_output))
+                }
+                crate::parser::word::WordPiece::EscapeSequence(s) => {
+                    if let Some(escaped) = s.strip_prefix('\\') {
+                        // If we are *not* in a double-quoted context and we were requested to skip
+                        // unquoted backslash removal, then we need to skip removing backslashes here.
+                        if !self.in_double_quotes && self.disable_unquoted_backslash_removal {
+                            return Ok(Expansion::from(ExpansionPiece::Splittable(s)));
+                        }
+
+                        // Otherwise, we expect a backslash here; remove it.
+                        Expansion::from(ExpansionPiece::Unsplittable(escaped.to_owned()))
+                    } else {
+                        // We don't ever expect this case, as it breaks our invariant--but
+                        // we handle it to avoid panicking.
+                        Expansion::from(ExpansionPiece::Unsplittable(s))
+                    }
+                }
+                crate::parser::word::WordPiece::ArithmeticExpression(e) => Expansion::from(
+                    ExpansionPiece::Splittable(self.expand_arithmetic_expr(e).await?),
+                ),
+            };
+
+            Ok(expansion)
+        })
     }
 
     fn expand_tilde_expression(

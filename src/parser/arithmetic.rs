@@ -22,7 +22,7 @@ pub fn parse(input: &str) -> Result<ast::ArithmeticExpr, error::WordParseError> 
 fn cacheable_parse(input: String) -> Result<ast::ArithmeticExpr, error::WordParseError> {
     ARITHMETIC_PARSE_CACHE.with(|cache| {
         crate::engine::cache::get_or_try_insert_with(cache, input, |input| {
-            tracing::debug!(target: "arithmetic", "parsing arithmetic expression: '{input}'");
+            log::debug!(target: "arithmetic", "parsing arithmetic expression: '{input}'");
             arithmetic::full_expression(input.as_str())
                 .map_err(|e| error::WordParseError::ArithmeticExpression(e.into()))
         })

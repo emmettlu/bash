@@ -513,12 +513,12 @@ fn cacheable_parse(
     WORD_PARSE_CACHE.with(|cache| {
         crate::engine::cache::get_or_try_insert_with(cache, (word, options), |key| {
             let (word, options) = key;
-            tracing::debug!(target: "expansion", "Parsing word '{}'", word);
+            log::debug!(target: "expansion", "Parsing word '{}'", word);
 
             let pieces = expansion_parser::unexpanded_word(word.as_str(), options)
                 .map_err(|err| error::WordParseError::Word(word.clone(), err.into()))?;
 
-            tracing::debug!(target: "expansion", "Parsed word '{}' => {{{:?}}}", word, pieces);
+            log::debug!(target: "expansion", "Parsed word '{}' => {{{:?}}}", word, pieces);
 
             Ok(pieces)
         })
@@ -609,11 +609,11 @@ peg::parser! {
         // Helper rule that enables pegviz to be used to visualize debug peg traces.
         rule traced<T>(e: rule<T>) -> T =
             &(input:$([_]*) {
-                #[cfg(feature = "debug-tracing")]
+                #[cfg(feature = "debug-parser")]
                 println!("[PEG_INPUT_START]\n{input}\n[PEG_TRACE_START]");
             })
             e:e()? {?
-                #[cfg(feature = "debug-tracing")]
+                #[cfg(feature = "debug-parser")]
                 println!("[PEG_TRACE_STOP]");
                 e.ok_or("")
             }

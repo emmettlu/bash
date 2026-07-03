@@ -135,7 +135,7 @@ impl From<std::process::Output> for ExecutionResult {
             return Self::new((code & 0xFF) as u8);
         }
 
-        tracing::error!("unhandled process exit");
+        log::error!("unhandled process exit");
         Self::new(exit_code::NOT_FOUND)
     }
 }

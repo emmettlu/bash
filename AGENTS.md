@@ -104,9 +104,9 @@ cargo test
 - 测试代码可用 `anyhow`
 - 常见错误类型: `engine::Error`, `engine::ErrorKind`, `parser::ParseError`
 
-### 日志与追踪
+### 日志与调试输出
 
-使用 `tracing` 进行结构化调试日志.
+使用 `log` + `nanologger` 进行调试日志输出.
 
 预定义分类在 `trace_categories.rs`:
 
@@ -115,7 +115,7 @@ cargo test
 用法示例:
 
 ```rust
-tracing::debug!(target: trace_categories::JOBS, "polling job {}", job_id);
+log::debug!(target: trace_categories::JOBS, "polling job {}", job_id);
 ```
 
 ## 4. Windows 平台特殊考虑

@@ -33,7 +33,7 @@ impl crate::engine::Shell {
                 .await?;
             Ok(true)
         } else {
-            tracing::debug!("skipping non-existent file: {}", path.display());
+            log::debug!("skipping non-existent file: {}", path.display());
             Ok(false)
         }
     }
@@ -64,7 +64,7 @@ impl crate::engine::Shell {
         call_type: callstack::ScriptCallType,
     ) -> Result<ExecutionResult, error::Error> {
         let path = path.as_ref();
-        tracing::debug!("sourcing: {}", path.display());
+        log::debug!("sourcing: {}", path.display());
 
         let mut options = std::fs::File::options();
         options.read(true);
@@ -86,7 +86,7 @@ impl crate::engine::Shell {
         let mut reader = std::io::BufReader::new(opened_file);
         let mut parser = crate::parser::Parser::new(&mut reader, &self.parser_options());
 
-        tracing::debug!(target: trace_categories::PARSE, "Parsing sourced file: {}", source_info.source);
+        log::debug!(target: trace_categories::PARSE, "Parsing sourced file: {}", source_info.source);
         let parse_result = parser.parse_program();
 
         let script_positional_args = args.map(Into::into);

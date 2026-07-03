@@ -147,7 +147,7 @@ impl<R: std::io::BufRead> Parser<R> {
         // First we tokenize the input, according to the policy implied by provided options.
         let mut tokenizer = Tokenizer::new(&mut self.reader, &self.options.tokenizer_options());
 
-        tracing::debug!(target: "tokenize", "Tokenizing...");
+        log::debug!(target: "tokenize", "Tokenizing...");
 
         let mut tokens = vec![];
         loop {
@@ -163,7 +163,7 @@ impl<R: std::io::BufRead> Parser<R> {
 
             let reason = result.reason;
             if let Some(token) = result.token {
-                tracing::debug!(target: "tokenize", "TOKEN {}: {:?} {reason:?}", tokens.len(), token);
+                log::debug!(target: "tokenize", "TOKEN {}: {:?} {reason:?}", tokens.len(), token);
                 tokens.push(token);
             }
 
@@ -172,7 +172,7 @@ impl<R: std::io::BufRead> Parser<R> {
             }
         }
 
-        tracing::debug!(target: "tokenize", "  => {} token(s)", tokens.len());
+        log::debug!(target: "tokenize", "  => {} token(s)", tokens.len());
 
         Ok(tokens)
     }
@@ -201,11 +201,11 @@ where
 {
     match parse_result {
         Ok(program) => {
-            tracing::debug!(target: "parse", "PROG: {:?}", program);
+            log::debug!(target: "parse", "PROG: {:?}", program);
             Ok(program)
         }
         Err(parse_error) => {
-            tracing::debug!(target: "parse", "Parse error: {:?}", parse_error);
+            log::debug!(target: "parse", "Parse error: {:?}", parse_error);
             Err(crate::parser::error::convert_peg_parse_error(
                 &parse_error,
                 tokens,

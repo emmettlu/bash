@@ -695,10 +695,10 @@ pub(crate) fn execute_external_command(
     }
 
     // When tracing is enabled, report.
-    tracing::debug!(
+    log::debug!(
         target: trace_categories::COMMANDS,
         "Spawning: cmd='{} {}'",
-        cmd.get_program().to_string_lossy().to_string(),
+        cmd.get_program().to_string_lossy(),
         cmd.get_args()
             .map(|a| a.to_string_lossy().to_string())
             .join(" ")
@@ -715,7 +715,7 @@ pub(crate) fn execute_external_command(
                     actual_pgid = Some(*pid);
                 }
             } else {
-                tracing::warn!("could not retrieve pid for child process");
+                log::warn!("could not retrieve pid for child process");
             }
 
             Ok(ExecutionSpawnResult::StartedProcess(

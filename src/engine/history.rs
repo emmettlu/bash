@@ -43,7 +43,7 @@ impl History {
                 // valid UTF8?), skip it and make a best-effort attempt to proceed on.
                 // We'll later warn the user.
                 Err(err) if err.kind() == std::io::ErrorKind::InvalidData => {
-                    tracing::warn!("unreadable history line; {err}");
+                    log::warn!("unreadable history line; {err}");
                     continue;
                 }
                 // In the event of other kinds of errors, return an error result. We don't

@@ -19,7 +19,7 @@ impl builtins::Command for EvalCommand {
         if !self.args.is_empty() {
             let args_concatenated = self.args.join(" ");
 
-            tracing::debug!("Applying eval to: {:?}", args_concatenated);
+            log::debug!("Applying eval to: {:?}", args_concatenated);
 
             // Our new source context is relative to the current position because we are only
             // providing the raw string being eval'd.

@@ -438,7 +438,7 @@ impl ShellVariable {
                 Ok(())
             }
             _ => {
-                tracing::error!("assigning to index {array_index} of {:?}", self.value);
+                log::error!("assigning to index {array_index} of {:?}", self.value);
                 error::unimp("assigning to index of non-array variable")
             }
         }

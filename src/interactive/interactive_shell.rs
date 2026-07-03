@@ -129,7 +129,7 @@ impl<'a, IB: InputBackend> InteractiveShell<'a, IB> {
                         crate::engine::results::ExecutionControlFlow::ReturnFromFunctionOrScript,
                     ..
                 }) => {
-                    tracing::error!("return from non-function/script");
+                    log::error!("return from non-function/script");
                 }
                 InteractiveExecutionResult::Executed(_) => {}
                 InteractiveExecutionResult::Failed(err) => {
@@ -162,7 +162,7 @@ impl<'a, IB: InputBackend> InteractiveShell<'a, IB> {
         if let Err(e) = shell.save_history() {
             // N.B. This seems like the sort of thing that's worth being noisy about,
             // but bash doesn't do that -- and probably for a reason.
-            tracing::debug!("couldn't save history: {e}");
+            log::debug!("couldn't save history: {e}");
         }
 
         // Give the shell an opportunity to perform any on-exit operations.

@@ -16,19 +16,14 @@ compio = { version = "0", default-features = false, features = ["macros", "runti
 fancy-regex = "0"
 futures = "0"
 itertools = "0"
+log = "0"
+nanologger = "0"
 peg = "0"
 serde = { version = "1", features = ["derive"] }
-
 strum = "0"
 strum_macros = "0"
 thiserror = "2"
 toml = { version = "1", default-features = false, features = ["parse", "serde", "std"] }
-tracing = { version = "0", default-features = false, features = ["std"] }
-tracing-subscriber = { version = "0", default-features = false, features = [
-  "fmt",
-  "registry",
-  "std",
-] }
 utf8-chars = "3"
 windows-sys = { version = "0", features = [
   "Win32_Foundation",
@@ -38,6 +33,7 @@ windows-sys = { version = "0", features = [
   "Win32_UI_Input_KeyboardAndMouse",
 ] }
 
+
 [dev-dependencies]
 insta = { version = "1", features = ["redactions", "ron"] }
 pretty_assertions = { version = "1", features = ["unstable"] }
@@ -45,5 +41,4 @@ tempfile = "3"
 
 [features]
 default = []
-
-debug-tracing = ["peg/trace"]
+debug-parser = ["peg/trace"]

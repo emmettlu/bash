@@ -635,7 +635,7 @@ impl<'a> WordExpander<'a> {
     /// Apply tilde-expansion, parameter expansion, command substitution, and arithmetic expansion;
     /// yield pieces that could be further processed.
     async fn basic_expand(&mut self, word: &str) -> Result<Expansion, error::Error> {
-        tracing::debug!(target: trace_categories::EXPANSION, "Basic expanding: '{word}'");
+        log::debug!(target: trace_categories::EXPANSION, "Basic expanding: '{word}'");
 
         // Quick short circuit to avoid more expensive parsing. The characters below are
         // understood to be the *only* ones indicative of *possible* expansion. There's
@@ -653,10 +653,10 @@ impl<'a> WordExpander<'a> {
 
         // Apply brace expansion first, before anything else (not applicable to heredoc bodies).
         let brace_expanded = self.brace_expand_if_needed(word)?;
-        if tracing::enabled!(target: trace_categories::EXPANSION, tracing::Level::DEBUG)
+        if log::log_enabled!(target: trace_categories::EXPANSION, log::Level::Debug)
             && brace_expanded != word
         {
-            tracing::debug!(target: trace_categories::EXPANSION, "  => brace expanded to '{brace_expanded}'");
+            log::debug!(target: trace_categories::EXPANSION, "  => brace expanded to '{brace_expanded}'");
         }
 
         // Expand: tildes, parameters, command substitutions, arithmetic.
@@ -728,7 +728,7 @@ impl<'a> WordExpander<'a> {
 
         let parse_result = crate::parser::word::parse_brace_expansions(word, &self.parser_options);
         if parse_result.is_err() {
-            tracing::error!("failed to parse for brace expansion: {parse_result:?}");
+            log::error!("failed to parse for brace expansion: {parse_result:?}");
             return Ok(word.into());
         }
 
@@ -737,7 +737,7 @@ impl<'a> WordExpander<'a> {
             return Ok(word.into());
         };
 
-        tracing::debug!(target: trace_categories::EXPANSION, "Brace expansion pieces: {brace_expansion_pieces:?}");
+        log::debug!(target: trace_categories::EXPANSION, "Brace expansion pieces: {brace_expansion_pieces:?}");
 
         let result = braceexpansion::generate_and_combine_brace_expansions(brace_expansion_pieces)
             .into_iter()

@@ -160,7 +160,7 @@ impl ConfigLoadResult {
         }
 
         // Default config path; log warning but continue with defaults.
-        tracing::warn!("failed to load config from {path_display}: {err}");
+        log::warn!("failed to load config from {path_display}: {err}");
         Ok(self.config)
     }
 }

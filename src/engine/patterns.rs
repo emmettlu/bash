@@ -199,7 +199,7 @@ impl Pattern {
             return Ok(PatternExpansionResult::Expanded(vec![concatenated]));
         }
 
-        tracing::debug!(target: trace_categories::PATTERN, "expanding pattern: {self:?}");
+        log::debug!(target: trace_categories::PATTERN, "expanding pattern: {self:?}");
 
         let mut components: Vec<PatternWord> = vec![];
         for piece in &self.pieces {
@@ -339,7 +339,7 @@ impl Pattern {
             })
             .collect();
 
-        tracing::debug!(target: trace_categories::PATTERN, "  => results: {results:?}");
+        log::debug!(target: trace_categories::PATTERN, "  => results: {results:?}");
 
         Ok(PatternExpansionResult::Expanded(results))
     }
@@ -406,7 +406,7 @@ impl Pattern {
     ) -> Result<fancy_regex::Regex, error::Error> {
         let regex_str = self.to_regex_str(strict_prefix_match, strict_suffix_match)?;
 
-        tracing::debug!(target: trace_categories::PATTERN, "pattern: '{self:?}' => regex: '{regex_str}'");
+        log::debug!(target: trace_categories::PATTERN, "pattern: '{self:?}' => regex: '{regex_str}'");
 
         let re = regex::compile_regex(regex_str, self.case_insensitive, self.multiline)?;
         Ok(re)

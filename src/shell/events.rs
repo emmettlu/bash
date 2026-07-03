@@ -1,13 +1,10 @@
-//! Facilities for configuring event tracing in the shell.
+//! Facilities for configuring logging events in the shell.
 
 use std::{collections::HashSet, fmt::Display};
 
 use crate::engine::Error;
-use tracing_subscriber::{
-    Layer, Registry, filter::Targets, layer::SubscriberExt, reload::Handle, util::SubscriberInitExt,
-};
 
-/// Type of event to trace.
+/// Type of event to log.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, clap::ValueEnum)]
 pub enum TraceEvent {
     /// Traces parsing and evaluation of arithmetic expressions.
@@ -67,72 +64,60 @@ impl Display for TraceEvent {
 pub(crate) struct TraceEventConfig {
     enabled_debug_events: HashSet<TraceEvent>,
     disabled_events: HashSet<TraceEvent>,
-    handle: Option<Handle<Targets, Registry>>,
 }
 
 impl TraceEventConfig {
     pub fn init(enabled_debug_events: &[TraceEvent], disabled_events: &[TraceEvent]) -> Self {
-        let enabled_debug_events: HashSet<TraceEvent> =
-            enabled_debug_events.iter().copied().collect();
-        let disabled_events: HashSet<TraceEvent> = disabled_events.iter().copied().collect();
-
-        let mut config = Self {
-            enabled_debug_events,
-            disabled_events,
-            ..Default::default()
+        let config = Self {
+            enabled_debug_events: enabled_debug_events.iter().copied().collect(),
+            disabled_events: disabled_events.iter().copied().collect(),
         };
 
-        let filter = config.compose_filter();
-
-        // Make the filter reloadable so that we can change the log level at runtime.
-        let (reload_filter, handle) = tracing_subscriber::reload::Layer::new(filter);
-
-        let layer = tracing_subscriber::fmt::layer()
-            .with_writer(std::io::stderr)
-            .without_time()
-            .with_target(false)
-            .with_filter(reload_filter);
-
-        if tracing_subscriber::registry()
-            .with(layer)
-            .try_init()
-            .is_ok()
-        {
-            config.handle = Some(handle);
-        } else {
-            // Something went wrong; proceed on anyway but complain audibly.
-            eprintln!("warning: failed to initialize tracing.");
-        }
-
+        config.init_logger();
         config
     }
 
-    fn compose_filter(&self) -> tracing_subscriber::filter::Targets {
-        let mut filter = tracing_subscriber::filter::Targets::new()
-            .with_default(tracing_subscriber::filter::LevelFilter::INFO);
+    fn init_logger(&self) {
+        let debug_targets = self
+            .enabled_debug_events
+            .iter()
+            .flat_map(Self::event_to_log_targets)
+            .map(String::from)
+            .collect::<Vec<_>>();
+        let disabled_targets = self
+            .disabled_events
+            .iter()
+            .flat_map(Self::event_to_log_targets)
+            .map(String::from)
+            .collect::<Vec<_>>();
 
-        for event in &self.enabled_debug_events {
-            let targets = Self::event_to_tracing_targets(event);
-            filter = filter.with_targets(
-                targets
-                    .into_iter()
-                    .map(|target| (target, tracing::Level::DEBUG)),
-            );
+        let level = if debug_targets.is_empty() {
+            nanologger::LogLevel::Info
+        } else {
+            nanologger::LogLevel::Debug
+        };
+
+        let mut builder = nanologger::LoggerBuilder::new()
+            .level(level)
+            .timestamps(false)
+            .source_location(false)
+            .thread_info(false)
+            .module_deny(disabled_targets)
+            .add_output(nanologger::LogOutput::term(level));
+
+        // nanologger only supports a global level plus module allow/deny lists.
+        // When the user enables specific debug categories, restrict output to those
+        // targets to avoid enabling debug logs for every module.
+        if !debug_targets.is_empty() {
+            builder = builder.module_allow(debug_targets);
         }
 
-        for event in &self.disabled_events {
-            let targets = Self::event_to_tracing_targets(event);
-            filter = filter.with_targets(
-                targets
-                    .into_iter()
-                    .map(|target| (target, tracing::level_filters::LevelFilter::OFF)),
-            );
+        if builder.init().is_err() {
+            eprintln!("warning: failed to initialize logger.");
         }
-
-        filter
     }
 
-    fn event_to_tracing_targets(event: &TraceEvent) -> Vec<&str> {
+    fn event_to_log_targets(event: &TraceEvent) -> Vec<&'static str> {
         match event {
             TraceEvent::Arithmetic => vec!["arithmetic"],
             TraceEvent::Commands => vec!["commands"],
@@ -153,35 +138,13 @@ impl TraceEventConfig {
     }
 
     pub fn enable(&mut self, event: TraceEvent) -> Result<(), Error> {
-        // Don't bother to reload config if nothing has changed.
-        if !self.enabled_debug_events.insert(event) {
-            return Ok(());
-        }
-
-        self.reload_filter()
+        self.enabled_debug_events.insert(event);
+        Ok(())
     }
 
     pub fn disable(&mut self, event: TraceEvent) -> Result<(), Error> {
-        // Don't bother to reload config if nothing has changed.
-        if !self.enabled_debug_events.remove(&event) {
-            return Ok(());
-        }
-
-        self.reload_filter()
-    }
-
-    fn reload_filter(&self) -> Result<(), Error> {
-        if let Some(handle) = &self.handle {
-            if handle.reload(self.compose_filter()).is_ok() {
-                Ok(())
-            } else {
-                Err(
-                    crate::engine::ErrorKind::Unimplemented("failed to enable tracing events")
-                        .into(),
-                )
-            }
-        } else {
-            Err(crate::engine::ErrorKind::Unimplemented("tracing not initialized").into())
-        }
+        self.enabled_debug_events.remove(&event);
+        self.disabled_events.insert(event);
+        Ok(())
     }
 }

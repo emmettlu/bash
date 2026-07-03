@@ -99,7 +99,7 @@ pub async fn run() -> anyhow::Result<()> {
             1
         }
         Err(err) => {
-            tracing::error!("error: {err:#}");
+            log::error!("error: {err:#}");
             1
         }
     };

@@ -417,7 +417,7 @@ impl Spec {
             // TODO(completions): it's not clear what default "bash" completions means. From basic
             // testing, this doesn't seem to include basic file and directory name
             // completion.
-            tracing::debug!(target: trace_categories::COMPLETION, "unimplemented: complete -o bashdefault");
+            log::debug!(target: trace_categories::COMPLETION, "unimplemented: complete -o bashdefault");
         }
 
         // If we still have no candidates, and default completions were requested, then generate
@@ -589,7 +589,7 @@ impl Spec {
                     }
                 }
                 CompleteAction::Service => {
-                    tracing::debug!(target: trace_categories::COMPLETION, "unimplemented: complete -A service");
+                    log::debug!(target: trace_categories::COMPLETION, "unimplemented: complete -A service");
                 }
                 CompleteAction::SetOpt => {
                     for option in namedoptions::options(namedoptions::ShellOptionKind::SetO).iter()
@@ -731,7 +731,7 @@ impl Spec {
             ("COMP_CWORD", context.token_index.to_string().into()),
         ];
 
-        tracing::debug!(target: trace_categories::COMPLETION, "[calling completion func '{function_name}']: {}",
+        log::debug!(target: trace_categories::COMPLETION, "[calling completion func '{function_name}']: {}",
             vars_and_values.iter().map(|(k, v)| std::format!("{k}={v}")).collect::<Vec<String>>().join(" "));
 
         let mut vars_to_remove = Vec::with_capacity(vars_and_values.len());
@@ -768,7 +768,7 @@ impl Spec {
             .invoke_function(function_name, args.iter(), &params)
             .await;
 
-        tracing::debug!(target: trace_categories::COMPLETION, "[completion function '{function_name}' returned: {invoke_result:?}]");
+        log::debug!(target: trace_categories::COMPLETION, "[completion function '{function_name}' returned: {invoke_result:?}]");
 
         shell.release_trap_delivery_block();
 
@@ -778,7 +778,7 @@ impl Spec {
         }
 
         let result = invoke_result.unwrap_or_else(|e| {
-            tracing::warn!(target: trace_categories::COMPLETION, "error while running completion function '{function_name}': {e}");
+            log::warn!(target: trace_categories::COMPLETION, "error while running completion function '{function_name}': {e}");
             1 // Report back a non-zero exit code.
         });
 
@@ -788,7 +788,7 @@ impl Spec {
             Ok(Answer::RestartCompletionProcess)
         } else {
             if let Some(reply) = shell.env_mut().unset("COMPREPLY")? {
-                tracing::debug!(target: trace_categories::COMPLETION, "[completion function yielded: {reply:?}]");
+                log::debug!(target: trace_categories::COMPLETION, "[completion function yielded: {reply:?}]");
 
                 match reply.value() {
                     variables::ShellValue::IndexedArray(values) => {
@@ -1076,7 +1076,7 @@ impl Config {
         let mut restart_count = 0;
         while matches!(result, Answer::RestartCompletionProcess) {
             if restart_count > MAX_RESTARTS {
-                tracing::warn!("possible infinite loop detected in completion process");
+                log::warn!("possible infinite loop detected in completion process");
                 break;
             }
 

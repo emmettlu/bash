@@ -20,7 +20,7 @@ impl Shell {
     ) -> Result<crate::parser::ast::Program, crate::parser::ParseError> {
         let mut parser = create_parser(reader, &self.parser_options());
 
-        tracing::debug!(target: trace_categories::PARSE, "Parsing reader as program...");
+        log::debug!(target: trace_categories::PARSE, "Parsing reader as program...");
         parser.parse_program()
     }
 
@@ -58,7 +58,7 @@ fn parse_string_impl(
             let (s, parser_options) = key;
             let mut parser = create_parser(s.as_bytes(), parser_options);
 
-            tracing::debug!(target: trace_categories::PARSE, "Parsing string as program...");
+            log::debug!(target: trace_categories::PARSE, "Parsing string as program...");
             parser.parse_program()
         })
     })

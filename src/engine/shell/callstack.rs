@@ -105,10 +105,10 @@ impl crate::engine::Shell {
             return Err(error::ErrorKind::MaxFunctionCallDepthExceeded.into());
         }
 
-        if tracing::enabled!(target: trace_categories::FUNCTIONS, tracing::Level::DEBUG) {
+        if log::log_enabled!(target: trace_categories::FUNCTIONS, log::Level::Debug) {
             let depth = self.call_stack.function_call_depth();
             let prefix = repeated_char_str(' ', depth);
-            tracing::debug!(target: trace_categories::FUNCTIONS, "Entering func [depth={depth}]: {prefix}{name}");
+            log::debug!(target: trace_categories::FUNCTIONS, "Entering func [depth={depth}]: {prefix}{name}");
         }
 
         self.call_stack.push_function(name, function, args);
@@ -124,10 +124,10 @@ impl crate::engine::Shell {
 
         if let Some(exited_call) = self.call_stack.pop() {
             if let callstack::FrameType::Function(func_call) = exited_call.frame_type {
-                if tracing::enabled!(target: trace_categories::FUNCTIONS, tracing::Level::DEBUG) {
+                if log::log_enabled!(target: trace_categories::FUNCTIONS, log::Level::Debug) {
                     let depth = self.call_stack.function_call_depth();
                     let prefix = repeated_char_str(' ', depth);
-                    tracing::debug!(target: trace_categories::FUNCTIONS, "Exiting func  [depth={depth}]: {prefix}{}", func_call.function_name);
+                    log::debug!(target: trace_categories::FUNCTIONS, "Exiting func  [depth={depth}]: {prefix}{}", func_call.function_name);
                 }
             } else {
                 let err: error::Error =

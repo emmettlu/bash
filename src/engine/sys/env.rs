@@ -36,7 +36,7 @@ where
         if let Some(existing) = vars.get(&normalized)
             && existing != &v
         {
-            tracing::warn!(
+            log::warn!(
                 "environment variable collision under canonical name {normalized}: \
                  two different values were supplied (last-write wins)"
             );

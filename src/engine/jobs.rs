@@ -160,7 +160,7 @@ impl JobManager {
                 self.jobs.iter_mut().find(|j| j.id == id)
             }
             _ => {
-                tracing::warn!(target: trace_categories::UNIMPLEMENTED, "unimplemented: job spec naming command: '{job_spec}'");
+                log::warn!(target: trace_categories::UNIMPLEMENTED, "unimplemented: job spec naming command: '{job_spec}'");
                 None
             }
         }
@@ -350,7 +350,7 @@ impl Job {
     ) -> Result<Option<Result<ExecutionResult, error::Error>>, error::Error> {
         let mut result: Option<Result<ExecutionResult, error::Error>> = None;
 
-        tracing::debug!(target: trace_categories::JOBS, "Polling job {} for completion...", self.id);
+        log::debug!(target: trace_categories::JOBS, "Polling job {} for completion...", self.id);
 
         while !self.tasks.is_empty() {
             let task = &mut self.tasks[0];
@@ -365,7 +365,7 @@ impl Job {
             }
         }
 
-        tracing::debug!(target: trace_categories::JOBS, "Job {} has completed.", self.id);
+        log::debug!(target: trace_categories::JOBS, "Job {} has completed.", self.id);
 
         self.state = JobState::Done;
 

@@ -219,7 +219,7 @@ async fn apply_binary_predicate(
                 // report it.
                 // TODO(test): Docs indicate we should yield 2 on an invalid regex (not 1).
                 Err(e) => {
-                    tracing::warn!("error using regex: {}", e);
+                    log::warn!("error using regex: {}", e);
                     (false, vec![])
                 }
             };

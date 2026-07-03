@@ -176,11 +176,11 @@ pub struct CommandLineArgs {
     #[clap(long = "input-backend", value_name = "BACKEND", help_heading = HEADING_UI_OPTIONS)]
     pub input_backend: Option<InputBackendType>,
 
-    /// Enable debug logging for classes of tracing events.
+    /// Enable debug logging for classes of events.
     #[clap(long = "debug", alias = "log-enable", value_name = "EVENT", help_heading = HEADING_UI_OPTIONS)]
     pub enabled_debug_events: Vec<events::TraceEvent>,
 
-    /// Disable logging for classes of tracing events (takes same event types as `--debug`).
+    /// Disable logging for classes of events (takes same event types as `--debug`).
     #[clap(
         long = "disable-event",
         alias = "log-disable",

@@ -129,7 +129,7 @@ impl builtins::Command for BindCommand {
         if let Some(key_bindings) = context.shell.key_bindings() {
             Ok(self.execute_impl(key_bindings, &context).await?)
         } else {
-            tracing::debug!(target: trace_categories::INPUT,
+            log::debug!(target: trace_categories::INPUT,
                  "bind: key bindings not supported in this config");
 
             // Silently succeed when key bindings are unavailable (e.g., in
@@ -286,7 +286,7 @@ fn parse_key_sequence(input: &str) -> Result<interfaces::KeySequence, BindError>
 fn parse_key_sequence_and_shell_command(
     input: &str,
 ) -> Result<(interfaces::KeySequence, String), BindError> {
-    tracing::debug!(target: trace_categories::INPUT,
+    log::debug!(target: trace_categories::INPUT,
         "parsing key binding entry: '{input}'"
     );
 
@@ -311,7 +311,7 @@ enum BindableReadlineTarget {
 fn parse_key_sequence_and_readline_target(
     input: &str,
 ) -> Result<(interfaces::KeySequence, BindableReadlineTarget), BindError> {
-    tracing::debug!(target: trace_categories::INPUT,
+    log::debug!(target: trace_categories::INPUT,
         "parsing key binding entry: '{input}'"
     );
 
@@ -343,7 +343,7 @@ fn bind_key_sequence_to_shell_cmd(
     key_sequence: interfaces::KeySequence,
     command: String,
 ) -> Result<(), BindError> {
-    tracing::debug!(target: trace_categories::INPUT,
+    log::debug!(target: trace_categories::INPUT,
         "binding key sequence: '{key_sequence}' => command '{command}'"
     );
 
@@ -359,7 +359,7 @@ fn bind_key_sequence_to_readline_target(
 ) -> Result<(), BindError> {
     match target {
         BindableReadlineTarget::Function(func) => {
-            tracing::debug!(target: trace_categories::INPUT,
+            log::debug!(target: trace_categories::INPUT,
                 "binding key sequence: '{key_sequence}' => readline function '{func}'"
             );
 
@@ -372,7 +372,7 @@ fn bind_key_sequence_to_readline_target(
             Ok(())
         }
         BindableReadlineTarget::Macro(cmd_macro) => {
-            tracing::debug!(target: trace_categories::INPUT,
+            log::debug!(target: trace_categories::INPUT,
                 "binding key sequence: '{key_sequence}' => readline macro '{cmd_macro}'"
             );
 

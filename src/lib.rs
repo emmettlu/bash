@@ -1,5 +1,3 @@
-#![allow(dead_code)]
-
 use futures::lock::Mutex;
 use std::sync::Arc;
 

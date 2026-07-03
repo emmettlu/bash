@@ -2,8 +2,6 @@
 
 use std::{collections::HashSet, fmt::Display};
 
-use crate::engine::Error;
-
 /// Type of event to log.
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, clap::ValueEnum)]
 pub enum TraceEvent {
@@ -131,20 +129,5 @@ impl TraceEventConfig {
             TraceEvent::Tokenize => vec!["tokenize"],
             TraceEvent::Unimplemented => vec!["unimplemented"],
         }
-    }
-
-    pub const fn get_enabled_events(&self) -> &HashSet<TraceEvent> {
-        &self.enabled_debug_events
-    }
-
-    pub fn enable(&mut self, event: TraceEvent) -> Result<(), Error> {
-        self.enabled_debug_events.insert(event);
-        Ok(())
-    }
-
-    pub fn disable(&mut self, event: TraceEvent) -> Result<(), Error> {
-        self.enabled_debug_events.remove(&event);
-        self.disabled_events.insert(event);
-        Ok(())
     }
 }

@@ -365,12 +365,6 @@ pub(crate) fn get_event_config() -> Arc<StdMutex<Option<events::TraceEventConfig
     TRACE_EVENT_CONFIG.clone()
 }
 
-fn try_reset_terminal_to_defaults() -> Result<(), std::io::Error> {
-    crate::interactive::win_term::reset_terminal_state()?;
-    crate::interactive::win_term::disable_raw_mode()?;
-    Ok(())
-}
-
 #[cfg(test)]
 #[allow(clippy::panic_in_result_fn)]
 mod tests {

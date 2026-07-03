@@ -13,17 +13,16 @@ pub(crate) use std::process::Output;
 impl Child {
     /// Returns the process ID of the child process, if available.
     pub fn id(&self) -> Option<u32> {
-        None
+        Some(self.inner.id())
     }
 
-    /// Asynchronously waits for the child process to exit.
-    pub async fn wait(&mut self) -> std::io::Result<ExitStatus> {
+    /// Waits for the child process to exit.
+    pub fn wait(&mut self) -> std::io::Result<ExitStatus> {
         self.inner.wait()
     }
 
-    /// Asynchronously waits for the child process to exit and collects its
-    /// output.
-    pub async fn wait_with_output(self) -> std::io::Result<Output> {
+    /// Waits for the child process to exit and collects its output.
+    pub fn wait_with_output(self) -> std::io::Result<Output> {
         self.inner.wait_with_output()
     }
 }

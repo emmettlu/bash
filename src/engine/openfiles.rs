@@ -243,6 +243,61 @@ pub struct OpenFiles {
     files: HashMap<ShellFd, Option<OpenFile>>,
 }
 
+/// 一个只读 fd 叠加视图, 优先读取当前上下文, 再回退到父级上下文.
+pub(crate) struct FdOverlay<'a> {
+    overlay: &'a OpenFiles,
+    fallback: &'a OpenFiles,
+}
+
+impl<'a> FdOverlay<'a> {
+    /// 创建 fd 叠加视图.
+    pub(crate) const fn new(overlay: &'a OpenFiles, fallback: &'a OpenFiles) -> Self {
+        Self { overlay, fallback }
+    }
+
+    /// 按叠加语义解析 fd 条目.
+    pub(crate) fn fd_entry(&self, fd: ShellFd) -> OpenFileEntry<'a> {
+        match self.overlay.files.get(&fd) {
+            Some(Some(file)) => OpenFileEntry::Open(file),
+            Some(None) => OpenFileEntry::NotPresent,
+            None => match self.fallback.files.get(&fd) {
+                Some(Some(file)) => OpenFileEntry::Open(file),
+                Some(None) => OpenFileEntry::NotPresent,
+                None => OpenFileEntry::NotSpecified,
+            },
+        }
+    }
+
+    /// 按叠加语义查找打开文件.
+    pub(crate) fn try_fd(&self, fd: ShellFd) -> Option<&'a OpenFile> {
+        match self.fd_entry(fd) {
+            OpenFileEntry::Open(file) => Some(file),
+            OpenFileEntry::NotPresent | OpenFileEntry::NotSpecified => None,
+        }
+    }
+
+    /// 检查 fd 是否在叠加视图中被明确占用或关闭.
+    pub(crate) fn contains_fd(&self, fd: ShellFd) -> bool {
+        !matches!(self.fd_entry(fd), OpenFileEntry::NotSpecified)
+    }
+
+    /// 遍历叠加后的所有打开文件.
+    pub(crate) fn iter_fds(&self) -> impl Iterator<Item = (ShellFd, &'a OpenFile)> + 'a {
+        let overlay_files = &self.overlay.files;
+        let fallback_files = &self.fallback.files;
+
+        let overlay_fds = overlay_files
+            .iter()
+            .filter_map(|(fd, file)| file.as_ref().map(|file| (*fd, file)));
+        let fallback_fds = fallback_files
+            .iter()
+            .filter_map(|(fd, file)| file.as_ref().map(|file| (*fd, file)))
+            .filter(move |(fd, _)| !overlay_files.contains_key(fd));
+
+        overlay_fds.chain(fallback_fds)
+    }
+}
+
 impl OpenFiles {
     /// File descriptor used for standard input.
     pub const STDIN_FD: ShellFd = 0;
@@ -266,6 +321,11 @@ impl OpenFiles {
                 (Self::STDERR_FD, Some(std::io::stderr().into())),
             ]),
         }
+    }
+
+    /// 创建一个以当前集合为优先层, 以 `fallback` 为回退层的 fd 视图.
+    pub(crate) const fn overlay<'a>(&'a self, fallback: &'a OpenFiles) -> FdOverlay<'a> {
+        FdOverlay::new(self, fallback)
     }
 
     /// Updates the open files from the provided iterator of (fd number, `OpenFile`) pairs.

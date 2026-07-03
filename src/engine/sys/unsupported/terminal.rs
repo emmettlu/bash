@@ -2,6 +2,11 @@
 
 use crate::engine::{error, openfiles, sys, terminal};
 
+/// 返回当前平台是否支持前台进程组控制.
+pub const fn supports_foreground_control() -> bool {
+    false
+}
+
 /// Terminal configuration.
 #[derive(Clone, Debug)]
 pub struct Config;

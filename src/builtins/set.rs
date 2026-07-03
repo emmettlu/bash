@@ -138,20 +138,14 @@ impl builtins::Command for SetCommand {
         true
     }
 
-    /// Override the default [`builtins::Command::new`] function to handle clap's limitation related
-    /// to `--`. See [`builtins::parse_known`] for more information
-    /// TODO(set): we can safely remove this after the issue is resolved
+    /// `set` 暂时保留自定义解析: 它同时需要 `+/-` 选项转换, `-o/+o` 可选值,
+    /// 以及第一个位置参数后的特殊停止规则。后续可在公共策略支持这些语义后迁移。
     fn new<I>(args: I) -> Result<Self, clap::Error>
     where
         I: IntoIterator<Item = String>,
     {
-        //
-        // TODO(set): This is getting pretty messy; we need to see how to avoid this -- handling
-        // from leaking into too many commands' custom parsing.
-        //
-
-        // Apply the same workaround from the default implementation of Command::new to handle '+'
-        // args.
+        // 应用与默认 Command::new 相同的 `+` 选项 workaround, 但只在仍处于选项区间时转换。
+        // `set` 的解析规则比 PreserveDoubleDashRest 更复杂, 因此暂留为特殊 parser。
         let mut updated_args = vec![];
         let mut now_parsing_positional_args = false;
         let mut next_arg_is_option_value = false;

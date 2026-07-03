@@ -28,6 +28,14 @@ pub type CommandExecuteFunc = fn(
 pub type CommandContentFunc =
     fn(&str, ContentType, &ContentOptions) -> Result<String, error::Error>;
 
+/// 内置命令的参数解析策略。
+pub enum ArgParsing {
+    /// 使用 clap 的严格解析, `--` 只作为 clap 自身的参数分隔符处理。
+    Strict,
+    /// 保留第一个 `--` 及其后的参数, 并通过 [`Command::append_rest_args`] 写回命令对象。
+    PreserveDoubleDashRest,
+}
+
 /// Trait implemented by built-in shell commands.
 pub trait Command: clap::Parser {
     /// The error type returned by the command.
@@ -42,11 +50,10 @@ pub trait Command: clap::Parser {
     where
         I: IntoIterator<Item = String>,
     {
-        if !Self::takes_plus_options() {
-            Self::try_parse_from(args)
+        let args = if !Self::takes_plus_options() {
+            args.into_iter().collect()
         } else {
-            // N.B. clap doesn't support named options like '+x'. To work around this, we
-            // establish a pattern of renaming them.
+            // clap 不支持 `+x` 形式的命名选项, 因此先转换为隐藏长选项。
             let mut updated_args = vec![];
             for arg in args {
                 if let Some(plus_options) = arg.strip_prefix("+") {
@@ -57,14 +64,34 @@ pub trait Command: clap::Parser {
                     updated_args.push(arg);
                 }
             }
+            updated_args
+        };
 
-            Self::try_parse_from(updated_args)
+        match Self::arg_parsing() {
+            ArgParsing::Strict => Self::try_parse_from(args),
+            ArgParsing::PreserveDoubleDashRest => {
+                let (mut this, rest_args) = try_parse_known::<Self>(args)?;
+                if let Some(args) = rest_args {
+                    this.append_rest_args(args.collect());
+                }
+                Ok(this)
+            }
         }
     }
 
     /// Returns whether or not the command takes options with a leading '+' or '-' character.
     fn takes_plus_options() -> bool {
         false
+    }
+
+    /// 返回命令参数解析策略。
+    fn arg_parsing() -> ArgParsing {
+        ArgParsing::Strict
+    }
+
+    /// 接收 [`ArgParsing::PreserveDoubleDashRest`] 策略保留下来的参数。
+    fn append_rest_args(&mut self, rest: Vec<String>) {
+        let _ = rest;
     }
 
     /// Executes the built-in command in the provided context.

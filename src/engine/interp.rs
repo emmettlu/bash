@@ -104,6 +104,11 @@ impl ExecutionParameters {
         self.try_fd(shell, openfiles::OpenFiles::STDERR_FD)
     }
 
+    /// 返回当前执行参数叠加到 shell 持久 fd 后的只读视图.
+    pub(crate) fn fd_overlay<'a>(&'a self, shell: &'a Shell) -> openfiles::FdOverlay<'a> {
+        self.open_files.overlay(shell.persistent_open_files())
+    }
+
     /// Returns the file descriptor with the given number. Returns `None`
     /// if the file descriptor is not open.
     ///
@@ -112,15 +117,7 @@ impl ExecutionParameters {
     /// * `shell` - The shell context.
     /// * `fd` - The file descriptor number to retrieve.
     pub fn try_fd(&self, shell: &Shell, fd: ShellFd) -> Option<openfiles::OpenFile> {
-        match self.open_files.fd_entry(fd) {
-            openfiles::OpenFileEntry::Open(f) => Some(f.clone()),
-            openfiles::OpenFileEntry::NotPresent => None,
-            openfiles::OpenFileEntry::NotSpecified => {
-                // We didn't have this fd specified one way or the other; we fallback
-                // to what's represented in the shell's open files.
-                shell.persistent_open_files().try_fd(fd).cloned()
-            }
-        }
+        self.fd_overlay(shell).try_fd(fd).cloned()
     }
 
     /// Sets the given file descriptor to the provided open file.
@@ -139,15 +136,11 @@ impl ExecutionParameters {
     ///
     /// * `shell` - The shell context.
     pub fn iter_fds(&self, shell: &Shell) -> impl Iterator<Item = (ShellFd, openfiles::OpenFile)> {
-        let our_fds = self.open_files.iter_fds();
-        let shell_fds = shell
-            .persistent_open_files()
-            .iter_fds()
-            .filter(|(fd, _)| !self.open_files.contains_fd(*fd));
+        let overlay = self.fd_overlay(shell);
 
         #[allow(clippy::needless_collect)]
-        let all_fds: Vec<_> = our_fds
-            .chain(shell_fds)
+        let all_fds: Vec<_> = overlay
+            .iter_fds()
             .map(|(fd, file)| (fd, file.clone()))
             .collect();
 
@@ -543,6 +536,9 @@ async fn wait_for_pipeline_processes_and_update_status(
                     last_failure_exit_code = Some(result.exit_code);
                 }
             }
+            ExecutionWaitResult::Running(child) => {
+                stopped_children.push(jobs::JobTask::External(child));
+            }
             ExecutionWaitResult::Stopped(child) => {
                 result = ExecutionResult::stopped();
                 shell.set_last_exit_status(result.exit_code);
@@ -560,7 +556,7 @@ async fn wait_for_pipeline_processes_and_update_status(
         result.exit_code = failure_exit_code;
     }
 
-    if shell.options().interactive {
+    if shell.options().interactive && sys::terminal::supports_foreground_control() {
         sys::terminal::move_self_to_foreground()?;
     }
 
@@ -767,6 +763,7 @@ impl Execute for ast::CoprocessCommand {
                     .await?;
                 match spawn_result.wait().await? {
                     ExecutionWaitResult::Completed(result) => Ok(result),
+                    ExecutionWaitResult::Running(_) => Ok(ExecutionResult::success()),
                     ExecutionWaitResult::Stopped(_) => Ok(ExecutionResult::stopped()),
                 }
             });
@@ -1953,8 +1950,9 @@ fn setup_process_substitution(
 
     // Starting at 63 (a.k.a. 64-1)--and decrementing--look for an
     // available fd.
+    let fd_overlay = params.fd_overlay(shell);
     let mut candidate_fd_num = 63;
-    while params.open_files.contains_fd(candidate_fd_num) {
+    while fd_overlay.contains_fd(candidate_fd_num) {
         candidate_fd_num -= 1;
         if candidate_fd_num == 0 {
             return error::unimp("no available file descriptors");

@@ -122,6 +122,7 @@ impl From<ExecutionWaitResult> for ExecutionResult {
     fn from(wait_result: ExecutionWaitResult) -> Self {
         match wait_result {
             ExecutionWaitResult::Completed(result) => result,
+            ExecutionWaitResult::Running(..) => Self::success(),
             // TODO(jobs): We need to job-manage the stopped process.
             ExecutionWaitResult::Stopped(..) => Self::stopped(),
         }
@@ -205,16 +206,7 @@ impl ExecutionSpawnResult {
     /// Waits for the command to complete.
     pub async fn wait(self) -> Result<ExecutionWaitResult, error::Error> {
         let result = match self {
-            Self::StartedProcess(mut child) => {
-                // Wait for the process to exit or for a relevant signal, whichever happens
-                // first.
-                match child.wait().await? {
-                    processes::ProcessWaitResult::Completed(output) => {
-                        ExecutionWaitResult::Completed(ExecutionResult::from(output))
-                    }
-                    processes::ProcessWaitResult::Stopped => ExecutionWaitResult::Stopped(child),
-                }
-            }
+            Self::StartedProcess(mut child) => child.wait().await?.into_wait_result(child),
             Self::Completed(result) => ExecutionWaitResult::Completed(result),
             Self::StartedTask(join_handle) => {
                 let result = join_handle
@@ -229,10 +221,12 @@ impl ExecutionSpawnResult {
 
     pub(crate) async fn poll(self) -> Result<ExecutionWaitResult, error::Error> {
         let result = match self {
-            Self::StartedProcess(child) => ExecutionWaitResult::Stopped(child),
+            Self::StartedProcess(mut child) => match child.poll() {
+                Some(result) => ExecutionWaitResult::Completed(ExecutionResult::from(result?)),
+                None => ExecutionWaitResult::Running(child),
+            },
             Self::Completed(result) => ExecutionWaitResult::Completed(result),
             Self::StartedTask(join_handle) => {
-                // TODO(jobs): This isn't right.
                 let result = join_handle
                     .await
                     .map_err(|err| error::ErrorKind::ThreadingError(err.to_string()))?;
@@ -248,6 +242,19 @@ impl ExecutionSpawnResult {
 pub enum ExecutionWaitResult {
     /// Indicates that the execution completed.
     Completed(ExecutionResult),
+    /// Indicates that the execution is still running.
+    Running(processes::ChildProcess),
     /// Indicates that the execution was stopped.
     Stopped(processes::ChildProcess),
+}
+
+impl processes::ProcessWaitResult {
+    fn into_wait_result(self, child: processes::ChildProcess) -> ExecutionWaitResult {
+        match self {
+            Self::Completed(output) => {
+                ExecutionWaitResult::Completed(ExecutionResult::from(output))
+            }
+            Self::Stopped => ExecutionWaitResult::Stopped(child),
+        }
+    }
 }

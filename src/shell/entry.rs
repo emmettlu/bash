@@ -114,14 +114,89 @@ impl CommandLineArgs {
 
 pub(crate) const DEFAULT_ENABLE_HIGHLIGHTING: bool = false;
 
-/// Determines whether `run_in_shell` will run the shell interactively. Must be sync'd with it.
-const fn will_run_interactively(args: &CommandLineArgs) -> bool {
-    if args.command.is_some() {
-        false
-    } else if args.read_commands_from_stdin {
-        true
-    } else {
-        args.script_args.is_empty()
+/// Shell 启动时要执行的顶层模式。
+#[derive(Clone, Debug)]
+pub(crate) enum ShellRunMode {
+    /// 执行 `-c` 传入的命令字符串。
+    CommandString(String),
+    /// 从标准输入读取命令。
+    Stdin,
+    /// 执行脚本文件和其参数。
+    Script { path: String, args: Vec<String> },
+    /// 启动交互式读取循环。
+    Interactive,
+}
+
+/// Shell 启动计划, 集中保存由命令行参数推导出的启动决策。
+#[derive(Clone)]
+pub(crate) struct ShellRunPlan {
+    /// 启动时要执行的顶层模式。
+    pub mode: ShellRunMode,
+    /// shell 本身是否按交互 shell 初始化。
+    pub interactive_shell: bool,
+    /// 未显式指定 input backend 时使用的默认 backend。
+    pub default_input_backend: InputBackendType,
+}
+
+impl ShellRunPlan {
+    /// 从命令行参数构建启动计划。
+    pub(crate) fn from_args(args: &CommandLineArgs) -> Self {
+        Self::from_args_with_stdin_terminal(args, std::io::stdin().is_terminal())
+    }
+
+    fn from_args_with_stdin_terminal(args: &CommandLineArgs, stdin_is_terminal: bool) -> Self {
+        let mode = if let Some(command) = &args.command {
+            ShellRunMode::CommandString(command.clone())
+        } else if args.read_commands_from_stdin {
+            ShellRunMode::Stdin
+        } else if let Some(path) = args.script_args.first() {
+            ShellRunMode::Script {
+                path: path.clone(),
+                args: args.script_args.iter().skip(1).cloned().collect(),
+            }
+        } else {
+            ShellRunMode::Interactive
+        };
+
+        let uses_interactive_input_loop = match &mode {
+            ShellRunMode::CommandString(_) | ShellRunMode::Script { .. } => false,
+            ShellRunMode::Stdin | ShellRunMode::Interactive => true,
+        };
+        let default_input_backend = if stdin_is_terminal && uses_interactive_input_loop {
+            InputBackendType::Basic
+        } else {
+            InputBackendType::Minimal
+        };
+
+        Self {
+            mode,
+            interactive_shell: args.is_interactive(),
+            default_input_backend,
+        }
+    }
+}
+
+impl std::fmt::Debug for ShellRunPlan {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ShellRunPlan")
+            .field("mode", &self.mode)
+            .field("interactive_shell", &self.interactive_shell)
+            .field(
+                "default_input_backend",
+                &InputBackendTypeDebug(self.default_input_backend),
+            )
+            .finish()
+    }
+}
+
+struct InputBackendTypeDebug(InputBackendType);
+
+impl std::fmt::Debug for InputBackendTypeDebug {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.0 {
+            InputBackendType::Basic => f.write_str("Basic"),
+            InputBackendType::Minimal => f.write_str("Minimal"),
+        }
     }
 }
 
@@ -140,41 +215,52 @@ pub(crate) async fn run_in_shell(
     input_backend: &mut impl crate::interactive::InputBackend,
     ui_options: &crate::interactive::UIOptions,
 ) -> Result<u8, crate::interactive::ShellError> {
+    let plan = ShellRunPlan::from_args(&args);
+
     // First load profile and rc files as appropriate.
     initialize_shell(shell_ref, &args).await?;
 
-    // If a command was specified via -c, then run that command and then exit.
-    if let Some(command) = args.command {
-        shell_ref.lock().await.run_dash_c_command(command).await?;
+    match plan.mode {
+        // If a command was specified via -c, then run that command and then exit.
+        ShellRunMode::CommandString(command) => {
+            shell_ref.lock().await.run_dash_c_command(command).await?;
+        }
 
-    // If -s was provided, then read commands from stdin. If there was a script (and optionally
-    // args) passed on the command line via positional arguments, then we copy over the
-    // parameters but do *not* execute it.
-    } else if args.read_commands_from_stdin {
-        let interactive_options = ui_options.into();
-        crate::interactive::InteractiveShell::new(shell_ref, input_backend, &interactive_options)?
+        // If -s was provided, then read commands from stdin. If there was a script (and optionally
+        // args) passed on the command line via positional arguments, then we copy over the
+        // parameters but do *not* execute it.
+        ShellRunMode::Stdin => {
+            let interactive_options = ui_options.into();
+            crate::interactive::InteractiveShell::new(
+                shell_ref,
+                input_backend,
+                &interactive_options,
+            )?
             .run_interactively()
             .await?;
+        }
 
-    // If a script path was provided, then run the script.
-    } else if !args.script_args.is_empty() {
-        // The path to a script was provided on the command line; run the script.
-        shell_ref
-            .lock()
-            .await
-            .run_script(
-                Path::new(&args.script_args[0]),
-                args.script_args.iter().skip(1),
-            )
-            .await?;
+        // If a script path was provided, then run the script.
+        ShellRunMode::Script { path, args } => {
+            shell_ref
+                .lock()
+                .await
+                .run_script(Path::new(&path), args.iter())
+                .await?;
+        }
 
-    // If we got down here, then we don't have any commands to run. We'll be reading
-    // them in from stdin one way or the other.
-    } else {
-        let interactive_options = ui_options.into();
-        crate::interactive::InteractiveShell::new(shell_ref, input_backend, &interactive_options)?
+        // If we got down here, then we don't have any commands to run. We'll be reading
+        // them in from stdin one way or the other.
+        ShellRunMode::Interactive => {
+            let interactive_options = ui_options.into();
+            crate::interactive::InteractiveShell::new(
+                shell_ref,
+                input_backend,
+                &interactive_options,
+            )?
             .run_interactively()
             .await?;
+        }
     }
 
     // Make sure to return the last result observed in the shell.
@@ -237,6 +323,8 @@ async fn instantiate_shell_from_args(
     args: &CommandLineArgs,
     cli_args: Vec<String>,
 ) -> Result<BashShell, crate::interactive::ShellError> {
+    let plan = ShellRunPlan::from_args(args);
+
     // Compute login flag.
     let login = args.login || cli_args.first().is_some_and(|argv0| argv0.starts_with('-'));
 
@@ -288,7 +376,7 @@ async fn instantiate_shell_from_args(
         .do_not_execute_commands(args.do_not_execute_commands)
         .exit_after_one_command(args.exit_after_one_command)
         .login(login)
-        .interactive(args.is_interactive())
+        .interactive(plan.interactive_shell)
         .command_string_mode(args.command.is_some())
         .no_editing(args.no_editing)
         .profile(crate::engine::ProfileLoadBehavior::Skip)
@@ -354,11 +442,7 @@ fn new_error_behavior(args: &CommandLineArgs) -> Arc<dyn crate::engine::ErrorFor
 }
 
 pub(crate) fn get_default_input_backend_type(args: &CommandLineArgs) -> InputBackendType {
-    if std::io::stdin().is_terminal() && will_run_interactively(args) {
-        InputBackendType::Basic
-    } else {
-        InputBackendType::Minimal
-    }
+    ShellRunPlan::from_args(args).default_input_backend
 }
 
 pub(crate) fn get_event_config() -> Arc<StdMutex<Option<events::TraceEventConfig>>> {
@@ -374,6 +458,76 @@ mod tests {
 
     fn args(strs: &[&str]) -> Vec<String> {
         strs.iter().map(|s| s.to_string()).collect()
+    }
+
+    fn assert_basic_backend(input_backend: InputBackendType) {
+        assert!(matches!(input_backend, InputBackendType::Basic));
+    }
+
+    fn assert_minimal_backend(input_backend: InputBackendType) {
+        assert!(matches!(input_backend, InputBackendType::Minimal));
+    }
+
+    #[test]
+    fn shell_run_plan_for_command_string() -> Result<()> {
+        let parsed_args = CommandLineArgs::try_parse_from(args(&["bash", "-c", "echo hi"]))?;
+        let plan = ShellRunPlan::from_args_with_stdin_terminal(&parsed_args, true);
+
+        assert_matches!(&plan.mode, ShellRunMode::CommandString(command) if command == "echo hi");
+        assert_eq!(plan.interactive_shell, parsed_args.is_interactive());
+        assert_minimal_backend(plan.default_input_backend);
+        Ok(())
+    }
+
+    #[test]
+    fn shell_run_plan_for_stdin() -> Result<()> {
+        let parsed_args = CommandLineArgs::try_parse_from(args(&["bash", "-s", "arg0", "arg1"]))?;
+        let plan = ShellRunPlan::from_args_with_stdin_terminal(&parsed_args, true);
+
+        assert_matches!(&plan.mode, ShellRunMode::Stdin);
+        assert_eq!(plan.interactive_shell, parsed_args.is_interactive());
+        assert_basic_backend(plan.default_input_backend);
+        Ok(())
+    }
+
+    #[test]
+    fn shell_run_plan_for_script() -> Result<()> {
+        let parsed_args =
+            CommandLineArgs::try_parse_from(args(&["bash", "script.sh", "one", "two"]))?;
+        let plan = ShellRunPlan::from_args_with_stdin_terminal(&parsed_args, true);
+
+        match &plan.mode {
+            ShellRunMode::Script { path, args } => {
+                assert_eq!(path, "script.sh");
+                assert_eq!(args, &vec!["one".to_string(), "two".to_string()]);
+            }
+            mode => panic!("unexpected shell run mode: {mode:?}"),
+        }
+        assert_eq!(plan.interactive_shell, parsed_args.is_interactive());
+        assert_minimal_backend(plan.default_input_backend);
+        Ok(())
+    }
+
+    #[test]
+    fn shell_run_plan_for_empty_args() -> Result<()> {
+        let parsed_args = CommandLineArgs::try_parse_from(args(&["bash"]))?;
+        let terminal_plan = ShellRunPlan::from_args_with_stdin_terminal(&parsed_args, true);
+        let non_terminal_plan = ShellRunPlan::from_args_with_stdin_terminal(&parsed_args, false);
+
+        assert_matches!(&terminal_plan.mode, ShellRunMode::Interactive);
+        assert_eq!(
+            terminal_plan.interactive_shell,
+            parsed_args.is_interactive()
+        );
+        assert_basic_backend(terminal_plan.default_input_backend);
+
+        assert_matches!(&non_terminal_plan.mode, ShellRunMode::Interactive);
+        assert_eq!(
+            non_terminal_plan.interactive_shell,
+            parsed_args.is_interactive()
+        );
+        assert_minimal_backend(non_terminal_plan.default_input_backend);
+        Ok(())
     }
 
     #[test]

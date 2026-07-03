@@ -6,6 +6,8 @@
 
 use std::str::Chars;
 
+use crate::engine::commands::{self, ResolveOptions, ResolvedCommand};
+
 /// Semantic category for a highlighted span.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum HighlightKind {
@@ -87,16 +89,6 @@ pub fn highlight_command(
     let mut highlighter = Highlighter::new(shell, line, cursor);
     highlighter.highlight_program(line, 0);
     highlighter.spans
-}
-
-enum CommandType {
-    Function,
-    Keyword,
-    Builtin,
-    Alias,
-    External,
-    NotFound,
-    Unknown,
 }
 
 struct Highlighter<'a> {
@@ -290,15 +282,7 @@ impl<'a> Highlighter<'a> {
                 HighlightKind::Assignment
             } else {
                 *saw_command_token = true;
-                match self.classify_possible_command(w, token_location) {
-                    CommandType::Function => HighlightKind::Function,
-                    CommandType::Keyword => HighlightKind::Keyword,
-                    CommandType::Builtin => HighlightKind::Builtin,
-                    CommandType::Alias => HighlightKind::Alias,
-                    CommandType::External => HighlightKind::ExternalCommand,
-                    CommandType::NotFound => HighlightKind::NotFoundCommand,
-                    CommandType::Unknown => HighlightKind::UnknownCommand,
-                }
+                self.classify_possible_command(w, token_location)
             }
         } else {
             if self.shell.is_keyword(w) {
@@ -315,37 +299,62 @@ impl<'a> Highlighter<'a> {
         &self,
         name: &str,
         token_location: &crate::parser::SourceSpan,
-    ) -> CommandType {
-        if self.shell.is_keyword(name) {
-            return CommandType::Keyword;
-        } else if self.shell.aliases().contains_key(name) {
-            return CommandType::Alias;
-        } else if self.shell.funcs().get(name).is_some() {
-            return CommandType::Function;
-        } else if self.shell.builtins().contains_key(name) {
-            return CommandType::Builtin;
+    ) -> HighlightKind {
+        let non_path_options = ResolveOptions {
+            include_aliases: true,
+            include_keywords: true,
+            include_functions: true,
+            include_builtins: true,
+            include_disabled_builtins: true,
+            include_path: false,
+            include_hashed: false,
+            all_locations: false,
+            force_path_search: false,
+            use_default_path: false,
+            literal_path_with_separator: false,
+        };
+
+        if let Some(resolved) = commands::resolve_command(self.shell, name, &non_path_options)
+            .into_iter()
+            .next()
+        {
+            return Self::highlight_kind_for_resolved_command(resolved);
         }
 
         // Short-circuit if the cursor is still in this token.
         if (self.cursor >= token_location.start.index) && (self.cursor <= token_location.end.index)
         {
-            return CommandType::Unknown;
+            return HighlightKind::UnknownCommand;
         }
 
-        if crate::engine::sys::fs::contains_path_separator(name) {
-            // TODO(highlighting): Should check for executable-ness.
-            let candidate_path = self.shell.absolute_path(std::path::Path::new(name));
-            if candidate_path.exists() {
-                CommandType::External
-            } else {
-                CommandType::NotFound
-            }
-        } else {
-            if self.shell.find_first_executable_in_path(name).is_some() {
-                CommandType::External
-            } else {
-                CommandType::NotFound
-            }
+        let path_options = ResolveOptions {
+            include_aliases: false,
+            include_keywords: false,
+            include_functions: false,
+            include_builtins: false,
+            include_disabled_builtins: false,
+            include_path: true,
+            include_hashed: false,
+            all_locations: false,
+            force_path_search: true,
+            use_default_path: false,
+            literal_path_with_separator: false,
+        };
+
+        commands::resolve_command(self.shell, name, &path_options)
+            .into_iter()
+            .next()
+            .map(Self::highlight_kind_for_resolved_command)
+            .unwrap_or(HighlightKind::NotFoundCommand)
+    }
+
+    fn highlight_kind_for_resolved_command(resolved: ResolvedCommand<'_>) -> HighlightKind {
+        match resolved {
+            ResolvedCommand::Alias(_) => HighlightKind::Alias,
+            ResolvedCommand::Keyword => HighlightKind::Keyword,
+            ResolvedCommand::Function(_) => HighlightKind::Function,
+            ResolvedCommand::Builtin => HighlightKind::Builtin,
+            ResolvedCommand::External { .. } => HighlightKind::ExternalCommand,
         }
     }
 }

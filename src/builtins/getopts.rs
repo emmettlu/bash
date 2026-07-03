@@ -83,18 +83,12 @@ fn parse_option_spec(spec: &str) -> OptionSpec {
 impl builtins::Command for GetOptsCommand {
     type Error = crate::engine::Error;
 
-    /// Override the default [`builtins::Command::new`] function to handle clap's limitation related
-    /// to `--`. See [`builtins::parse_known`] for more information
-    /// TODO(command): we can safely remove this after the issue is resolved
-    fn new<I>(args: I) -> Result<Self, clap::Error>
-    where
-        I: IntoIterator<Item = String>,
-    {
-        let (mut this, rest_args) = crate::engine::builtins::try_parse_known::<Self>(args)?;
-        if let Some(args) = rest_args {
-            this.args.extend(args);
-        }
-        Ok(this)
+    fn arg_parsing() -> builtins::ArgParsing {
+        builtins::ArgParsing::PreserveDoubleDashRest
+    }
+
+    fn append_rest_args(&mut self, rest: Vec<String>) {
+        self.args.extend(rest);
     }
 
     async fn execute(

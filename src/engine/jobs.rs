@@ -30,38 +30,22 @@ pub enum JobTask {
     Internal(JobJoinHandle),
 }
 
-/// Represents the result of waiting on a job task.
-pub enum JobTaskWaitResult {
-    /// The task has completed.
-    Completed(ExecutionResult),
-    /// The task was stopped.
-    Stopped,
-}
-
 impl JobTask {
     /// Returns whether the task is an external process.
     pub const fn is_external(&self) -> bool {
         matches!(self, Self::External(_))
     }
 
-    /// Waits for the task to complete. Returns the result of the wait.
-    pub async fn wait(&mut self) -> Result<JobTaskWaitResult, error::Error> {
+    /// Waits for the task to complete. Returns the task's execution result.
+    pub async fn wait(&mut self) -> Result<ExecutionResult, error::Error> {
         match self {
-            Self::External(process) => {
-                let wait_result = process.wait().await?;
-                match wait_result {
-                    processes::ProcessWaitResult::Completed(output) => {
-                        Ok(JobTaskWaitResult::Completed(output.into()))
-                    }
-                    processes::ProcessWaitResult::Stopped => Ok(JobTaskWaitResult::Stopped),
-                }
-            }
-            Self::Internal(handle) => {
-                let result = handle
-                    .await
-                    .map_err(|err| error::ErrorKind::ThreadingError(err.to_string()))??;
-                Ok(JobTaskWaitResult::Completed(result))
-            }
+            Self::External(process) => match process.wait().await? {
+                processes::ProcessWaitResult::Completed(output) => Ok(output.into()),
+                processes::ProcessWaitResult::Stopped => Ok(ExecutionResult::stopped()),
+            },
+            Self::Internal(handle) => handle
+                .await
+                .map_err(|err| error::ErrorKind::ThreadingError(err.to_string()))?,
         }
     }
 
@@ -377,16 +361,14 @@ impl Job {
         let mut result = ExecutionResult::success();
 
         while let Some(task) = self.tasks.back_mut() {
-            match task.wait().await? {
-                JobTaskWaitResult::Completed(execution_result) => {
-                    result = execution_result;
-                    self.tasks.pop_back();
-                }
-                JobTaskWaitResult::Stopped => {
-                    self.state = JobState::Stopped;
-                    return Ok(ExecutionResult::stopped());
-                }
+            let execution_result = task.wait().await?;
+            if execution_result.exit_code == ExecutionResult::stopped().exit_code {
+                self.state = JobState::Stopped;
+                return Ok(execution_result);
             }
+
+            result = execution_result;
+            self.tasks.pop_back();
         }
 
         self.state = JobState::Done;
@@ -396,6 +378,10 @@ impl Job {
 
     /// Moves the job to execute in the background.
     pub fn move_to_background(&mut self) -> Result<(), error::Error> {
+        if !sys::signal::supports_job_signals() {
+            return Err(error::ErrorKind::NotSupported("background job control").into());
+        }
+
         if matches!(self.state, JobState::Stopped) {
             if let Some(pgid) = self.process_group_id() {
                 sys::signal::continue_process(pgid)?;
@@ -411,6 +397,10 @@ impl Job {
 
     /// Moves the job to execute in the foreground.
     pub fn move_to_foreground(&mut self) -> Result<(), error::Error> {
+        if !sys::terminal::supports_foreground_control() {
+            return Err(error::ErrorKind::NotSupported("foreground job control").into());
+        }
+
         if matches!(self.state, JobState::Stopped) {
             if let Some(pgid) = self.process_group_id() {
                 sys::signal::continue_process(pgid)?;

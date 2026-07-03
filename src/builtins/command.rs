@@ -1,10 +1,7 @@
 use clap::Parser;
-use std::{fmt::Display, io::Write, path::Path};
+use std::{io::Write, path::PathBuf};
 
-use crate::engine::{
-    ExecutionResult, builtins, commands, pathsearch,
-    sys::{self, traits::PathExt},
-};
+use crate::engine::{ExecutionResult, builtins, commands, sys};
 
 /// Directly invokes an external command, without going through typical search order.
 #[derive(Default, Parser)]
@@ -45,16 +42,22 @@ impl builtins::Command for CommandCommand {
                 if let Some(found_cmd) =
                     Self::try_find_command(context.shell, command_name, self.use_default_path)
                 {
-                    if self.print_description {
-                        writeln!(context.stdout(), "{found_cmd}")?;
-                    } else {
-                        match found_cmd {
-                            FoundCommand::Builtin(_name) => {
-                                writeln!(context.stdout(), "{command_name} is a shell builtin")?;
-                            }
-                            FoundCommand::External(path) => {
-                                writeln!(context.stdout(), "{command_name} is {path}")?;
-                            }
+                    match (self.print_description, found_cmd) {
+                        (true, FoundCommand::Builtin) => {
+                            writeln!(context.stdout(), "{command_name}")?;
+                        }
+                        (true, FoundCommand::External(path)) => {
+                            writeln!(context.stdout(), "{}", sys::fs::display_path(&path))?;
+                        }
+                        (false, FoundCommand::Builtin) => {
+                            writeln!(context.stdout(), "{command_name} is a shell builtin")?;
+                        }
+                        (false, FoundCommand::External(path)) => {
+                            writeln!(
+                                context.stdout(),
+                                "{command_name} is {}",
+                                sys::fs::display_path(&path)
+                            )?;
                         }
                     }
                     Ok(ExecutionResult::success())
@@ -74,55 +77,42 @@ impl builtins::Command for CommandCommand {
     }
 }
 
-enum FoundCommand<'a> {
-    Builtin(&'a str),
-    External(String),
-}
-
-impl Display for FoundCommand<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Builtin(name) => write!(f, "{name}"),
-            Self::External(path) => write!(f, "{path}"),
-        }
-    }
+enum FoundCommand {
+    Builtin,
+    External(PathBuf),
 }
 
 impl CommandCommand {
-    fn try_find_command<'a>(
-        shell: &mut crate::engine::Shell,
-        command_name: &'a str,
+    fn try_find_command(
+        shell: &crate::engine::Shell,
+        command_name: &str,
         use_default_path: bool,
-    ) -> Option<FoundCommand<'a>> {
-        // Look in path.
-        if sys::fs::contains_path_separator(command_name) {
-            let candidate_path = shell.absolute_path(Path::new(command_name));
-            if candidate_path.executable() {
-                Some(FoundCommand::External(sys::fs::display_path(
-                    &candidate_path,
-                )))
-            } else {
-                None
-            }
-        } else {
-            if let Some(builtin_cmd) = shell.builtins().get(command_name)
-                && !builtin_cmd.disabled
-            {
-                return Some(FoundCommand::Builtin(command_name));
-            }
-
-            if use_default_path {
-                let dirs = sys::fs::get_default_standard_utils_paths();
-
-                pathsearch::search_for_executable(dirs.iter(), command_name)
-                    .next()
-                    .map(|path| FoundCommand::External(sys::fs::display_path(&path)))
-            } else {
-                shell
-                    .find_first_executable_in_path_using_cache(command_name)
-                    .map(|path| FoundCommand::External(sys::fs::display_path(&path)))
-            }
-        }
+    ) -> Option<FoundCommand> {
+        commands::resolve_command(
+            shell,
+            command_name,
+            &commands::ResolveOptions {
+                include_aliases: false,
+                include_keywords: false,
+                include_functions: false,
+                include_builtins: true,
+                include_disabled_builtins: false,
+                include_path: true,
+                include_hashed: !use_default_path,
+                all_locations: false,
+                force_path_search: false,
+                use_default_path,
+                literal_path_with_separator: false,
+            },
+        )
+        .into_iter()
+        .find_map(|resolved| match resolved {
+            commands::ResolvedCommand::Builtin => Some(FoundCommand::Builtin),
+            commands::ResolvedCommand::External { path, .. } => Some(FoundCommand::External(path)),
+            commands::ResolvedCommand::Alias(_)
+            | commands::ResolvedCommand::Keyword
+            | commands::ResolvedCommand::Function(_) => None,
+        })
     }
 
     async fn execute_command(

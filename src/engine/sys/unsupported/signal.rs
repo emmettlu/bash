@@ -2,6 +2,11 @@
 
 use crate::engine::{error, sys, traps};
 
+/// 返回当前平台是否支持作业控制相关信号.
+pub const fn supports_job_signals() -> bool {
+    false
+}
+
 /// Empty signal set used until native signal support is implemented.
 #[allow(unnameable_types)]
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]

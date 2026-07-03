@@ -2,6 +2,11 @@
 
 use crate::engine::error;
 
+/// 返回当前平台是否支持进程资源用量统计.
+pub const fn supports_resource_usage() -> bool {
+    false
+}
+
 /// Returns the user and system CPU time used by the current process.
 ///
 /// This is a stub implementation that returns zero durations.

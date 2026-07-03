@@ -1,18 +1,16 @@
 //! Process management
 
-use futures::FutureExt;
+use std::sync::{
+    Arc, Mutex,
+    mpsc::{self, Receiver, TryRecvError},
+};
 
 use crate::engine::{error, sys};
 
-/// A waitable future that will yield the results of a child process's execution.
-pub(crate) type WaitableChildProcess = std::pin::Pin<
-    Box<dyn futures::Future<Output = Result<std::process::Output, std::io::Error>> + Send + Sync>,
->;
-
 /// Tracks a child process being awaited.
 pub struct ChildProcess {
-    /// A waitable future that will yield the results of a child process's execution.
-    exec_future: WaitableChildProcess,
+    /// Receives the output produced by the background wait thread.
+    output_rx: Option<Arc<Mutex<Receiver<std::io::Result<std::process::Output>>>>>,
     /// If available, the process ID of the child.
     pid: Option<sys::process::ProcessId>,
     /// If available, the process group ID of the child.
@@ -20,14 +18,19 @@ pub struct ChildProcess {
 }
 
 impl ChildProcess {
-    /// Wraps a child process and its future.
+    /// Wraps a child process and starts waiting for it on a blocking thread.
     pub fn new(
         child: sys::process::Child,
         pid: Option<sys::process::ProcessId>,
         pgid: Option<sys::process::ProcessId>,
     ) -> Self {
+        let (output_tx, output_rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = output_tx.send(child.wait_with_output());
+        });
+
         Self {
-            exec_future: Box::pin(child.wait_with_output()),
+            output_rx: Some(Arc::new(Mutex::new(output_rx))),
             pid,
             pgid,
         }
@@ -43,18 +46,57 @@ impl ChildProcess {
         self.pgid
     }
 
-    /// Waits for the process to exit.
+    /// Waits for the process to exit without blocking the async runtime thread.
     pub async fn wait(&mut self) -> Result<ProcessWaitResult, error::Error> {
-        Ok(ProcessWaitResult::Completed(
-            self.exec_future.as_mut().await?,
-        ))
+        let Some(output_rx) = self.output_rx.take() else {
+            return Err(error::ErrorKind::InternalError("process already waited".into()).into());
+        };
+
+        let output = compio::runtime::spawn_blocking(move || {
+            output_rx
+                .lock()
+                .map_err(|err| std::io::Error::other(format!("process wait lock poisoned: {err}")))?
+                .recv()
+                .map_err(|err| {
+                    std::io::Error::other(format!("process wait thread failed: {err}"))
+                })?
+        })
+        .await
+        .map_err(|err| error::ErrorKind::ThreadingError(err.to_string()))??;
+
+        Ok(ProcessWaitResult::Completed(output))
     }
 
+    /// Polls the process for completion without blocking.
     pub(crate) fn poll(&mut self) -> Option<Result<std::process::Output, error::Error>> {
-        let checkable_future = &mut self.exec_future;
-        checkable_future
-            .now_or_never()
-            .map(|result| result.map_err(Into::into))
+        let output_rx = self.output_rx.as_ref()?;
+        let poll_result = output_rx
+            .lock()
+            .map_err(|err| {
+                error::Error::from(error::ErrorKind::ThreadingError(format!(
+                    "process wait lock poisoned: {err}"
+                )))
+            })
+            .and_then(|receiver| match receiver.try_recv() {
+                Ok(output) => Ok(Some(output)),
+                Err(TryRecvError::Empty) => Ok(None),
+                Err(TryRecvError::Disconnected) => Err(error::ErrorKind::ThreadingError(
+                    "process wait thread disconnected".into(),
+                )
+                .into()),
+            });
+
+        match poll_result {
+            Ok(Some(output)) => {
+                self.output_rx = None;
+                Some(output.map_err(Into::into))
+            }
+            Ok(None) => None,
+            Err(err) => {
+                self.output_rx = None;
+                Some(Err(err))
+            }
+        }
     }
 }
 

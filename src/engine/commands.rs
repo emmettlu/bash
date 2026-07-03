@@ -8,6 +8,7 @@ use std::{
     process::Stdio,
 };
 
+use crate::engine::sys::traits::PathExt;
 use crate::parser::ast;
 use itertools::Itertools;
 use sys::commands::{CommandExt, CommandFdInjectionExt, CommandFgControlExt};
@@ -21,6 +22,172 @@ use crate::engine::{
     results::ExecutionSpawnResult,
     sys, trace_categories, traps, variables,
 };
+
+/// 控制命令解析器要查询哪些命名空间以及如何查询 PATH.
+#[derive(Clone, Debug)]
+pub struct ResolveOptions {
+    /// 是否查询别名.
+    pub include_aliases: bool,
+    /// 是否查询 shell 关键字.
+    pub include_keywords: bool,
+    /// 是否查询 shell 函数.
+    pub include_functions: bool,
+    /// 是否查询内置命令.
+    pub include_builtins: bool,
+    /// 是否允许返回禁用状态的内置命令.
+    pub include_disabled_builtins: bool,
+    /// 是否查询可执行文件路径.
+    pub include_path: bool,
+    /// 查询 PATH 时是否先包含哈希缓存结果.
+    pub include_hashed: bool,
+    /// 是否返回所有匹配位置, 而不是第一个匹配.
+    pub all_locations: bool,
+    /// 是否跳过别名, 关键字, 函数和内置命令, 只查文件路径.
+    pub force_path_search: bool,
+    /// 是否使用系统默认工具 PATH, 而不是 shell 的 PATH.
+    pub use_default_path: bool,
+    /// 路径含分隔符时是否返回输入字面值, 而不是绝对路径.
+    pub literal_path_with_separator: bool,
+}
+
+impl Default for ResolveOptions {
+    fn default() -> Self {
+        Self {
+            include_aliases: true,
+            include_keywords: true,
+            include_functions: true,
+            include_builtins: true,
+            include_disabled_builtins: false,
+            include_path: true,
+            include_hashed: true,
+            all_locations: false,
+            force_path_search: false,
+            use_default_path: false,
+            literal_path_with_separator: false,
+        }
+    }
+}
+
+/// 命令解析结果, 按 shell 命名空间描述命令来源.
+pub enum ResolvedCommand<'a> {
+    /// 命令解析为别名, 内容为别名替换文本.
+    Alias(&'a str),
+    /// 命令解析为 shell 关键字.
+    Keyword,
+    /// 命令解析为 shell 函数定义.
+    Function(&'a crate::parser::ast::FunctionDefinition),
+    /// 命令解析为启用状态的内置命令.
+    Builtin,
+    /// 命令解析为外部可执行文件.
+    External {
+        /// 可执行文件路径.
+        path: PathBuf,
+        /// 该结果是否来自命令哈希缓存.
+        hashed: bool,
+    },
+}
+
+/// 按 bash 风格的命令命名空间顺序解析命令名.
+pub fn resolve_command<'a>(
+    shell: &'a Shell,
+    name: &str,
+    options: &ResolveOptions,
+) -> Vec<ResolvedCommand<'a>> {
+    let mut resolved = Vec::new();
+
+    if !options.force_path_search {
+        if options.include_aliases
+            && let Some(alias) = shell.aliases().get(name)
+        {
+            resolved.push(ResolvedCommand::Alias(alias));
+            if !options.all_locations {
+                return resolved;
+            }
+        }
+
+        if options.include_keywords && shell.is_keyword(name) {
+            resolved.push(ResolvedCommand::Keyword);
+            if !options.all_locations {
+                return resolved;
+            }
+        }
+
+        if options.include_functions
+            && let Some(registration) = shell.funcs().get(name)
+        {
+            resolved.push(ResolvedCommand::Function(registration.definition()));
+            if !options.all_locations {
+                return resolved;
+            }
+        }
+
+        if options.include_builtins
+            && shell
+                .builtins()
+                .get(name)
+                .is_some_and(|b| options.include_disabled_builtins || !b.disabled)
+        {
+            resolved.push(ResolvedCommand::Builtin);
+            if !options.all_locations {
+                return resolved;
+            }
+        }
+    }
+
+    if !options.include_path {
+        return resolved;
+    }
+
+    if sys::fs::contains_path_separator(name) {
+        let candidate_path = shell.absolute_path(Path::new(name));
+        if candidate_path.executable() {
+            resolved.push(ResolvedCommand::External {
+                path: if options.literal_path_with_separator {
+                    PathBuf::from(name)
+                } else {
+                    candidate_path
+                },
+                hashed: false,
+            });
+        }
+
+        return resolved;
+    }
+
+    if options.use_default_path {
+        let default_paths = sys::fs::get_default_standard_utils_paths();
+        for path in pathsearch::search_for_executable(default_paths.iter(), name) {
+            resolved.push(ResolvedCommand::External {
+                path,
+                hashed: false,
+            });
+            if !options.all_locations {
+                return resolved;
+            }
+        }
+    } else {
+        if options.include_hashed
+            && let Some(path) = shell.program_location_cache().get(name)
+        {
+            resolved.push(ResolvedCommand::External { path, hashed: true });
+            if !options.all_locations {
+                return resolved;
+            }
+        }
+
+        for path in shell.find_executables_in_path(name) {
+            resolved.push(ResolvedCommand::External {
+                path,
+                hashed: false,
+            });
+            if !options.all_locations {
+                return resolved;
+            }
+        }
+    }
+
+    resolved
+}
 
 /// Encapsulates the result of waiting for a command to complete.
 pub enum CommandWaitResult {
@@ -723,7 +890,7 @@ pub(crate) fn execute_external_command(
             ))
         }
         Err(spawn_err) => {
-            if context.shell.options().interactive {
+            if context.shell.options().interactive && sys::terminal::supports_foreground_control() {
                 sys::terminal::move_self_to_foreground()?;
             }
 

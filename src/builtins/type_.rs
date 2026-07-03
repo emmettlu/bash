@@ -1,10 +1,10 @@
 use std::io::Write;
-use std::path::{Path, PathBuf};
 
 use clap::Parser;
 
-use crate::engine::sys::{self, traits::PathExt};
-use crate::engine::{ExecutionResult, Shell, builtins, parser::ast};
+use crate::engine::commands::{self, ResolveOptions, ResolvedCommand};
+use crate::engine::sys;
+use crate::engine::{ExecutionResult, builtins};
 
 /// Inspect the type of a named shell item.
 #[derive(Parser)]
@@ -34,14 +34,6 @@ pub(crate) struct TypeCommand {
     names: Vec<String>,
 }
 
-enum ResolvedType<'a> {
-    Alias(String),
-    Keyword,
-    Function(&'a ast::FunctionDefinition),
-    Builtin,
-    File { path: PathBuf, hashed: bool },
-}
-
 impl builtins::Command for TypeCommand {
     type Error = crate::engine::Error;
 
@@ -52,7 +44,23 @@ impl builtins::Command for TypeCommand {
         let mut result = ExecutionResult::success();
 
         for name in &self.names {
-            let resolved_types = self.resolve_types(context.shell, name);
+            let resolved_types = commands::resolve_command(
+                context.shell,
+                name,
+                &ResolveOptions {
+                    include_aliases: true,
+                    include_keywords: true,
+                    include_functions: !self.suppress_func_lookup,
+                    include_builtins: true,
+                    include_disabled_builtins: false,
+                    include_path: true,
+                    include_hashed: true,
+                    all_locations: self.all_locations,
+                    force_path_search: self.force_path_search,
+                    use_default_path: false,
+                    literal_path_with_separator: true,
+                },
+            );
 
             if resolved_types.is_empty() {
                 if !self.type_only && !self.force_path_search && !self.show_path_only {
@@ -64,23 +72,24 @@ impl builtins::Command for TypeCommand {
             }
 
             for resolved_type in resolved_types {
-                if self.show_path_only && !matches!(resolved_type, ResolvedType::File { .. }) {
+                if self.show_path_only && !matches!(resolved_type, ResolvedCommand::External { .. })
+                {
                     // Do nothing.
                 } else if self.type_only {
                     match resolved_type {
-                        ResolvedType::Alias(_) => {
+                        ResolvedCommand::Alias(_) => {
                             writeln!(context.stdout(), "alias")?;
                         }
-                        ResolvedType::Keyword => {
+                        ResolvedCommand::Keyword => {
                             writeln!(context.stdout(), "keyword")?;
                         }
-                        ResolvedType::Function(_) => {
+                        ResolvedCommand::Function(_) => {
                             writeln!(context.stdout(), "function")?;
                         }
-                        ResolvedType::Builtin => {
+                        ResolvedCommand::Builtin => {
                             writeln!(context.stdout(), "builtin")?;
                         }
-                        ResolvedType::File { path, .. } => {
+                        ResolvedCommand::External { path, .. } => {
                             if self.show_path_only || self.force_path_search {
                                 writeln!(context.stdout(), "{}", sys::fs::display_path(&path))?;
                             } else {
@@ -90,20 +99,20 @@ impl builtins::Command for TypeCommand {
                     }
                 } else {
                     match resolved_type {
-                        ResolvedType::Alias(target) => {
+                        ResolvedCommand::Alias(target) => {
                             writeln!(context.stdout(), "{name} is aliased to `{target}'")?;
                         }
-                        ResolvedType::Keyword => {
+                        ResolvedCommand::Keyword => {
                             writeln!(context.stdout(), "{name} is a shell keyword")?;
                         }
-                        ResolvedType::Function(def) => {
+                        ResolvedCommand::Function(def) => {
                             writeln!(context.stdout(), "{name} is a function")?;
                             writeln!(context.stdout(), "{def}")?;
                         }
-                        ResolvedType::Builtin => {
+                        ResolvedCommand::Builtin => {
                             writeln!(context.stdout(), "{name} is a shell builtin")?;
                         }
-                        ResolvedType::File { path, hashed } => {
+                        ResolvedCommand::External { path, hashed } => {
                             if hashed && self.all_locations && !self.force_path_search {
                                 // Do nothing.
                             } else if self.show_path_only || self.force_path_search {
@@ -133,81 +142,5 @@ impl builtins::Command for TypeCommand {
         }
 
         Ok(result)
-    }
-}
-
-impl TypeCommand {
-    fn resolve_types<'a>(&self, shell: &'a Shell, name: &str) -> Vec<ResolvedType<'a>> {
-        let mut types = vec![];
-
-        if !self.force_path_search {
-            // Check for aliases.
-            if let Some(a) = shell.aliases().get(name) {
-                types.push(ResolvedType::Alias(a.clone()));
-                if !self.all_locations {
-                    return types;
-                }
-            }
-
-            // Check for keywords.
-            if shell.is_keyword(name) {
-                types.push(ResolvedType::Keyword);
-                if !self.all_locations {
-                    return types;
-                }
-            }
-
-            // Check for functions.
-            if !self.suppress_func_lookup
-                && let Some(registration) = shell.funcs().get(name)
-            {
-                types.push(ResolvedType::Function(registration.definition()));
-                if !self.all_locations {
-                    return types;
-                }
-            }
-
-            // Check for builtins.
-            if shell.builtins().get(name).is_some_and(|b| !b.disabled) {
-                types.push(ResolvedType::Builtin);
-                if !self.all_locations {
-                    return types;
-                }
-            }
-        }
-
-        // Look in path.
-        if sys::fs::contains_path_separator(name) {
-            if shell.absolute_path(Path::new(name)).executable() {
-                types.push(ResolvedType::File {
-                    path: PathBuf::from(name),
-                    hashed: false,
-                });
-
-                if !self.all_locations {
-                    return types;
-                }
-            }
-        } else {
-            if let Some(path) = shell.program_location_cache().get(name) {
-                types.push(ResolvedType::File { path, hashed: true });
-                if !self.all_locations {
-                    return types;
-                }
-            }
-
-            for item in shell.find_executables_in_path(name) {
-                types.push(ResolvedType::File {
-                    path: item,
-                    hashed: false,
-                });
-
-                if !self.all_locations {
-                    return types;
-                }
-            }
-        }
-
-        types
     }
 }

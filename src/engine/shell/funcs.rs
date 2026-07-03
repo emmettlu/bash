@@ -121,6 +121,7 @@ impl crate::engine::Shell {
 
         match result.wait().await? {
             ExecutionWaitResult::Completed(result) => Ok(result.exit_code),
+            ExecutionWaitResult::Running(..) => Ok(0),
             ExecutionWaitResult::Stopped(..) => {
                 error::unimp("stopped child from function invocation")
             }

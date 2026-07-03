@@ -4,7 +4,7 @@ use std::fmt::Write as _;
 use std::io::Write;
 
 use crate::engine::completion::{self, CompleteAction, CompleteOption, Spec};
-use crate::engine::{ExecutionExitCode, ExecutionResult, builtins, error, escape};
+use crate::engine::{ExecutionResult, builtins, error, escape};
 
 #[derive(Parser)]
 struct CommonCompleteCommandArgs {
@@ -589,7 +589,7 @@ impl builtins::Command for CompOptCommand {
                     context.stderr(),
                     "compopt: cannot specify names with -D, -E, or -I"
                 )?;
-                return Ok(ExecutionExitCode::InvalidUsage.into());
+                return Ok(ExecutionResult::invalid_usage());
             }
 
             for name in &self.names {

@@ -1,7 +1,7 @@
 use clap::Parser;
 use std::borrow::Cow;
 
-use crate::engine::{ExecutionExitCode, ExecutionResult, builtins, commands};
+use crate::engine::{ExecutionResult, builtins, commands};
 
 /// Exec the provided command.
 #[derive(Parser)]
@@ -77,12 +77,13 @@ impl builtins::Command for ExecCommand {
         let status = cmd.status()?;
         let exit_code = status
             .code()
-            .map_or(ExecutionExitCode::CannotExecute, |code| {
+            .map_or(crate::engine::exit_code::CANNOT_EXECUTE, |code| {
                 #[expect(clippy::cast_sign_loss)]
-                ExecutionExitCode::from((code & 0xFF) as u8)
+                let truncated = (code & 0xFF) as u8;
+                truncated
             });
 
-        let mut result = ExecutionResult::from(exit_code);
+        let mut result = ExecutionResult::new(exit_code);
         result.next_control_flow = crate::engine::ExecutionControlFlow::ExitShell;
         Ok(result)
     }

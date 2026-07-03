@@ -104,9 +104,8 @@ pub trait Command: clap::Parser {
                     rendered.to_string()
                 }
             }
-            ContentType::ShortUsage => get_builtin_short_usage(name, &clap_command),
+            ContentType::ShortUsage => get_builtin_short_usage(name, &mut clap_command),
             ContentType::ShortDescription => get_builtin_short_description(name, &clap_command),
-            ContentType::ManPage => get_builtin_man_page(name, &clap_command)?,
         };
 
         Ok(s)
@@ -132,8 +131,6 @@ pub enum ContentType {
     ShortUsage,
     /// Short description for the command.
     ShortDescription,
-    /// man-style help page.
-    ManPage,
 }
 
 /// Options for retrieving built-in command content.
@@ -173,10 +170,6 @@ impl<SE: extensions::ShellExtensions> Registration<SE> {
     }
 }
 
-fn get_builtin_man_page(_name: &str, _command: &clap::Command) -> Result<String, error::Error> {
-    error::unimp("man page rendering is not yet implemented")
-}
-
 fn get_builtin_short_description(name: &str, command: &clap::Command) -> String {
     let about = command
         .get_about()
@@ -185,87 +178,11 @@ fn get_builtin_short_description(name: &str, command: &clap::Command) -> String 
     std::format!("{name} - {about}\n")
 }
 
-fn get_builtin_short_usage(name: &str, command: &clap::Command) -> String {
-    let mut usage = String::new();
-
-    let mut needs_space = false;
-
-    let mut optional_short_opts = vec![];
-    let mut required_short_opts = vec![];
-    for opt in command.get_opts() {
-        if opt.is_hide_set() {
-            continue;
-        }
-
-        if let Some(c) = opt.get_short() {
-            if !opt.is_required_set() {
-                optional_short_opts.push(c);
-            } else {
-                required_short_opts.push(c);
-            }
-        }
-    }
-
-    if !optional_short_opts.is_empty() {
-        if needs_space {
-            usage.push(' ');
-        }
-
-        usage.push('[');
-        usage.push('-');
-        for c in optional_short_opts {
-            usage.push(c);
-        }
-
-        usage.push(']');
-        needs_space = true;
-    }
-
-    if !required_short_opts.is_empty() {
-        if needs_space {
-            usage.push(' ');
-        }
-
-        usage.push('-');
-        for c in required_short_opts {
-            usage.push(c);
-        }
-
-        needs_space = true;
-    }
-
-    for pos in command.get_positionals() {
-        if pos.is_hide_set() {
-            continue;
-        }
-
-        if !pos.is_required_set() {
-            if needs_space {
-                usage.push(' ');
-            }
-
-            usage.push('[');
-            needs_space = false;
-        }
-
-        if let Some(names) = pos.get_value_names() {
-            for name in names {
-                if needs_space {
-                    usage.push(' ');
-                }
-
-                usage.push_str(name);
-                needs_space = true;
-            }
-        }
-
-        if !pos.is_required_set() {
-            usage.push(']');
-            needs_space = true;
-        }
-    }
-
-    std::format!("{name}: {name} {usage}\n")
+fn get_builtin_short_usage(name: &str, command: &mut clap::Command) -> String {
+    let usage = command.render_usage().to_string();
+    // clap 输出 "Usage: name [OPTIONS]...", 去掉前缀
+    let body = usage.strip_prefix("Usage: ").unwrap_or(&usage);
+    std::format!("{name}: {body}\n")
 }
 
 fn help_styles() -> clap::builder::Styles {
@@ -308,26 +225,35 @@ fn help_styles() -> clap::builder::Styles {
 ///        parsed_args.script_args = raw_args.unwrap().collect();
 ///    }
 /// ```
+/// 在参数列表中找到第一个 `--`, 将其前、自身、后三部分分开返回。
+fn split_at_double_dash<S>(
+    args: impl IntoIterator<Item = S>,
+) -> (Vec<S>, Option<S>, std::vec::IntoIter<S>)
+where
+    S: Clone + PartialEq<&'static str>,
+{
+    let mut args: Vec<S> = args.into_iter().collect();
+    let split_pos = args.iter().position(|a| *a == "--");
+    if let Some(pos) = split_pos {
+        let rest = args.split_off(pos);
+        let mut rest_iter = rest.into_iter();
+        let hyphen = rest_iter.next();
+        (args, hyphen, rest_iter)
+    } else {
+        let rest_iter = Vec::new().into_iter();
+        (args, None, rest_iter)
+    }
+}
+
 pub fn parse_known<T: clap::Parser, S>(
     args: impl IntoIterator<Item = S>,
 ) -> (T, Option<impl Iterator<Item = S>>)
 where
     S: Into<std::ffi::OsString> + Clone + PartialEq<&'static str>,
 {
-    let mut args = args.into_iter();
-    // the best way to save `--` is to get it out with a side effect while `clap` iterates over the
-    // args this way we can be 100% sure that we have '--' and the remaining args
-    // and we will iterate only once
-    let mut hyphen = None;
-    let args_before_hyphen = args.by_ref().take_while(|a| {
-        let is_hyphen = *a == "--";
-        if is_hyphen {
-            hyphen = Some(a.clone());
-        }
-        !is_hyphen
-    });
-    let parsed_args = T::parse_from(args_before_hyphen);
-    let raw_args = hyphen.map(|hyphen| std::iter::once(hyphen).chain(args));
+    let (before, hyphen, rest) = split_at_double_dash(args);
+    let parsed_args = T::parse_from(before);
+    let raw_args = hyphen.map(|hyphen| std::iter::once(hyphen).chain(rest));
     (parsed_args, raw_args)
 }
 
@@ -337,18 +263,9 @@ where
 pub fn try_parse_known<T: clap::Parser>(
     args: impl IntoIterator<Item = String>,
 ) -> Result<(T, Option<impl Iterator<Item = String>>), clap::Error> {
-    let mut args = args.into_iter();
-    let mut hyphen = None;
-    let args_before_hyphen = args.by_ref().take_while(|a| {
-        let is_hyphen = a == "--";
-        if is_hyphen {
-            hyphen = Some(a.clone());
-        }
-        !is_hyphen
-    });
-    let parsed_args = T::try_parse_from(args_before_hyphen)?;
-
-    let raw_args = hyphen.map(|hyphen| std::iter::once(hyphen).chain(args));
+    let (before, hyphen, rest) = split_at_double_dash(args);
+    let parsed_args = T::try_parse_from(before)?;
+    let raw_args = hyphen.map(|hyphen| std::iter::once(hyphen).chain(rest));
     Ok((parsed_args, raw_args))
 }
 
@@ -439,51 +356,36 @@ fn exec_simple_builtin<T: SimpleCommand + Send + Sync, SE: extensions::ShellExte
     context: commands::ExecutionContext<'_, SE>,
     args: Vec<CommandArg>,
 ) -> BoxFuture<'_, Result<results::ExecutionResult, error::Error>> {
-    Box::pin(async move { exec_simple_builtin_impl::<T, SE>(context, args).await })
-}
-
-#[expect(clippy::unused_async)]
-async fn exec_simple_builtin_impl<
-    T: SimpleCommand + Send + Sync,
-    SE: extensions::ShellExtensions,
->(
-    context: commands::ExecutionContext<'_, SE>,
-    args: Vec<CommandArg>,
-) -> Result<results::ExecutionResult, error::Error> {
-    let plain_args = args.into_iter().map(|arg| match arg {
-        CommandArg::String(s) => s,
-        CommandArg::Assignment(a) => a.to_string(),
-    });
-
-    T::execute(context, plain_args)
+    Box::pin(async move {
+        let plain_args = args.into_iter().map(|arg| match arg {
+            CommandArg::String(s) => s,
+            CommandArg::Assignment(a) => a.to_string(),
+        });
+        T::execute(context, plain_args)
+    })
 }
 
 fn exec_builtin<T: Command + Send + Sync, SE: extensions::ShellExtensions>(
     context: commands::ExecutionContext<'_, SE>,
     args: Vec<CommandArg>,
 ) -> BoxFuture<'_, Result<results::ExecutionResult, error::Error>> {
-    Box::pin(async move { exec_builtin_impl::<T, SE>(context, args).await })
-}
+    Box::pin(async move {
+        let plain_args = args.into_iter().map(|arg| match arg {
+            CommandArg::String(s) => s,
+            CommandArg::Assignment(a) => a.to_string(),
+        });
 
-async fn exec_builtin_impl<T: Command + Send + Sync, SE: extensions::ShellExtensions>(
-    context: commands::ExecutionContext<'_, SE>,
-    args: Vec<CommandArg>,
-) -> Result<results::ExecutionResult, error::Error> {
-    let plain_args = args.into_iter().map(|arg| match arg {
-        CommandArg::String(s) => s,
-        CommandArg::Assignment(a) => a.to_string(),
-    });
+        let result = T::new(plain_args);
+        let command = match result {
+            Ok(command) => command,
+            Err(e) => {
+                let _ = writeln!(context.stderr(), "{e}");
+                return Ok(results::ExecutionResult::invalid_usage());
+            }
+        };
 
-    let result = T::new(plain_args);
-    let command = match result {
-        Ok(command) => command,
-        Err(e) => {
-            let _ = writeln!(context.stderr(), "{e}");
-            return Ok(results::ExecutionExitCode::InvalidUsage.into());
-        }
-    };
-
-    call_builtin(command, context).await
+        call_builtin(command, context).await
+    })
 }
 
 fn exec_declaration_builtin<
@@ -493,42 +395,34 @@ fn exec_declaration_builtin<
     context: commands::ExecutionContext<'_, SE>,
     args: Vec<CommandArg>,
 ) -> BoxFuture<'_, Result<results::ExecutionResult, error::Error>> {
-    Box::pin(async move { exec_declaration_builtin_impl::<T, SE>(context, args).await })
-}
+    Box::pin(async move {
+        let mut options = vec![];
+        let mut declarations = vec![];
 
-async fn exec_declaration_builtin_impl<
-    T: DeclarationCommand + Send + Sync,
-    SE: extensions::ShellExtensions,
->(
-    context: commands::ExecutionContext<'_, SE>,
-    args: Vec<CommandArg>,
-) -> Result<results::ExecutionResult, error::Error> {
-    let mut options = vec![];
-    let mut declarations = vec![];
-
-    for (i, arg) in args.into_iter().enumerate() {
-        match arg {
-            CommandArg::String(s)
-                if i == 0 || (s.len() > 1 && (s.starts_with('-') || s.starts_with('+'))) =>
-            {
-                options.push(s);
+        for (i, arg) in args.into_iter().enumerate() {
+            match arg {
+                CommandArg::String(s)
+                    if i == 0 || (s.len() > 1 && (s.starts_with('-') || s.starts_with('+'))) =>
+                {
+                    options.push(s);
+                }
+                _ => declarations.push(arg),
             }
-            _ => declarations.push(arg),
         }
-    }
 
-    let result = T::new(options);
-    let mut command = match result {
-        Ok(command) => command,
-        Err(e) => {
-            let _ = writeln!(context.stderr(), "{e}");
-            return Ok(results::ExecutionExitCode::InvalidUsage.into());
-        }
-    };
+        let result = T::new(options);
+        let mut command = match result {
+            Ok(command) => command,
+            Err(e) => {
+                let _ = writeln!(context.stderr(), "{e}");
+                return Ok(results::ExecutionResult::invalid_usage());
+            }
+        };
 
-    command.set_declarations(declarations);
+        command.set_declarations(declarations);
 
-    call_builtin(command, context).await
+        call_builtin(command, context).await
+    })
 }
 
 fn exec_raw_arg_builtin<
@@ -538,20 +432,11 @@ fn exec_raw_arg_builtin<
     context: commands::ExecutionContext<'_, SE>,
     args: Vec<CommandArg>,
 ) -> BoxFuture<'_, Result<results::ExecutionResult, error::Error>> {
-    Box::pin(async move { exec_raw_arg_builtin_impl::<T, SE>(context, args).await })
-}
-
-async fn exec_raw_arg_builtin_impl<
-    T: DeclarationCommand + Default + Send + Sync,
-    SE: extensions::ShellExtensions,
->(
-    context: commands::ExecutionContext<'_, SE>,
-    args: Vec<CommandArg>,
-) -> Result<results::ExecutionResult, error::Error> {
-    let mut command = T::default();
-    command.set_declarations(args);
-
-    call_builtin(command, context).await
+    Box::pin(async move {
+        let mut command = T::default();
+        command.set_declarations(args);
+        call_builtin(command, context).await
+    })
 }
 
 async fn call_builtin(

@@ -2,13 +2,25 @@
 
 use crate::engine::{error, processes};
 
+/// 常见退出码常量.
+pub mod exit_code {
+    pub const SUCCESS: u8 = 0;
+    pub const GENERAL_ERROR: u8 = 1;
+    pub const INVALID_USAGE: u8 = 2;
+    pub const UNIMPLEMENTED: u8 = 99;
+    pub const CANNOT_EXECUTE: u8 = 126;
+    pub const NOT_FOUND: u8 = 127;
+    pub const INTERRUPTED: u8 = 130;
+    pub const BROKEN_PIPE: u8 = 141;
+}
+
 /// Represents the result of executing a command or similar item.
 #[derive(Default)]
 pub struct ExecutionResult {
     /// The control flow transition to apply after execution.
     pub next_control_flow: ExecutionControlFlow,
     /// The exit code resulting from execution.
-    pub exit_code: ExecutionExitCode,
+    pub exit_code: u8,
 }
 
 impl ExecutionResult {
@@ -17,10 +29,10 @@ impl ExecutionResult {
     /// # Arguments
     ///
     /// * `exit_code` - The exit code of the command.
-    pub fn new(exit_code: u8) -> Self {
+    pub const fn new(exit_code: u8) -> Self {
         Self {
-            exit_code: exit_code.into(),
-            ..Self::default()
+            exit_code,
+            next_control_flow: ExecutionControlFlow::Normal,
         }
     }
 
@@ -35,23 +47,42 @@ impl ExecutionResult {
 
     /// Returns a new `ExecutionResult` with an exit code of 0.
     pub const fn success() -> Self {
-        Self {
-            next_control_flow: ExecutionControlFlow::Normal,
-            exit_code: ExecutionExitCode::Success,
-        }
+        Self::new(exit_code::SUCCESS)
     }
 
     /// Returns a new `ExecutionResult` with a general error exit code.
     pub const fn general_error() -> Self {
-        Self {
-            next_control_flow: ExecutionControlFlow::Normal,
-            exit_code: ExecutionExitCode::GeneralError,
-        }
+        Self::new(exit_code::GENERAL_ERROR)
+    }
+
+    /// Returns a new `ExecutionResult` with an invalid usage exit code.
+    pub const fn invalid_usage() -> Self {
+        Self::new(exit_code::INVALID_USAGE)
+    }
+
+    /// Returns a new `ExecutionResult` with a not-found exit code.
+    pub const fn not_found() -> Self {
+        Self::new(exit_code::NOT_FOUND)
+    }
+
+    /// Returns a new `ExecutionResult` with a cannot-execute exit code.
+    pub const fn cannot_execute() -> Self {
+        Self::new(exit_code::CANNOT_EXECUTE)
+    }
+
+    /// Returns a new `ExecutionResult` with an unimplemented exit code.
+    pub const fn unimplemented() -> Self {
+        Self::new(exit_code::UNIMPLEMENTED)
+    }
+
+    /// Returns a new `ExecutionResult` with an interrupted exit code.
+    pub const fn interrupted() -> Self {
+        Self::new(exit_code::INTERRUPTED)
     }
 
     /// Returns whether the command was successful.
     pub const fn is_success(&self) -> bool {
-        self.exit_code.is_success()
+        self.exit_code == exit_code::SUCCESS
     }
 
     /// Returns whether the execution result indicates normal control flow.
@@ -87,15 +118,6 @@ impl ExecutionResult {
     }
 }
 
-impl From<ExecutionExitCode> for ExecutionResult {
-    fn from(exit_code: ExecutionExitCode) -> Self {
-        Self {
-            next_control_flow: ExecutionControlFlow::Normal,
-            exit_code,
-        }
-    }
-}
-
 impl From<ExecutionWaitResult> for ExecutionResult {
     fn from(wait_result: ExecutionWaitResult) -> Self {
         match wait_result {
@@ -114,76 +136,7 @@ impl From<std::process::Output> for ExecutionResult {
         }
 
         tracing::error!("unhandled process exit");
-        Self::new(127)
-    }
-}
-
-/// Represents an exit code from execution.
-#[derive(Clone, Copy, Default)]
-pub enum ExecutionExitCode {
-    /// Indicates successful execution.
-    #[default]
-    Success,
-    /// Indicates a general error.
-    GeneralError,
-    /// Indicates invalid usage.
-    InvalidUsage,
-    /// Cannot execute the command.
-    CannotExecute,
-    /// Indicates a command or similar item was not found.
-    NotFound,
-    /// Indicates execution was interrupted.
-    Interrupted,
-    /// Indicates a broken pipe (SIGPIPE) was encountered.
-    BrokenPipe,
-    /// Indicates unimplemented functionality was encountered.
-    Unimplemented,
-    /// A custom exit code.
-    Custom(u8),
-}
-
-impl ExecutionExitCode {
-    /// Returns whether the exit code indicates success.
-    pub const fn is_success(&self) -> bool {
-        matches!(self, Self::Success)
-    }
-}
-
-impl From<u8> for ExecutionExitCode {
-    fn from(code: u8) -> Self {
-        match code {
-            0 => Self::Success,
-            1 => Self::GeneralError,
-            2 => Self::InvalidUsage,
-            99 => Self::Unimplemented,
-            126 => Self::CannotExecute,
-            127 => Self::NotFound,
-            130 => Self::Interrupted,
-            141 => Self::BrokenPipe,
-            code => Self::Custom(code),
-        }
-    }
-}
-
-impl From<ExecutionExitCode> for u8 {
-    fn from(code: ExecutionExitCode) -> Self {
-        Self::from(&code)
-    }
-}
-
-impl From<&ExecutionExitCode> for u8 {
-    fn from(code: &ExecutionExitCode) -> Self {
-        match code {
-            ExecutionExitCode::Success => 0,
-            ExecutionExitCode::GeneralError => 1,
-            ExecutionExitCode::InvalidUsage => 2,
-            ExecutionExitCode::Unimplemented => 99,
-            ExecutionExitCode::CannotExecute => 126,
-            ExecutionExitCode::NotFound => 127,
-            ExecutionExitCode::Interrupted => 130,
-            ExecutionExitCode::BrokenPipe => 141,
-            ExecutionExitCode::Custom(code) => *code,
-        }
+        Self::new(exit_code::NOT_FOUND)
     }
 }
 

@@ -2,7 +2,7 @@ use clap::Parser;
 use std::io::Write;
 
 use crate::engine::{
-    ErrorKind, ExecutionExitCode, ExecutionParameters, ExecutionResult, Shell, builtins, tests,
+    ErrorKind, ExecutionParameters, ExecutionResult, Shell, builtins, tests,
 };
 
 /// Evaluate test expression.
@@ -41,7 +41,7 @@ impl builtins::Command for TestCommand {
                 Some(s) if s == "]" => (),
                 None | Some(_) => {
                     writeln!(context.stderr(), "[: missing ']'")?;
-                    return Ok(ExecutionExitCode::InvalidUsage.into());
+                    return Ok(ExecutionResult::invalid_usage());
                 }
             }
 

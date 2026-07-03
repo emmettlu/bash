@@ -10,10 +10,6 @@ pub(crate) struct HelpCommand {
     #[arg(short = 'd')]
     short_description: bool,
 
-    /// Display a man-style page of documentation for the commands.
-    #[arg(short = 'm')]
-    man_page_style: bool,
-
     /// Display a short usage summary for the commands.
     #[arg(short = 's')]
     short_usage: bool,
@@ -109,8 +105,6 @@ impl HelpCommand {
     ) -> Result<(), crate::engine::Error> {
         let content_type = if self.short_description {
             builtins::ContentType::ShortDescription
-        } else if self.man_page_style {
-            builtins::ContentType::ManPage
         } else if self.short_usage {
             builtins::ContentType::ShortUsage
         } else {

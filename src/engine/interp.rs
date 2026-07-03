@@ -8,9 +8,7 @@ use crate::engine::arithmetic::{self, ExpandAndEvaluate};
 use crate::engine::commands::{self, CommandArg};
 use crate::engine::env::{EnvironmentLookup, EnvironmentScope, valid_variable_name};
 use crate::engine::openfiles::{OpenFile, OpenFiles};
-use crate::engine::results::{
-    ExecutionExitCode, ExecutionResult, ExecutionSpawnResult, ExecutionWaitResult,
-};
+use crate::engine::results::{ExecutionResult, ExecutionSpawnResult, ExecutionWaitResult};
 use crate::engine::shell::Shell;
 use crate::engine::variables::{
     ArrayLiteral, ShellValue, ShellValueLiteral, ShellValueUnsetType, ShellVariable,
@@ -223,7 +221,7 @@ impl Execute for ast::Program {
             }
 
             // Update status
-            shell.set_last_exit_status(result.exit_code.into());
+            shell.set_last_exit_status(result.exit_code);
 
             // Check if we should stop executing subsequent commands
             if !result.is_normal_flow() {
@@ -260,7 +258,7 @@ impl Execute for ast::CompoundList {
                 result = ao_list.execute(shell, params).await?;
 
                 // Update status
-                shell.set_last_exit_status(result.exit_code.into());
+                shell.set_last_exit_status(result.exit_code);
             }
 
             if !result.is_normal_flow() {
@@ -391,11 +389,11 @@ impl Execute for ast::Pipeline {
 
         // Invert the exit code if requested.
         if self.bang {
-            result.exit_code = ExecutionExitCode::from(if result.is_success() { 1 } else { 0 });
+            result.exit_code = if result.is_success() { 1 } else { 0 };
         }
 
         // Update exit status.
-        shell.set_last_exit_status(result.exit_code.into());
+        shell.set_last_exit_status(result.exit_code);
 
         // Fire the ERR trap if the pipeline failed in a non-conditional context.
         // We reuse `suppress_errexit` here because bash suppresses the ERR trap in
@@ -538,7 +536,7 @@ async fn wait_for_pipeline_processes_and_update_status(
 ) -> Result<ExecutionResult, error::Error> {
     let mut result = ExecutionResult::success();
     let mut stopped_children = vec![];
-    let mut last_failure_exit_code: Option<ExecutionExitCode> = None;
+    let mut last_failure_exit_code: Option<u8> = None;
 
     // Clear our the pipeline status so we can start filling it out.
     shell.last_pipeline_statuses_mut().clear();
@@ -553,10 +551,8 @@ async fn wait_for_pipeline_processes_and_update_status(
         match wait_result {
             ExecutionWaitResult::Completed(current_result) => {
                 result = current_result;
-                shell.set_last_exit_status(result.exit_code.into());
-                shell
-                    .last_pipeline_statuses_mut()
-                    .push(result.exit_code.into());
+                shell.set_last_exit_status(result.exit_code);
+                shell.last_pipeline_statuses_mut().push(result.exit_code);
 
                 // Track the last failure for pipefail option
                 if !result.is_success() {
@@ -565,10 +561,8 @@ async fn wait_for_pipeline_processes_and_update_status(
             }
             ExecutionWaitResult::Stopped(child) => {
                 result = ExecutionResult::stopped();
-                shell.set_last_exit_status(result.exit_code.into());
-                shell
-                    .last_pipeline_statuses_mut()
-                    .push(result.exit_code.into());
+                shell.set_last_exit_status(result.exit_code);
+                shell.last_pipeline_statuses_mut().push(result.exit_code);
 
                 stopped_children.push(jobs::JobTask::External(child));
             }
@@ -700,7 +694,7 @@ impl Execute for ast::CompoundCommand {
 
                 // Preserve the subshell's exit code, but don't honor any of its requests to exit
                 // the shell, break out of loops, etc.
-                Ok(ExecutionResult::from(subshell_result.exit_code))
+                Ok(ExecutionResult::new(subshell_result.exit_code))
             }
             Self::ForClause(f) => f.execute(shell, params).await,
             Self::CaseClause(c) => c.execute(shell, params).await,
@@ -736,7 +730,7 @@ impl Execute for ast::CoprocessCommand {
                 params.stderr(shell),
                 "coproc {name}: not a valid identifier"
             )?;
-            return Ok(ExecutionExitCode::GeneralError.into());
+            return Ok(ExecutionResult::general_error());
         }
 
         // Set up the pipes that we'll use to communicate with the coprocess.
@@ -865,7 +859,7 @@ impl Execute for ast::ForClauseCommand {
             }
         }
 
-        shell.set_last_exit_status(result.exit_code.into());
+        shell.set_last_exit_status(result.exit_code);
         Ok(result)
     }
 }
@@ -931,7 +925,7 @@ impl Execute for ast::CaseClauseCommand {
             }
         }
 
-        shell.set_last_exit_status(result.exit_code.into());
+        shell.set_last_exit_status(result.exit_code);
 
         Ok(result)
     }
@@ -984,7 +978,7 @@ impl Execute for ast::IfClauseCommand {
         // If we got down here, then no branch was taken; we make sure to
         // reset the last exit status to success and then return success.
         let result = ExecutionResult::success();
-        shell.set_last_exit_status(result.exit_code.into());
+        shell.set_last_exit_status(result.exit_code);
 
         Ok(result)
     }
@@ -1014,7 +1008,7 @@ impl Execute for (WhileOrUntil, &ast::WhileOrUntilClauseCommand) {
             let condition_result = test_condition.execute(shell, &condition_params).await?;
 
             // Update status for condition
-            shell.set_last_exit_status(condition_result.exit_code.into());
+            shell.set_last_exit_status(condition_result.exit_code);
 
             if !condition_result.is_normal_flow() {
                 result = condition_result;
@@ -1043,7 +1037,7 @@ impl Execute for (WhileOrUntil, &ast::WhileOrUntilClauseCommand) {
             }
         }
 
-        shell.set_last_exit_status(result.exit_code.into());
+        shell.set_last_exit_status(result.exit_code);
         Ok(result)
     }
 }
@@ -1062,7 +1056,7 @@ impl Execute for ast::ArithmeticCommand {
             ExecutionResult::general_error()
         };
 
-        shell.set_last_exit_status(result.exit_code.into());
+        shell.set_last_exit_status(result.exit_code);
 
         Ok(result)
     }
@@ -1106,7 +1100,7 @@ impl Execute for ast::ArithmeticForClauseCommand {
             }
         }
 
-        shell.set_last_exit_status(result.exit_code.into());
+        shell.set_last_exit_status(result.exit_code);
         Ok(result)
     }
 }
@@ -1131,7 +1125,7 @@ impl Execute for ast::FunctionDefinition {
         shell.define_func(func_name, self.clone(), &source_info);
 
         let result = ExecutionResult::success();
-        shell.set_last_exit_status(result.exit_code.into());
+        shell.set_last_exit_status(result.exit_code);
 
         Ok(result)
     }

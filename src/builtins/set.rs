@@ -4,7 +4,7 @@ use std::io::Write;
 use clap::Parser;
 use itertools::Itertools;
 
-use crate::engine::{ExecutionExitCode, ExecutionResult, builtins, variables};
+use crate::engine::{ExecutionResult, builtins, variables};
 
 crate::minus_or_plus_flag_arg!(
     ExportVariablesOnModification,
@@ -373,7 +373,7 @@ impl builtins::Command for SetCommand {
             {
                 option_def.set(context.shell.options_mut(), value);
             } else {
-                result = ExecutionExitCode::InvalidUsage.into();
+                result = ExecutionResult::invalid_usage();
             }
         }
 

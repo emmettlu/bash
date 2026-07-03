@@ -1,16 +1,17 @@
 //! Small fixed-size caches used by parser and pattern hot paths.
 
 use std::cell::RefCell;
+use std::collections::VecDeque;
 
 pub(crate) struct FixedCache<K, V> {
-    entries: Vec<(K, V)>,
+    entries: VecDeque<(K, V)>,
     capacity: usize,
 }
 
 impl<K, V> FixedCache<K, V> {
-    pub(crate) const fn new(capacity: usize) -> Self {
+    pub(crate) fn new(capacity: usize) -> Self {
         Self {
-            entries: Vec::new(),
+            entries: VecDeque::new(),
             capacity,
         }
     }
@@ -36,11 +37,11 @@ impl<K: PartialEq, V> FixedCache<K, V> {
         }
 
         if self.entries.len() >= self.capacity && self.capacity > 0 {
-            self.entries.remove(0);
+            self.entries.pop_front();
         }
 
         if self.capacity > 0 {
-            self.entries.push((key, value));
+            self.entries.push_back((key, value));
         }
     }
 }

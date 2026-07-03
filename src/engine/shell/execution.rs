@@ -1,6 +1,6 @@
 //! Execution support for shell.
 
-use std::{io::Read, path::Path};
+use std::path::Path;
 
 use crate::engine::{
     ExecutionControlFlow, ExecutionParameters, ExecutionResult, ProcessGroupPolicy, SourceInfo,
@@ -51,28 +51,12 @@ impl<SE: crate::engine::extensions::ShellExtensions> crate::engine::Shell<SE> {
         args: I,
         params: &ExecutionParameters,
     ) -> Result<ExecutionResult, error::Error> {
-        self.parse_and_execute_script_file(
-            path.as_ref(),
-            args,
-            params,
-            callstack::ScriptCallType::Source,
-        )
-        .await
+        self.execute_script_file(path, args, params, callstack::ScriptCallType::Source)
+            .await
     }
 
-    /// Parse and execute the given file as a shell script, returning the execution result.
-    ///
-    /// # Arguments
-    ///
-    /// * `path` - The path to the file to source.
-    /// * `args` - The arguments to pass to the script as positional parameters.
-    /// * `params` - Execution parameters.
-    /// * `call_type` - The type of script call being made.
-    async fn parse_and_execute_script_file<
-        S: Into<String>,
-        P: AsRef<Path>,
-        I: Iterator<Item = S>,
-    >(
+    /// 打开并执行脚本文件, 将解析、调用栈管理和控制流边界处理合并在一处。
+    async fn execute_script_file<S: Into<String>, P: AsRef<Path>, I: Iterator<Item = S>>(
         &mut self,
         path: P,
         args: I,
@@ -99,56 +83,31 @@ impl<SE: crate::engine::extensions::ShellExtensions> crate::engine::Shell<SE> {
 
         let source_info = crate::engine::SourceInfo::from(path.to_owned());
 
-        let mut result = self
-            .source_file(opened_file, &source_info, args, params, call_type)
-            .await?;
-
-        // Handle control flow at script execution boundary. If execution completed
-        // with a `return`, we need to clear it since it's already been "used". All
-        // other control flow types are preserved.
-        if matches!(
-            result.next_control_flow,
-            ExecutionControlFlow::ReturnFromFunctionOrScript
-        ) {
-            result.next_control_flow = ExecutionControlFlow::Normal;
-        }
-
-        Ok(result)
-    }
-
-    /// Source the given file as a shell script, returning the execution result.
-    ///
-    /// # Arguments
-    ///
-    /// * `file` - The file to source.
-    /// * `source_info` - Information about the source of the script.
-    /// * `args` - The arguments to pass to the script as positional parameters.
-    /// * `params` - Execution parameters.
-    /// * `call_type` - The type of script call being made.
-    async fn source_file<F: Read, S: Into<String>, I: Iterator<Item = S>>(
-        &mut self,
-        file: F,
-        source_info: &crate::engine::SourceInfo,
-        args: I,
-        params: &ExecutionParameters,
-        call_type: callstack::ScriptCallType,
-    ) -> Result<ExecutionResult, error::Error> {
-        let mut reader = std::io::BufReader::new(file);
+        let mut reader = std::io::BufReader::new(opened_file);
         let mut parser = crate::parser::Parser::new(&mut reader, &self.parser_options());
 
         tracing::debug!(target: trace_categories::PARSE, "Parsing sourced file: {}", source_info.source);
         let parse_result = parser.parse_program();
 
         let script_positional_args = args.map(Into::into);
-
         self.call_stack
-            .push_script(call_type, source_info, script_positional_args);
+            .push_script(call_type, &source_info, script_positional_args);
 
-        let result = self
-            .run_parsed_result(parse_result, source_info, params)
+        let mut result = self
+            .run_parsed_result(parse_result, &source_info, params)
             .await;
 
         self.call_stack.pop();
+
+        // 处理脚本执行边界处的 return 控制流: return 在此消费, 其余控制流原样保留
+        if let Ok(ref mut r) = result
+            && matches!(
+                r.next_control_flow,
+                ExecutionControlFlow::ReturnFromFunctionOrScript
+            )
+        {
+            r.next_control_flow = ExecutionControlFlow::Normal;
+        }
 
         result
     }
@@ -217,12 +176,7 @@ impl<SE: crate::engine::extensions::ShellExtensions> crate::engine::Shell<SE> {
     ) -> Result<ExecutionResult, error::Error> {
         let params = self.default_exec_params();
         let result = self
-            .parse_and_execute_script_file(
-                script_path.as_ref(),
-                args,
-                &params,
-                callstack::ScriptCallType::Run,
-            )
+            .execute_script_file(script_path, args, &params, callstack::ScriptCallType::Run)
             .await?;
 
         // Give the shell a chance to run on-exit tasks, but ignore the result.
@@ -254,7 +208,7 @@ impl<SE: crate::engine::extensions::ShellExtensions> crate::engine::Shell<SE> {
                 let _ = self.display_error(&mut params.stderr(self), &err);
 
                 let result = err.into_result(self);
-                self.set_last_exit_status(result.exit_code.into());
+                self.set_last_exit_status(result.exit_code);
 
                 Ok(result)
             }

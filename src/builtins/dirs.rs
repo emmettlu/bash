@@ -15,11 +15,11 @@ pub(crate) enum DirError {
     ShellError(#[from] crate::engine::Error),
 }
 
-impl From<&DirError> for crate::engine::ExecutionExitCode {
+impl From<&DirError> for u8 {
     fn from(value: &DirError) -> Self {
         match value {
-            DirError::DirStackEmpty => Self::GeneralError,
-            DirError::ShellError(e) => e.into(),
+            DirError::DirStackEmpty => crate::engine::exit_code::GENERAL_ERROR,
+            DirError::ShellError(e) => u8::from(e),
         }
     }
 }

@@ -82,7 +82,6 @@ impl<SE: extensions::ShellExtensions> crate::engine::Shell<SE> {
         file: &mut impl std::io::Write,
         err: &error::Error,
     ) -> Result<(), error::Error> {
-        use crate::engine::extensions::ErrorFormatter as _;
         let str = self.error_formatter.format_error(err, self);
         write!(file, "{str}")?;
 

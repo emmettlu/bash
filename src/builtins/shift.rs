@@ -1,6 +1,6 @@
 use clap::Parser;
 
-use crate::engine::{ExecutionExitCode, ExecutionResult, builtins};
+use crate::engine::{ExecutionResult, builtins};
 
 /// Shift positional arguments.
 #[derive(Parser)]
@@ -19,7 +19,7 @@ impl builtins::Command for ShiftCommand {
         let n = self.n.unwrap_or(1);
 
         if n < 0 {
-            return Ok(ExecutionExitCode::InvalidUsage.into());
+            return Ok(ExecutionResult::invalid_usage());
         }
 
         #[expect(clippy::cast_sign_loss)]
@@ -28,7 +28,7 @@ impl builtins::Command for ShiftCommand {
         let args = context.shell.current_shell_args_mut();
 
         if n > args.len() {
-            return Ok(ExecutionExitCode::InvalidUsage.into());
+            return Ok(ExecutionResult::invalid_usage());
         }
 
         args.drain(0..n);

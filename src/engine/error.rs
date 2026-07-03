@@ -331,48 +331,49 @@ impl BuiltinError for Error {
 /// Helper trait for converting values to exit codes.
 pub trait ConvertibleToExitCode {
     /// Converts to an exit code.
-    fn as_exit_code(&self) -> results::ExecutionExitCode;
+    fn as_exit_code(&self) -> u8;
 }
 
 impl<T> ConvertibleToExitCode for T
 where
-    results::ExecutionExitCode: for<'a> From<&'a T>,
+    u8: for<'a> From<&'a T>,
 {
-    fn as_exit_code(&self) -> results::ExecutionExitCode {
-        self.into()
+    fn as_exit_code(&self) -> u8 {
+        u8::from(self)
     }
 }
 
-impl From<&ErrorKind> for results::ExecutionExitCode {
+impl From<&ErrorKind> for u8 {
     fn from(value: &ErrorKind) -> Self {
+        use crate::engine::results::exit_code;
         match value {
-            ErrorKind::CommandNotFound(..) => Self::NotFound,
-            ErrorKind::Unimplemented(..) => Self::Unimplemented,
-            ErrorKind::ParseError(..) => Self::InvalidUsage,
-            ErrorKind::FunctionParseError(..) => Self::InvalidUsage,
-            ErrorKind::TestCommandParseError(..) => Self::InvalidUsage,
-            ErrorKind::FailedToExecuteCommand(..) => Self::CannotExecute,
-            ErrorKind::FunctionNameShadowsSpecialBuiltin { .. } => Self::InvalidUsage,
-            ErrorKind::IoError(io_err) => io_err.into(),
+            ErrorKind::CommandNotFound(..) => exit_code::NOT_FOUND,
+            ErrorKind::Unimplemented(..) => exit_code::UNIMPLEMENTED,
+            ErrorKind::ParseError(..) => exit_code::INVALID_USAGE,
+            ErrorKind::FunctionParseError(..) => exit_code::INVALID_USAGE,
+            ErrorKind::TestCommandParseError(..) => exit_code::INVALID_USAGE,
+            ErrorKind::FailedToExecuteCommand(..) => exit_code::CANNOT_EXECUTE,
+            ErrorKind::FunctionNameShadowsSpecialBuiltin { .. } => exit_code::INVALID_USAGE,
+            ErrorKind::IoError(io_err) => io_error_exit_code(io_err),
             ErrorKind::BuiltinError(inner, ..) => inner.as_exit_code(),
-            _ => Self::GeneralError,
+            _ => exit_code::GENERAL_ERROR,
         }
     }
 }
 
-impl From<&std::io::Error> for results::ExecutionExitCode {
-    fn from(io_err: &std::io::Error) -> Self {
-        if io_err.kind() == std::io::ErrorKind::BrokenPipe {
-            Self::BrokenPipe
-        } else {
-            Self::GeneralError
-        }
+/// 将 `std::io::Error` 映射到退出码.
+pub(crate) fn io_error_exit_code(io_err: &std::io::Error) -> u8 {
+    use crate::engine::results::exit_code;
+    if io_err.kind() == std::io::ErrorKind::BrokenPipe {
+        exit_code::BROKEN_PIPE
+    } else {
+        exit_code::GENERAL_ERROR
     }
 }
 
-impl From<&Error> for results::ExecutionExitCode {
+impl From<&Error> for u8 {
     fn from(error: &Error) -> Self {
-        Self::from(&error.kind)
+        u8::from(&error.kind)
     }
 }
 
@@ -442,7 +443,7 @@ impl Error {
         shell: &Shell<impl extensions::ShellExtensions>,
     ) -> results::ExecutionResult {
         let next_control_flow = self.to_control_flow(shell);
-        let exit_code = results::ExecutionExitCode::from(&self);
+        let exit_code = u8::from(&self);
 
         results::ExecutionResult {
             next_control_flow,

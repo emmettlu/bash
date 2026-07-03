@@ -43,6 +43,56 @@ pub fn null() -> Result<OpenFile, error::Error> {
     Ok(OpenFile::File(file))
 }
 
+/// 分发可读 variant 的 read 调用; 不可读的 variant 返回错误.
+macro_rules! dispatch_read {
+    ($self:ident, $method:ident $(, $arg:expr)*) => {
+        match $self {
+            Self::Stdin(f)      => f.$method($($arg),*),
+            Self::File(f)       => f.$method($($arg),*),
+            Self::PipeReader(f) => f.$method($($arg),*),
+            Self::Stream(s)     => s.$method($($arg),*),
+            Self::Stdout(_) => Err(std::io::Error::other(
+                error::ErrorKind::OpenFileNotReadable("stdout"),
+            )),
+            Self::Stderr(_) => Err(std::io::Error::other(
+                error::ErrorKind::OpenFileNotReadable("stderr"),
+            )),
+            Self::PipeWriter(_) => Err(std::io::Error::other(
+                error::ErrorKind::OpenFileNotReadable("pipe writer"),
+            )),
+        }
+    };
+}
+
+/// 分发可写 variant 的 write/flush 调用; 不可写的 variant 返回错误或 Ok.
+macro_rules! dispatch_write {
+    (write, $self:ident $(, $arg:expr)*) => {
+        match $self {
+            Self::Stdout(f)     => f.write($($arg),*),
+            Self::Stderr(f)     => f.write($($arg),*),
+            Self::File(f)       => f.write($($arg),*),
+            Self::PipeWriter(f) => f.write($($arg),*),
+            Self::Stream(s)     => s.write($($arg),*),
+            Self::Stdin(_) => Err(std::io::Error::other(
+                error::ErrorKind::OpenFileNotWritable("stdin"),
+            )),
+            Self::PipeReader(_) => Err(std::io::Error::other(
+                error::ErrorKind::OpenFileNotWritable("pipe reader"),
+            )),
+        }
+    };
+    (flush, $self:ident) => {
+        match $self {
+            Self::Stdout(f)     => f.flush(),
+            Self::Stderr(f)     => f.flush(),
+            Self::File(f)       => f.flush(),
+            Self::PipeWriter(f) => f.flush(),
+            Self::Stream(s)     => s.flush(),
+            Self::Stdin(_) | Self::PipeReader(_) => Ok(()),
+        }
+    };
+}
+
 impl Clone for OpenFile {
     fn clone(&self) -> Self {
         // If we fail to clone the open file for any reason, we return a special file
@@ -160,51 +210,17 @@ impl From<OpenFile> for Stdio {
 
 impl std::io::Read for OpenFile {
     fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
-        match self {
-            Self::Stdin(f) => f.read(buf),
-            Self::Stdout(_) => Err(std::io::Error::other(
-                error::ErrorKind::OpenFileNotReadable("stdout"),
-            )),
-            Self::Stderr(_) => Err(std::io::Error::other(
-                error::ErrorKind::OpenFileNotReadable("stderr"),
-            )),
-            Self::File(f) => f.read(buf),
-            Self::PipeReader(reader) => reader.read(buf),
-            Self::PipeWriter(_) => Err(std::io::Error::other(
-                error::ErrorKind::OpenFileNotReadable("pipe writer"),
-            )),
-            Self::Stream(s) => s.read(buf),
-        }
+        dispatch_read!(self, read, buf)
     }
 }
 
 impl std::io::Write for OpenFile {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        match self {
-            Self::Stdin(_) => Err(std::io::Error::other(
-                error::ErrorKind::OpenFileNotWritable("stdin"),
-            )),
-            Self::Stdout(f) => f.write(buf),
-            Self::Stderr(f) => f.write(buf),
-            Self::File(f) => f.write(buf),
-            Self::PipeReader(_) => Err(std::io::Error::other(
-                error::ErrorKind::OpenFileNotWritable("pipe reader"),
-            )),
-            Self::PipeWriter(writer) => writer.write(buf),
-            Self::Stream(s) => s.write(buf),
-        }
+        dispatch_write!(write, self, buf)
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
-        match self {
-            Self::Stdin(_) => Ok(()),
-            Self::Stdout(f) => f.flush(),
-            Self::Stderr(f) => f.flush(),
-            Self::File(f) => f.flush(),
-            Self::PipeReader(_) => Ok(()),
-            Self::PipeWriter(writer) => writer.flush(),
-            Self::Stream(s) => s.flush(),
-        }
+        dispatch_write!(flush, self)
     }
 }
 

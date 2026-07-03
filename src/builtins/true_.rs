@@ -1,4 +1,4 @@
-use crate::engine::{ExecutionResult, builtins, error};
+use crate::engine::{ExecutionResult, builtins};
 
 /// No-op command. Same with :.
 pub(crate) struct TrueCommand {}
@@ -13,7 +13,6 @@ impl builtins::SimpleCommand for TrueCommand {
             builtins::ContentType::DetailedHelp => Ok("Returns a successful exit status.".into()),
             builtins::ContentType::ShortUsage => Ok("true".into()),
             builtins::ContentType::ShortDescription => Ok("true - success".into()),
-            builtins::ContentType::ManPage => error::unimp("man page not yet implemented"),
         }
     }
 

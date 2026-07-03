@@ -3,7 +3,7 @@ use std::io::{Read, Write};
 use clap::Parser;
 
 use crate::engine::{
-    ErrorKind, ExecutionExitCode, ExecutionResult, builtins, env, error, variables,
+    ErrorKind, ExecutionResult, builtins, env, error, variables,
 };
 
 /// Read lines from standard input into an indexed array variable.
@@ -65,7 +65,7 @@ impl builtins::Command for MapFileCommand {
                 "{}: {origin}: invalid array origin",
                 context.command_name
             )?;
-            return Ok(ExecutionExitCode::GeneralError.into());
+            return Ok(ExecutionResult::general_error());
         }
 
         if let Some((_, var)) = context.shell.env().get(&self.array_var_name)
@@ -83,7 +83,7 @@ impl builtins::Command for MapFileCommand {
                 context.command_name,
                 self.array_var_name
             )?;
-            return Ok(ExecutionExitCode::GeneralError.into());
+            return Ok(ExecutionResult::general_error());
         }
 
         let input_file = context

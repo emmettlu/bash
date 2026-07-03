@@ -1,7 +1,7 @@
 use clap::Parser;
 use std::io::Write;
 
-use crate::engine::{ExecutionExitCode, ExecutionResult, arithmetic::Evaluatable, builtins};
+use crate::engine::{ExecutionResult, arithmetic::Evaluatable, builtins};
 
 /// Evaluate arithmetic expressions.
 #[derive(Parser)]
@@ -18,7 +18,7 @@ impl builtins::Command for LetCommand {
         &self,
         context: crate::engine::ExecutionContext<'_, SE>,
     ) -> Result<crate::engine::ExecutionResult, Self::Error> {
-        let mut result = ExecutionExitCode::InvalidUsage.into();
+        let mut result = ExecutionResult::invalid_usage();
 
         if self.exprs.is_empty() {
             writeln!(context.stderr(), "missing expression")?;

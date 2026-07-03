@@ -2,7 +2,7 @@ use clap::Parser;
 use std::io::Write;
 use std::process::Command;
 
-use crate::engine::{ExecutionExitCode, ExecutionResult, builtins};
+use crate::engine::{ExecutionResult, builtins};
 
 /// Signal a job or process.
 #[derive(Parser)]
@@ -43,7 +43,7 @@ impl builtins::Command for KillCommand {
                 context.command_name,
                 signal_name
             )?;
-            return Ok(ExecutionExitCode::InvalidUsage.into());
+            return Ok(ExecutionResult::invalid_usage());
         }
 
         if let Some(signal_number) = self.signal_number
@@ -55,12 +55,12 @@ impl builtins::Command for KillCommand {
                 context.command_name,
                 signal_number
             )?;
-            return Ok(ExecutionExitCode::InvalidUsage.into());
+            return Ok(ExecutionResult::invalid_usage());
         }
 
         if self.args.is_empty() {
             writeln!(context.stderr(), "{}: invalid usage", context.command_name)?;
-            return Ok(ExecutionExitCode::InvalidUsage.into());
+            return Ok(ExecutionResult::invalid_usage());
         }
 
         let mut result = ExecutionResult::success();

@@ -120,7 +120,7 @@ impl<SE: extensions::ShellExtensions> crate::engine::Shell<SE> {
             commands::invoke_shell_function(func_registration, context, &command_args).await?;
 
         match result.wait().await? {
-            ExecutionWaitResult::Completed(result) => Ok(result.exit_code.into()),
+            ExecutionWaitResult::Completed(result) => Ok(result.exit_code),
             ExecutionWaitResult::Stopped(..) => {
                 error::unimp("stopped child from function invocation")
             }

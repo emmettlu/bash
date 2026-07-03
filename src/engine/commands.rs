@@ -13,8 +13,8 @@ use itertools::Itertools;
 use sys::commands::{CommandExt, CommandFdInjectionExt, CommandFgControlExt};
 
 use crate::engine::{
-    ErrorKind, ExecutionControlFlow, ExecutionExitCode, ExecutionParameters, ExecutionResult,
-    Shell, ShellFd, builtins, commands, env, error, escape,
+    ErrorKind, ExecutionControlFlow, ExecutionParameters, ExecutionResult, Shell, ShellFd,
+    builtins, commands, env, error, escape,
     extensions::{self, ShellExtensions},
     functions,
     interp::{self, Execute, ProcessGroupPolicy},
@@ -674,7 +674,7 @@ async fn execute_builtin_command<SE: extensions::ShellExtensions>(
             if let Some(io_err) = e.as_io_error()
                 && io_err.kind() == std::io::ErrorKind::BrokenPipe
             {
-                return Ok(ExecutionExitCode::from(io_err).into());
+                return Ok(ExecutionResult::new(error::io_error_exit_code(io_err)));
             }
 
             Err(e)
@@ -772,7 +772,7 @@ pub(crate) async fn invoke_command_in_subshell_and_get_output(
     let cmd_result = run_result?;
 
     // Store the status.
-    shell.set_last_exit_status(cmd_result.exit_code.into());
+    shell.set_last_exit_status(cmd_result.exit_code);
 
     // Note: $_ is naturally isolated from the parent because we cloned the
     // shell to run the substitution.

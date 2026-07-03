@@ -1,7 +1,7 @@
 use clap::Parser;
 use std::io::Write;
 
-use crate::engine::{ExecutionExitCode, ExecutionResult, builtins, error};
+use crate::engine::{ExecutionResult, builtins, error};
 
 /// Wait for jobs to terminate.
 #[derive(Parser)]
@@ -56,7 +56,7 @@ impl builtins::Command for WaitCommand {
                             id
                         )?;
 
-                        result = ExecutionExitCode::GeneralError.into();
+                        result = ExecutionResult::general_error();
                     }
                 } else {
                     // It's a process ID.

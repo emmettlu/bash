@@ -1,4 +1,4 @@
-use crate::engine::{ExecutionResult, builtins, error};
+use crate::engine::{ExecutionResult, builtins};
 
 /// Return exit code 1.
 pub(crate) struct FalseCommand {}
@@ -13,7 +13,6 @@ impl builtins::SimpleCommand for FalseCommand {
             builtins::ContentType::DetailedHelp => Ok("Returns a failure exit status.".into()),
             builtins::ContentType::ShortUsage => Ok("false".into()),
             builtins::ContentType::ShortDescription => Ok("false - fail".into()),
-            builtins::ContentType::ManPage => error::unimp("man page not yet implemented"),
         }
     }
 

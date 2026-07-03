@@ -17,9 +17,7 @@ use std::io::IsTerminal;
 static TRACE_EVENT_CONFIG: LazyLock<Arc<StdMutex<Option<events::TraceEventConfig>>>> =
     LazyLock::new(|| Arc::new(StdMutex::new(None)));
 
-type BashShellExtensions =
-    crate::engine::extensions::ShellExtensionsImpl<error_formatter::Formatter>;
-type BashShell = crate::engine::Shell<BashShellExtensions>;
+type BashShell = crate::engine::Shell<error_formatter::Formatter>;
 
 // WARN: this implementation shadows `clap::Parser::parse_from` one so it must be defined
 // after the `use clap::Parser`
@@ -279,7 +277,7 @@ async fn instantiate_shell_from_args(
     // Set up the shell builder with the requested options.
     // NOTE: We skip loading profile and rc files here; that will be handled later after we've
     // fully instantiated everything we want set before running any code.
-    let shell = crate::engine::Shell::builder_with_extensions::<BashShellExtensions>()
+    let shell = crate::engine::Shell::builder_with_extensions::<error_formatter::Formatter>()
         .disable_options(args.disabled_options.clone())
         .disable_shopt_options(args.disabled_shopt_options.clone())
         .disallow_overwriting_regular_files_via_output_redirection(

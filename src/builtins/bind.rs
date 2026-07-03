@@ -5,7 +5,7 @@ use std::{collections::HashMap, io::Write, str::FromStr as _, sync::Arc};
 use strum::IntoEnumIterator;
 
 use crate::engine::{
-    ExecutionExitCode, ExecutionResult, builtins,
+    ExecutionResult, builtins,
     interfaces::{self, InputFunction, KeyAction, KeySequence},
     sys, trace_categories,
 };
@@ -113,9 +113,9 @@ pub(crate) enum BindError {
 
 impl crate::engine::BuiltinError for BindError {}
 
-impl From<&BindError> for crate::engine::ExecutionExitCode {
+impl From<&BindError> for u8 {
     fn from(_err: &BindError) -> Self {
-        Self::GeneralError
+        crate::engine::exit_code::GENERAL_ERROR
     }
 }
 
@@ -135,7 +135,7 @@ impl builtins::Command for BindCommand {
             // Silently succeed when key bindings are unavailable (e.g., in
             // non-interactive mode or with an input backend that doesn't
             // yet support them).
-            Ok(ExecutionExitCode::Success.into())
+            Ok(ExecutionResult::success())
         }
     }
 }

@@ -8,6 +8,15 @@ use crate::engine::options::RuntimeOptions;
 type OptionGetter = fn(shell: &RuntimeOptions) -> bool;
 type OptionSetter = fn(shell: &mut RuntimeOptions, value: bool) -> ();
 
+macro_rules! opt {
+    ($field:ident) => {
+        ShellOptionDef::new(
+            |options| options.$field,
+            |options, value| options.$field = value,
+        )
+    };
+}
+
 /// Defines an option.
 pub struct ShellOptionDef {
     /// Getter function that retrieves the current value of the option.
@@ -110,762 +119,137 @@ impl ShellOptionSet {
 
 static SET_OPTIONS: LazyLock<HashMap<&'static str, ShellOptionDef>> = LazyLock::new(|| {
     HashMap::from([
-        (
-            "a",
-            ShellOptionDef::new(
-                |options| options.export_variables_on_modification,
-                |options, value| options.export_variables_on_modification = value,
-            ),
-        ),
-        (
-            "b",
-            ShellOptionDef::new(
-                |options| options.notify_job_termination_immediately,
-                |options, value| options.notify_job_termination_immediately = value,
-            ),
-        ),
-        (
-            "c",
-            ShellOptionDef::new(
-                |options| options.command_string_mode,
-                |options, value| options.command_string_mode = value,
-            ),
-        ),
-        (
-            "e",
-            ShellOptionDef::new(
-                |options| options.exit_on_nonzero_command_exit,
-                |options, value| options.exit_on_nonzero_command_exit = value,
-            ),
-        ),
-        (
-            "f",
-            ShellOptionDef::new(
-                |options| options.disable_filename_globbing,
-                |options, value| options.disable_filename_globbing = value,
-            ),
-        ),
-        (
-            "h",
-            ShellOptionDef::new(
-                |options| options.remember_command_locations,
-                |options, value| options.remember_command_locations = value,
-            ),
-        ),
-        (
-            "i",
-            ShellOptionDef::new(
-                |options| options.interactive,
-                |options, value| options.interactive = value,
-            ),
-        ),
-        (
-            "k",
-            ShellOptionDef::new(
-                |options| options.place_all_assignment_args_in_command_env,
-                |options, value| options.place_all_assignment_args_in_command_env = value,
-            ),
-        ),
-        (
-            "m",
-            ShellOptionDef::new(
-                |options| options.enable_job_control,
-                |options, value| options.enable_job_control = value,
-            ),
-        ),
-        (
-            "n",
-            ShellOptionDef::new(
-                |options| options.do_not_execute_commands,
-                |options, value| options.do_not_execute_commands = value,
-            ),
-        ),
-        (
-            "p",
-            ShellOptionDef::new(
-                |options| options.real_effective_uid_mismatch,
-                |options, value| options.real_effective_uid_mismatch = value,
-            ),
-        ),
-        (
-            "t",
-            ShellOptionDef::new(
-                |options| options.exit_after_one_command,
-                |options, value| options.exit_after_one_command = value,
-            ),
-        ),
-        (
-            "u",
-            ShellOptionDef::new(
-                |options| options.treat_unset_variables_as_error,
-                |options, value| options.treat_unset_variables_as_error = value,
-            ),
-        ),
-        (
-            "v",
-            ShellOptionDef::new(
-                |options| options.print_shell_input_lines,
-                |options, value| options.print_shell_input_lines = value,
-            ),
-        ),
-        (
-            "x",
-            ShellOptionDef::new(
-                |options| options.print_commands_and_arguments,
-                |options, value| options.print_commands_and_arguments = value,
-            ),
-        ),
-        (
-            "B",
-            ShellOptionDef::new(
-                |options| options.perform_brace_expansion,
-                |options, value| options.perform_brace_expansion = value,
-            ),
-        ),
+        ("a", opt!(export_variables_on_modification)),
+        ("b", opt!(notify_job_termination_immediately)),
+        ("c", opt!(command_string_mode)),
+        ("e", opt!(exit_on_nonzero_command_exit)),
+        ("f", opt!(disable_filename_globbing)),
+        ("h", opt!(remember_command_locations)),
+        ("i", opt!(interactive)),
+        ("k", opt!(place_all_assignment_args_in_command_env)),
+        ("m", opt!(enable_job_control)),
+        ("n", opt!(do_not_execute_commands)),
+        ("p", opt!(real_effective_uid_mismatch)),
+        ("t", opt!(exit_after_one_command)),
+        ("u", opt!(treat_unset_variables_as_error)),
+        ("v", opt!(print_shell_input_lines)),
+        ("x", opt!(print_commands_and_arguments)),
+        ("B", opt!(perform_brace_expansion)),
         (
             "C",
-            ShellOptionDef::new(
-                |options| options.disallow_overwriting_regular_files_via_output_redirection,
-                |options, value| {
-                    options.disallow_overwriting_regular_files_via_output_redirection = value;
-                },
-            ),
+            opt!(disallow_overwriting_regular_files_via_output_redirection),
         ),
-        (
-            "E",
-            ShellOptionDef::new(
-                |options| options.shell_functions_inherit_err_trap,
-                |options, value| options.shell_functions_inherit_err_trap = value,
-            ),
-        ),
-        (
-            "H",
-            ShellOptionDef::new(
-                |options| options.enable_bang_style_history_substitution,
-                |options, value| options.enable_bang_style_history_substitution = value,
-            ),
-        ),
-        (
-            "P",
-            ShellOptionDef::new(
-                |options| options.do_not_resolve_symlinks_when_changing_dir,
-                |options, value| options.do_not_resolve_symlinks_when_changing_dir = value,
-            ),
-        ),
-        (
-            "T",
-            ShellOptionDef::new(
-                |options| options.shell_functions_inherit_debug_and_return_traps,
-                |options, value| options.shell_functions_inherit_debug_and_return_traps = value,
-            ),
-        ),
-        (
-            "s",
-            ShellOptionDef::new(
-                |options| options.read_commands_from_stdin,
-                |options, value| options.read_commands_from_stdin = value,
-            ),
-        ),
+        ("E", opt!(shell_functions_inherit_err_trap)),
+        ("H", opt!(enable_bang_style_history_substitution)),
+        ("P", opt!(do_not_resolve_symlinks_when_changing_dir)),
+        ("T", opt!(shell_functions_inherit_debug_and_return_traps)),
+        ("s", opt!(read_commands_from_stdin)),
     ])
 });
 
 static SET_O_OPTIONS: LazyLock<HashMap<&'static str, ShellOptionDef>> = LazyLock::new(|| {
     HashMap::from([
-        (
-            "allexport",
-            ShellOptionDef::new(
-                |options| options.export_variables_on_modification,
-                |options, value| options.export_variables_on_modification = value,
-            ),
-        ),
-        (
-            "braceexpand",
-            ShellOptionDef::new(
-                |options| options.perform_brace_expansion,
-                |options, value| options.perform_brace_expansion = value,
-            ),
-        ),
-        (
-            "emacs",
-            ShellOptionDef::new(
-                |options| options.emacs_mode,
-                |options, value| options.emacs_mode = value,
-            ),
-        ),
-        (
-            "errexit",
-            ShellOptionDef::new(
-                |options| options.exit_on_nonzero_command_exit,
-                |options, value| options.exit_on_nonzero_command_exit = value,
-            ),
-        ),
-        (
-            "errtrace",
-            ShellOptionDef::new(
-                |options| options.shell_functions_inherit_err_trap,
-                |options, value| options.shell_functions_inherit_err_trap = value,
-            ),
-        ),
+        ("allexport", opt!(export_variables_on_modification)),
+        ("braceexpand", opt!(perform_brace_expansion)),
+        ("emacs", opt!(emacs_mode)),
+        ("errexit", opt!(exit_on_nonzero_command_exit)),
+        ("errtrace", opt!(shell_functions_inherit_err_trap)),
         (
             "functrace",
-            ShellOptionDef::new(
-                |options| options.shell_functions_inherit_debug_and_return_traps,
-                |options, value| options.shell_functions_inherit_debug_and_return_traps = value,
-            ),
+            opt!(shell_functions_inherit_debug_and_return_traps),
         ),
-        (
-            "hashall",
-            ShellOptionDef::new(
-                |options| options.remember_command_locations,
-                |options, value| options.remember_command_locations = value,
-            ),
-        ),
-        (
-            "histexpand",
-            ShellOptionDef::new(
-                |options| options.enable_bang_style_history_substitution,
-                |options, value| options.enable_bang_style_history_substitution = value,
-            ),
-        ),
-        (
-            "history",
-            ShellOptionDef::new(
-                |options| options.enable_command_history,
-                |options, value| options.enable_command_history = value,
-            ),
-        ),
-        (
-            "ignoreeof",
-            ShellOptionDef::new(
-                |options| options.ignore_eof,
-                |options, value| options.ignore_eof = value,
-            ),
-        ),
-        (
-            "interactive-comments",
-            ShellOptionDef::new(
-                |options| options.interactive_comments,
-                |options, value| options.interactive_comments = value,
-            ),
-        ),
-        (
-            "keyword",
-            ShellOptionDef::new(
-                |options| options.place_all_assignment_args_in_command_env,
-                |options, value| options.place_all_assignment_args_in_command_env = value,
-            ),
-        ),
-        (
-            "monitor",
-            ShellOptionDef::new(
-                |options| options.enable_job_control,
-                |options, value| options.enable_job_control = value,
-            ),
-        ),
+        ("hashall", opt!(remember_command_locations)),
+        ("histexpand", opt!(enable_bang_style_history_substitution)),
+        ("history", opt!(enable_command_history)),
+        ("ignoreeof", opt!(ignore_eof)),
+        ("interactive-comments", opt!(interactive_comments)),
+        ("keyword", opt!(place_all_assignment_args_in_command_env)),
+        ("monitor", opt!(enable_job_control)),
         (
             "noclobber",
-            ShellOptionDef::new(
-                |options| options.disallow_overwriting_regular_files_via_output_redirection,
-                |options, value| {
-                    options.disallow_overwriting_regular_files_via_output_redirection = value;
-                },
-            ),
+            opt!(disallow_overwriting_regular_files_via_output_redirection),
         ),
-        (
-            "noexec",
-            ShellOptionDef::new(
-                |options| options.do_not_execute_commands,
-                |options, value| options.do_not_execute_commands = value,
-            ),
-        ),
-        (
-            "noglob",
-            ShellOptionDef::new(
-                |options| options.disable_filename_globbing,
-                |options, value| options.disable_filename_globbing = value,
-            ),
-        ),
+        ("noexec", opt!(do_not_execute_commands)),
+        ("noglob", opt!(disable_filename_globbing)),
         ("nolog", ShellOptionDef::new(|_| false, |_, _| ())),
-        (
-            "notify",
-            ShellOptionDef::new(
-                |options| options.notify_job_termination_immediately,
-                |options, value| options.notify_job_termination_immediately = value,
-            ),
-        ),
-        (
-            "nounset",
-            ShellOptionDef::new(
-                |options| options.treat_unset_variables_as_error,
-                |options, value| options.treat_unset_variables_as_error = value,
-            ),
-        ),
-        (
-            "onecmd",
-            ShellOptionDef::new(
-                |options| options.exit_after_one_command,
-                |options, value| options.exit_after_one_command = value,
-            ),
-        ),
-        (
-            "physical",
-            ShellOptionDef::new(
-                |options| options.do_not_resolve_symlinks_when_changing_dir,
-                |options, value| options.do_not_resolve_symlinks_when_changing_dir = value,
-            ),
-        ),
-        (
-            "pipefail",
-            ShellOptionDef::new(
-                |options| options.return_last_failure_from_pipeline,
-                |options, value| options.return_last_failure_from_pipeline = value,
-            ),
-        ),
-        (
-            "privileged",
-            ShellOptionDef::new(
-                |options| options.real_effective_uid_mismatch,
-                |options, value| options.real_effective_uid_mismatch = value,
-            ),
-        ),
-        (
-            "verbose",
-            ShellOptionDef::new(
-                |options| options.print_shell_input_lines,
-                |options, value| options.print_shell_input_lines = value,
-            ),
-        ),
-        (
-            "vi",
-            ShellOptionDef::new(
-                |options| options.vi_mode,
-                |options, value| options.vi_mode = value,
-            ),
-        ),
-        (
-            "xtrace",
-            ShellOptionDef::new(
-                |options| options.print_commands_and_arguments,
-                |options, value| options.print_commands_and_arguments = value,
-            ),
-        ),
+        ("notify", opt!(notify_job_termination_immediately)),
+        ("nounset", opt!(treat_unset_variables_as_error)),
+        ("onecmd", opt!(exit_after_one_command)),
+        ("physical", opt!(do_not_resolve_symlinks_when_changing_dir)),
+        ("pipefail", opt!(return_last_failure_from_pipeline)),
+        ("privileged", opt!(real_effective_uid_mismatch)),
+        ("verbose", opt!(print_shell_input_lines)),
+        ("vi", opt!(vi_mode)),
+        ("xtrace", opt!(print_commands_and_arguments)),
     ])
 });
 
 static SHOPT_OPTIONS: LazyLock<HashMap<&'static str, ShellOptionDef>> = LazyLock::new(|| {
     HashMap::from([
-        (
-            "autocd",
-            ShellOptionDef::new(
-                |options| options.auto_cd,
-                |options, value| options.auto_cd = value,
-            ),
-        ),
-        (
-            "array_expand_once",
-            ShellOptionDef::new(
-                |options| options.array_expand_once,
-                |options, value| options.array_expand_once = value,
-            ),
-        ),
-        (
-            "assoc_expand_once",
-            ShellOptionDef::new(
-                |options| options.assoc_expand_once,
-                |options, value| options.assoc_expand_once = value,
-            ),
-        ),
-        (
-            "bash_source_fullpath",
-            ShellOptionDef::new(
-                |options| options.bash_source_full_path,
-                |options, value| options.bash_source_full_path = value,
-            ),
-        ),
-        (
-            "cdable_vars",
-            ShellOptionDef::new(
-                |options| options.cdable_vars,
-                |options, value| options.cdable_vars = value,
-            ),
-        ),
-        (
-            "cdspell",
-            ShellOptionDef::new(
-                |options| options.cd_autocorrect_spelling,
-                |options, value| options.cd_autocorrect_spelling = value,
-            ),
-        ),
-        (
-            "checkhash",
-            ShellOptionDef::new(
-                |options| options.check_hashtable_before_command_exec,
-                |options, value| options.check_hashtable_before_command_exec = value,
-            ),
-        ),
-        (
-            "checkjobs",
-            ShellOptionDef::new(
-                |options| options.check_jobs_before_exit,
-                |options, value| options.check_jobs_before_exit = value,
-            ),
-        ),
+        ("autocd", opt!(auto_cd)),
+        ("array_expand_once", opt!(array_expand_once)),
+        ("assoc_expand_once", opt!(assoc_expand_once)),
+        ("bash_source_fullpath", opt!(bash_source_full_path)),
+        ("cdable_vars", opt!(cdable_vars)),
+        ("cdspell", opt!(cd_autocorrect_spelling)),
+        ("checkhash", opt!(check_hashtable_before_command_exec)),
+        ("checkjobs", opt!(check_jobs_before_exit)),
         (
             "checkwinsize",
-            ShellOptionDef::new(
-                |options| options.check_window_size_after_external_commands,
-                |options, value| options.check_window_size_after_external_commands = value,
-            ),
+            opt!(check_window_size_after_external_commands),
         ),
-        (
-            "cmdhist",
-            ShellOptionDef::new(
-                |options| options.save_multiline_cmds_in_history,
-                |options, value| options.save_multiline_cmds_in_history = value,
-            ),
-        ),
-        (
-            "compat31",
-            ShellOptionDef::new(
-                |options| options.compat31,
-                |options, value| options.compat31 = value,
-            ),
-        ),
-        (
-            "compat32",
-            ShellOptionDef::new(
-                |options| options.compat32,
-                |options, value| options.compat32 = value,
-            ),
-        ),
-        (
-            "compat40",
-            ShellOptionDef::new(
-                |options| options.compat40,
-                |options, value| options.compat40 = value,
-            ),
-        ),
-        (
-            "compat41",
-            ShellOptionDef::new(
-                |options| options.compat41,
-                |options, value| options.compat41 = value,
-            ),
-        ),
-        (
-            "compat42",
-            ShellOptionDef::new(
-                |options| options.compat42,
-                |options, value| options.compat42 = value,
-            ),
-        ),
-        (
-            "compat43",
-            ShellOptionDef::new(
-                |options| options.compat43,
-                |options, value| options.compat43 = value,
-            ),
-        ),
-        (
-            "compat44",
-            ShellOptionDef::new(
-                |options| options.compat44,
-                |options, value| options.compat44 = value,
-            ),
-        ),
+        ("cmdhist", opt!(save_multiline_cmds_in_history)),
+        ("compat31", opt!(compat31)),
+        ("compat32", opt!(compat32)),
+        ("compat40", opt!(compat40)),
+        ("compat41", opt!(compat41)),
+        ("compat42", opt!(compat42)),
+        ("compat43", opt!(compat43)),
+        ("compat44", opt!(compat44)),
         (
             "complete_fullquote",
-            ShellOptionDef::new(
-                |options| options.quote_all_metachars_in_completion,
-                |options, value| options.quote_all_metachars_in_completion = value,
-            ),
+            opt!(quote_all_metachars_in_completion),
         ),
-        (
-            "direxpand",
-            ShellOptionDef::new(
-                |options| options.expand_dir_names_on_completion,
-                |options, value| options.expand_dir_names_on_completion = value,
-            ),
-        ),
-        (
-            "dirspell",
-            ShellOptionDef::new(
-                |options| options.autocorrect_dir_spelling_on_completion,
-                |options, value| options.autocorrect_dir_spelling_on_completion = value,
-            ),
-        ),
-        (
-            "dotglob",
-            ShellOptionDef::new(
-                |options| options.glob_matches_dotfiles,
-                |options, value| options.glob_matches_dotfiles = value,
-            ),
-        ),
-        (
-            "execfail",
-            ShellOptionDef::new(
-                |options| options.exit_on_exec_fail,
-                |options, value| options.exit_on_exec_fail = value,
-            ),
-        ),
-        (
-            "expand_aliases",
-            ShellOptionDef::new(
-                |options| options.expand_aliases,
-                |options, value| options.expand_aliases = value,
-            ),
-        ),
-        (
-            "extdebug",
-            ShellOptionDef::new(
-                |options| options.enable_debugger,
-                |options, value| options.enable_debugger = value,
-            ),
-        ),
-        (
-            "extglob",
-            ShellOptionDef::new(
-                |options| options.extended_globbing,
-                |options, value| options.extended_globbing = value,
-            ),
-        ),
-        (
-            "extquote",
-            ShellOptionDef::new(
-                |options| options.extquote,
-                |options, value| options.extquote = value,
-            ),
-        ),
-        (
-            "failglob",
-            ShellOptionDef::new(
-                |options| options.fail_expansion_on_globs_without_match,
-                |options, value| options.fail_expansion_on_globs_without_match = value,
-            ),
-        ),
-        (
-            "force_fignore",
-            ShellOptionDef::new(
-                |options| options.force_fignore,
-                |options, value| options.force_fignore = value,
-            ),
-        ),
-        (
-            "globasciiranges",
-            ShellOptionDef::new(
-                |options| options.glob_ranges_use_c_locale,
-                |options, value| options.glob_ranges_use_c_locale = value,
-            ),
-        ),
-        (
-            "globskipdots",
-            ShellOptionDef::new(
-                |options| options.glob_skip_dots,
-                |options, value| options.glob_skip_dots = value,
-            ),
-        ),
-        (
-            "globstar",
-            ShellOptionDef::new(
-                |options| options.enable_star_star_glob,
-                |options, value| options.enable_star_star_glob = value,
-            ),
-        ),
-        (
-            "gnu_errfmt",
-            ShellOptionDef::new(
-                |options| options.errors_in_gnu_format,
-                |options, value| options.errors_in_gnu_format = value,
-            ),
-        ),
-        (
-            "histappend",
-            ShellOptionDef::new(
-                |options| options.append_to_history_file,
-                |options, value| options.append_to_history_file = value,
-            ),
-        ),
-        (
-            "histreedit",
-            ShellOptionDef::new(
-                |options| options.allow_reedit_failed_history_subst,
-                |options, value| options.allow_reedit_failed_history_subst = value,
-            ),
-        ),
-        (
-            "histverify",
-            ShellOptionDef::new(
-                |options| options.allow_modifying_history_substitution,
-                |options, value| options.allow_modifying_history_substitution = value,
-            ),
-        ),
-        (
-            "hostcomplete",
-            ShellOptionDef::new(
-                |options| options.enable_hostname_completion,
-                |options, value| options.enable_hostname_completion = value,
-            ),
-        ),
-        (
-            "huponexit",
-            ShellOptionDef::new(
-                |options| options.send_sighup_to_all_jobs_on_exit,
-                |options, value| options.send_sighup_to_all_jobs_on_exit = value,
-            ),
-        ),
-        (
-            "inherit_errexit",
-            ShellOptionDef::new(
-                |options| options.command_subst_inherits_errexit,
-                |options, value| options.command_subst_inherits_errexit = value,
-            ),
-        ),
-        (
-            "interactive_comments",
-            ShellOptionDef::new(
-                |options| options.interactive_comments,
-                |options, value| options.interactive_comments = value,
-            ),
-        ),
-        (
-            "lastpipe",
-            ShellOptionDef::new(
-                |options| options.run_last_pipeline_cmd_in_current_shell,
-                |options, value| options.run_last_pipeline_cmd_in_current_shell = value,
-            ),
-        ),
-        (
-            "lithist",
-            ShellOptionDef::new(
-                |options| options.embed_newlines_in_multiline_cmds_in_history,
-                |options, value| options.embed_newlines_in_multiline_cmds_in_history = value,
-            ),
-        ),
-        (
-            "localvar_inherit",
-            ShellOptionDef::new(
-                |options| options.local_vars_inherit_value_and_attrs,
-                |options, value| options.local_vars_inherit_value_and_attrs = value,
-            ),
-        ),
-        (
-            "localvar_unset",
-            ShellOptionDef::new(
-                |options| options.localvar_unset,
-                |options, value| options.localvar_unset = value,
-            ),
-        ),
-        (
-            "login_shell",
-            ShellOptionDef::new(
-                |options| options.login_shell,
-                |options, value| options.login_shell = value,
-            ),
-        ),
-        (
-            "mailwarn",
-            ShellOptionDef::new(
-                |options| options.mail_warn,
-                |options, value| options.mail_warn = value,
-            ),
-        ),
-        (
-            "no_empty_cmd_completion",
-            ShellOptionDef::new(
-                |options| options.no_empty_cmd_completion,
-                |options, value| options.no_empty_cmd_completion = value,
-            ),
-        ),
-        (
-            "nocaseglob",
-            ShellOptionDef::new(
-                |options| options.case_insensitive_pathname_expansion,
-                |options, value| options.case_insensitive_pathname_expansion = value,
-            ),
-        ),
-        (
-            "nocasematch",
-            ShellOptionDef::new(
-                |options| options.case_insensitive_conditionals,
-                |options, value| options.case_insensitive_conditionals = value,
-            ),
-        ),
-        (
-            "noexpand_translation",
-            ShellOptionDef::new(
-                |options| options.no_expand_translation,
-                |options, value| options.no_expand_translation = value,
-            ),
-        ),
-        (
-            "nullglob",
-            ShellOptionDef::new(
-                |options| options.expand_non_matching_patterns_to_null,
-                |options, value| options.expand_non_matching_patterns_to_null = value,
-            ),
-        ),
-        (
-            "patsub_replacement",
-            ShellOptionDef::new(
-                |options| options.patsub_replacement,
-                |options, value| options.patsub_replacement = value,
-            ),
-        ),
-        (
-            "progcomp",
-            ShellOptionDef::new(
-                |options| options.programmable_completion,
-                |options, value| options.programmable_completion = value,
-            ),
-        ),
-        (
-            "progcomp_alias",
-            ShellOptionDef::new(
-                |options| options.programmable_completion_alias,
-                |options, value| options.programmable_completion_alias = value,
-            ),
-        ),
-        (
-            "promptvars",
-            ShellOptionDef::new(
-                |options| options.expand_prompt_strings,
-                |options, value| options.expand_prompt_strings = value,
-            ),
-        ),
-        (
-            "restricted_shell",
-            ShellOptionDef::new(
-                |options| options.restricted_shell,
-                |options, value| options.restricted_shell = value,
-            ),
-        ),
-        (
-            "shift_verbose",
-            ShellOptionDef::new(
-                |options| options.shift_verbose,
-                |options, value| options.shift_verbose = value,
-            ),
-        ),
-        (
-            "sourcepath",
-            ShellOptionDef::new(
-                |options| options.source_builtin_searches_path,
-                |options, value| options.source_builtin_searches_path = value,
-            ),
-        ),
-        (
-            "varredir_close",
-            ShellOptionDef::new(
-                |options| options.var_redir_close,
-                |options, value| options.var_redir_close = value,
-            ),
-        ),
-        (
-            "xpg_echo",
-            ShellOptionDef::new(
-                |options| options.echo_builtin_expands_escape_sequences,
-                |options, value| options.echo_builtin_expands_escape_sequences = value,
-            ),
-        ),
+        ("direxpand", opt!(expand_dir_names_on_completion)),
+        ("dirspell", opt!(autocorrect_dir_spelling_on_completion)),
+        ("dotglob", opt!(glob_matches_dotfiles)),
+        ("execfail", opt!(exit_on_exec_fail)),
+        ("expand_aliases", opt!(expand_aliases)),
+        ("extdebug", opt!(enable_debugger)),
+        ("extglob", opt!(extended_globbing)),
+        ("extquote", opt!(extquote)),
+        ("failglob", opt!(fail_expansion_on_globs_without_match)),
+        ("force_fignore", opt!(force_fignore)),
+        ("globasciiranges", opt!(glob_ranges_use_c_locale)),
+        ("globskipdots", opt!(glob_skip_dots)),
+        ("globstar", opt!(enable_star_star_glob)),
+        ("gnu_errfmt", opt!(errors_in_gnu_format)),
+        ("histappend", opt!(append_to_history_file)),
+        ("histreedit", opt!(allow_reedit_failed_history_subst)),
+        ("histverify", opt!(allow_modifying_history_substitution)),
+        ("hostcomplete", opt!(enable_hostname_completion)),
+        ("huponexit", opt!(send_sighup_to_all_jobs_on_exit)),
+        ("inherit_errexit", opt!(command_subst_inherits_errexit)),
+        ("interactive_comments", opt!(interactive_comments)),
+        ("lastpipe", opt!(run_last_pipeline_cmd_in_current_shell)),
+        ("lithist", opt!(embed_newlines_in_multiline_cmds_in_history)),
+        ("localvar_inherit", opt!(local_vars_inherit_value_and_attrs)),
+        ("localvar_unset", opt!(localvar_unset)),
+        ("login_shell", opt!(login_shell)),
+        ("mailwarn", opt!(mail_warn)),
+        ("no_empty_cmd_completion", opt!(no_empty_cmd_completion)),
+        ("nocaseglob", opt!(case_insensitive_pathname_expansion)),
+        ("nocasematch", opt!(case_insensitive_conditionals)),
+        ("noexpand_translation", opt!(no_expand_translation)),
+        ("nullglob", opt!(expand_non_matching_patterns_to_null)),
+        ("patsub_replacement", opt!(patsub_replacement)),
+        ("progcomp", opt!(programmable_completion)),
+        ("progcomp_alias", opt!(programmable_completion_alias)),
+        ("promptvars", opt!(expand_prompt_strings)),
+        ("restricted_shell", opt!(restricted_shell)),
+        ("shift_verbose", opt!(shift_verbose)),
+        ("sourcepath", opt!(source_builtin_searches_path)),
+        ("varredir_close", opt!(var_redir_close)),
+        ("xpg_echo", opt!(echo_builtin_expands_escape_sequences)),
     ])
 });

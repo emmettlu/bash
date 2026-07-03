@@ -2,7 +2,7 @@ use clap::Parser;
 use itertools::Itertools;
 use std::io::Write;
 
-use crate::engine::{ExecutionExitCode, ExecutionResult, builtins};
+use crate::engine::{ExecutionResult, builtins};
 
 /// Manage shopt-style options.
 #[derive(Parser)]
@@ -44,7 +44,7 @@ impl builtins::Command for ShoptCommand {
                 context.stderr(),
                 "cannot set and unset shell options simultaneously"
             )?;
-            return Ok(ExecutionExitCode::InvalidUsage.into());
+            return Ok(ExecutionResult::invalid_usage());
         }
 
         if self.options.is_empty() {

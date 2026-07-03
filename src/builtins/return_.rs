@@ -1,7 +1,7 @@
 use clap::Parser;
 use std::io::Write;
 
-use crate::engine::{ExecutionControlFlow, ExecutionExitCode, ExecutionResult, builtins};
+use crate::engine::{ExecutionControlFlow, ExecutionResult, builtins};
 
 /// Return from the current function.
 #[derive(Parser)]
@@ -34,7 +34,7 @@ impl builtins::Command for ReturnCommand {
                 context.stderr(),
                 "return: can only be used in a function or sourced script"
             );
-            Ok(ExecutionExitCode::InvalidUsage.into())
+            Ok(ExecutionResult::invalid_usage())
         }
     }
 }

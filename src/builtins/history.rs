@@ -1,4 +1,4 @@
-use crate::engine::{ExecutionExitCode, ExecutionResult, builtins, error, history};
+use crate::engine::{ExecutionResult, builtins, error, history};
 use clap::Parser;
 use std::{io::Write, path::PathBuf};
 
@@ -92,7 +92,7 @@ impl HistoryCommand {
         if let Some(offset) = self.delete_offset {
             if offset == 0 {
                 writeln!(stderr, "cannot delete history item at offset 0")?;
-                return Ok(ExecutionExitCode::InvalidUsage.into());
+                return Ok(ExecutionResult::invalid_usage());
             }
 
             if offset > 0 {
@@ -100,14 +100,14 @@ impl HistoryCommand {
                 let index = (offset - 1) as usize;
                 if !history.remove_nth_item(index) {
                     writeln!(stderr, "index past end of history")?;
-                    return Ok(ExecutionExitCode::InvalidUsage.into());
+                    return Ok(ExecutionResult::invalid_usage());
                 }
             } else {
                 let count = history.count() as i64;
                 let index = count + offset;
                 if index < 0 {
                     writeln!(stderr, "index before beginning of history")?;
-                    return Ok(ExecutionExitCode::InvalidUsage.into());
+                    return Ok(ExecutionResult::invalid_usage());
                 }
 
                 let _ = history.remove_nth_item(index as usize);

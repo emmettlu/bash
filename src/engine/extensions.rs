@@ -2,35 +2,24 @@
 
 use crate::engine::{Shell, error, extensions};
 
-/// Trait for static shell extensions. Collects all associated types needed to
-/// instantiate a shell into a single containing struct.
-pub trait ShellExtensions: Clone + Default + Send + Sync + 'static {
-    /// Type of the error behavior implementation.
-    type ErrorFormatter: ErrorFormatter;
-}
+/// Shell 行为扩展 trait, 是 `ErrorFormatter` 的 supertrait 别名.
+/// 所有实现了 `ErrorFormatter` 的类型自动满足此 trait.
+pub trait ShellExtensions: ErrorFormatter {}
 
-/// Shell extensions implementation constructed from component types.
-#[derive(Clone, Default)]
-pub struct ShellExtensionsImpl<EF: ErrorFormatter = DefaultErrorFormatter> {
-    _marker: std::marker::PhantomData<EF>,
-}
+/// 对所有 ErrorFormatter 实现提供 ShellExtensions 的自动 blanket 实现.
+impl<T: ErrorFormatter> ShellExtensions for T {}
 
-impl<EF: ErrorFormatter> ShellExtensions for ShellExtensionsImpl<EF> {
-    type ErrorFormatter = EF;
-}
+/// 默认的 shell 扩展实现, 等同于 `DefaultErrorFormatter`.
+pub type DefaultShellExtensions = DefaultErrorFormatter;
 
-/// Default shell extensions implementation.
-/// This is a type alias for the most common shell configuration.
-pub type DefaultShellExtensions = ShellExtensionsImpl<DefaultErrorFormatter>;
-
-/// Trait for defining shell error behaviors.
+/// 定义 shell 错误格式化行为的 trait.
 pub trait ErrorFormatter: Clone + Default + Send + Sync + 'static {
-    /// Format the given error for display within the context of the provided shell.
+    /// 在给定 shell 上下文中格式化错误.
     ///
     /// # Arguments
     ///
-    /// * `error` - The error to format
-    /// * `shell` - The shell context in which the error occurred.
+    /// * `error` - 要格式化的错误
+    /// * `shell` - 发生错误的 shell 上下文
     fn format_error(
         &self,
         error: &error::Error,
@@ -41,16 +30,16 @@ pub trait ErrorFormatter: Clone + Default + Send + Sync + 'static {
     }
 }
 
-/// Default shell error behavior implementation.
+/// 默认的错误格式化实现.
 #[derive(Clone, Default)]
 pub struct DefaultErrorFormatter;
 
 impl ErrorFormatter for DefaultErrorFormatter {}
 
-/// Trait for placeholder behavior (stub for future extension).
+/// 占位行为 trait (为未来扩展保留的桩).
 pub trait PlaceholderBehavior: Clone + Default + Send + Sync + 'static {}
 
-/// Default placeholder implementation.
+/// 默认占位实现.
 #[derive(Clone, Default)]
 pub struct DefaultPlaceholder;
 

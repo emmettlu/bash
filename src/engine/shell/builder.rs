@@ -32,58 +32,54 @@ impl<SE: extensions::ShellExtensions, S: shell_builder::IsComplete> ShellBuilder
     }
 }
 
+/// 为 ShellBuilder 生成一组 enable/disable 方法（单个与批量各一对）。
+macro_rules! define_option_methods {
+    (
+        $enable_fn:ident, $enable_many_fn:ident, $enable_field:ident,
+        $disable_fn:ident, $disable_many_fn:ident, $disable_field:ident
+    ) => {
+        /// 启用单个选项
+        pub fn $enable_fn(mut self, option: impl Into<String>) -> Self {
+            self.$enable_field.push(option.into());
+            self
+        }
+        /// 启用多个选项
+        pub fn $enable_many_fn(mut self, options: impl IntoIterator<Item: Into<String>>) -> Self {
+            self.$enable_field
+                .extend(options.into_iter().map(Into::into));
+            self
+        }
+        /// 禁用单个选项
+        pub fn $disable_fn(mut self, option: impl Into<String>) -> Self {
+            self.$disable_field.push(option.into());
+            self
+        }
+        /// 禁用多个选项
+        pub fn $disable_many_fn(mut self, options: impl IntoIterator<Item: Into<String>>) -> Self {
+            self.$disable_field
+                .extend(options.into_iter().map(Into::into));
+            self
+        }
+    };
+}
+
 impl<SE: extensions::ShellExtensions, S: shell_builder::State> ShellBuilder<SE, S> {
-    /// Add a disabled option
-    pub fn disable_option(mut self, option: impl Into<String>) -> Self {
-        self.disabled_options.push(option.into());
-        self
-    }
-
-    /// Add an enabled option
-    pub fn enable_option(mut self, option: impl Into<String>) -> Self {
-        self.enabled_options.push(option.into());
-        self
-    }
-
-    /// Add many disabled options
-    pub fn disable_options(mut self, options: impl IntoIterator<Item: Into<String>>) -> Self {
-        self.disabled_options
-            .extend(options.into_iter().map(Into::into));
-        self
-    }
-
-    /// Add many enabled options
-    pub fn enable_options(mut self, options: impl IntoIterator<Item: Into<String>>) -> Self {
-        self.enabled_options
-            .extend(options.into_iter().map(Into::into));
-        self
-    }
-
-    /// Add a disabled shopt option
-    pub fn disable_shopt_option(mut self, option: impl Into<String>) -> Self {
-        self.disabled_shopt_options.push(option.into());
-        self
-    }
-
-    /// Add an enabled shopt option
-    pub fn enable_shopt_option(mut self, option: impl Into<String>) -> Self {
-        self.enabled_shopt_options.push(option.into());
-        self
-    }
-
-    /// Add many disabled shopt options
-    pub fn disable_shopt_options(mut self, options: impl IntoIterator<Item: Into<String>>) -> Self {
-        self.disabled_shopt_options
-            .extend(options.into_iter().map(Into::into));
-        self
-    }
-
-    /// Add many enabled shopt options
-    pub fn enable_shopt_options(mut self, options: impl IntoIterator<Item: Into<String>>) -> Self {
-        self.enabled_shopt_options
-            .extend(options.into_iter().map(Into::into));
-        self
-    }
+    define_option_methods!(
+        enable_option,
+        enable_options,
+        enabled_options,
+        disable_option,
+        disable_options,
+        disabled_options
+    );
+    define_option_methods!(
+        enable_shopt_option,
+        enable_shopt_options,
+        enabled_shopt_options,
+        disable_shopt_option,
+        disable_shopt_options,
+        disabled_shopt_options
+    );
 
     /// Add a single builtin registration
     pub fn builtin(mut self, name: impl Into<String>, reg: builtins::Registration<SE>) -> Self {
@@ -143,9 +139,9 @@ pub struct CreateOptions<SE: extensions::ShellExtensions = extensions::DefaultSh
     /// are assigned *after* inherited or well-known variables are set (when applicable).
     #[builder(field)]
     pub vars: HashMap<String, ShellVariable>,
-    /// Error behavior implementation.
+    /// 错误格式化器实现.
     #[builder(default)]
-    pub error_formatter: SE::ErrorFormatter,
+    pub error_formatter: SE,
     /// Disallow overwriting regular files via output redirection.
     #[builder(default)]
     pub disallow_overwriting_regular_files_via_output_redirection: bool,
@@ -219,14 +215,14 @@ pub struct CreateOptions<SE: extensions::ShellExtensions = extensions::DefaultSh
     pub max_function_call_depth: Option<usize>,
     /// Key bindings helper for the shell to use.
     pub key_bindings: Option<KeyBindingsHelper>,
-    	/// Shell implementation version.
-        pub shell_version: Option<String>,
+    /// Shell implementation version.
+    pub shell_version: Option<String>,
 }
 
 impl<SE: extensions::ShellExtensions> Default for Shell<SE> {
     fn default() -> Self {
         Self {
-            error_formatter: SE::ErrorFormatter::default(),
+            error_formatter: SE::default(),
             traps: traps::TrapHandlerConfig::default(),
             open_files: openfiles::OpenFiles::default(),
             working_dir: PathBuf::default(),

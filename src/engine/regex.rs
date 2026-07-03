@@ -9,7 +9,7 @@ type RegexCacheKey = (String, bool, bool);
 
 thread_local! {
     static REGEX_CACHE: RefCell<crate::engine::cache::FixedCache<RegexCacheKey, fancy_regex::Regex>> =
-        const { RefCell::new(crate::engine::cache::FixedCache::new(64)) };
+        RefCell::new(crate::engine::cache::FixedCache::new(64));
 }
 
 /// Represents a piece of a regular expression.

@@ -20,7 +20,7 @@ impl From<&InteractiveExecutionResult> for i32 {
     /// Converts an `InteractiveExecutionResult` into a signed, 32-bit exit code.
     fn from(value: &InteractiveExecutionResult) -> Self {
         match value {
-            InteractiveExecutionResult::Executed(result) => u8::from(result.exit_code).into(),
+            InteractiveExecutionResult::Executed(result) => result.exit_code.into(),
             InteractiveExecutionResult::Failed(_) => 1,
             InteractiveExecutionResult::Eof => 0,
         }
@@ -201,12 +201,11 @@ impl<'a, IB: InputBackend, SE: crate::engine::ShellExtensions> InteractiveShell<
             }
             ReadResult::Interrupted => {
                 // We were interrupted; report that appropriately.
-                let result: crate::engine::ExecutionResult =
-                    crate::engine::ExecutionExitCode::Interrupted.into();
+                let result = crate::engine::ExecutionResult::interrupted();
                 self.shell
                     .lock()
                     .await
-                    .set_last_exit_status(result.exit_code.into());
+                    .set_last_exit_status(result.exit_code);
                 Ok(InteractiveExecutionResult::Executed(result))
             }
         }

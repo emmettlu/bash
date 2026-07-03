@@ -1,6 +1,6 @@
 use clap::Parser;
 
-use crate::engine::{ExecutionControlFlow, ExecutionExitCode, ExecutionResult, builtins};
+use crate::engine::{ExecutionControlFlow, ExecutionResult, builtins};
 
 /// Continue to the next iteration of a control-flow loop.
 #[derive(Parser)]
@@ -19,7 +19,7 @@ impl builtins::Command for ContinueCommand {
     ) -> Result<crate::engine::ExecutionResult, Self::Error> {
         // If specified, which_loop needs to be positive.
         if self.which_loop <= 0 {
-            return Ok(ExecutionExitCode::InvalidUsage.into());
+            return Ok(ExecutionResult::invalid_usage());
         }
 
         let mut result = ExecutionResult::success();

@@ -1,124 +1,48 @@
-//! Defines state traits for the shell.
+//! 定义 shell 状态 trait (用于 dyn 动态分发).
 
-use std::{
-    borrow::Cow,
-    collections::HashMap,
-    path::{Path, PathBuf},
-};
+use std::borrow::Cow;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
-use crate::engine::{
-    completion, env::ShellEnvironment, jobs, openfiles, options::RuntimeOptions, pathcache,
-    shell::KeyBindingsHelper,
-};
+use crate::engine::options::RuntimeOptions;
+use crate::engine::pathcache::PathCache;
 
-/// A dyn-safe trait for constrained access to shell state.
+/// dyn-safe trait, 仅包含通过 `dyn ShellState` 实际调用的方法.
+/// 其余 shell 状态访问方法定义为 `Shell<SE>` 的 inherent 方法.
 pub trait ShellState {
-    /// Returns whether or not this shell is a subshell.
-    fn is_subshell(&self) -> bool;
-
-    /// Returns the last "SECONDS" captured time.
-    fn last_stopwatch_time(&self) -> std::time::SystemTime;
-
-    /// Returns the last "SECONDS" offset requested.
-    fn last_stopwatch_offset(&self) -> u32;
-
-    /// Returns the shell environment containing variables.
-    fn env(&self) -> &ShellEnvironment;
-
-    /// Returns a mutable reference to the shell environment.
-    fn env_mut(&mut self) -> &mut ShellEnvironment;
-
-    /// Returns the shell's runtime options.
-    fn options(&self) -> &RuntimeOptions;
-
-    /// Returns a mutable reference to the shell's runtime options.
-    fn options_mut(&mut self) -> &mut RuntimeOptions;
-
-    /// Returns the shell's aliases.
-    fn aliases(&self) -> &HashMap<String, String>;
-
-    /// Returns a mutable reference to the shell's aliases.
-    fn aliases_mut(&mut self) -> &mut HashMap<String, String>;
-
-    /// Returns the shell's job manager.
-    fn jobs(&self) -> &jobs::JobManager;
-
-    /// Returns a mutable reference to the shell's job manager.
-    fn jobs_mut(&mut self) -> &mut jobs::JobManager;
-
-    /// Returns the shell's trap handler configuration.
-    fn traps(&self) -> &crate::engine::traps::TrapHandlerConfig;
-
-    /// Returns a mutable reference to the shell's trap handler configuration.
-    fn traps_mut(&mut self) -> &mut crate::engine::traps::TrapHandlerConfig;
-
-    /// Returns the shell's directory stack.
-    fn directory_stack(&self) -> &[PathBuf];
-
-    /// Returns a mutable reference to the shell's directory stack.
-    fn directory_stack_mut(&mut self) -> &mut Vec<PathBuf>;
-
-    /// Returns the statuses of commands in the last pipeline.
-    fn last_pipeline_statuses(&self) -> &[u8];
-
-    /// Returns a mutable reference to the statuses of commands in the last pipeline.
-    fn last_pipeline_statuses_mut(&mut self) -> &mut Vec<u8>;
-
-    /// Returns the shell's program location cache.
-    fn program_location_cache(&self) -> &pathcache::PathCache;
-
-    /// Returns a mutable reference to the shell's program location cache.
-    fn program_location_cache_mut(&mut self) -> &mut pathcache::PathCache;
-
-    /// Returns the shell's completion configuration.
-    fn completion_config(&self) -> &completion::Config;
-
-    /// Returns a mutable reference to the shell's completion configuration.
-    fn completion_config_mut(&mut self) -> &mut completion::Config;
-
-    /// Returns the shell's open files.
-    fn open_files(&self) -> &openfiles::OpenFiles;
-
-    /// Returns a mutable reference to the shell's open files.
-    fn open_files_mut(&mut self) -> &mut openfiles::OpenFiles;
-
-    /// Returns the *current* name of the shell ($0).
-    fn current_shell_name(&self) -> Option<Cow<'_, str>>;
-
-    /// Returns the current subshell depth; 0 is returned if this shell is not a subshell.
-    fn depth(&self) -> usize;
-
-    /// Returns the call stack for the shell.
+    /// 返回 shell 的调用栈.
     fn call_stack(&self) -> &crate::engine::callstack::CallStack;
 
-    /// Returns the shell's history, if it exists.
+    /// 返回 shell 的运行时选项.
+    fn options(&self) -> &RuntimeOptions;
+
+    /// 返回当前 subshell 嵌套深度, 0 表示非 subshell.
+    fn depth(&self) -> usize;
+
+    /// 返回 shell 的历史记录 (如果存在).
     fn history(&self) -> Option<&crate::engine::history::History>;
 
-    /// Returns a mutable reference to the shell's history, if it exists.
-    fn history_mut(&mut self) -> Option<&mut crate::engine::history::History>;
+    /// 返回上一条管道中各命令的退出状态.
+    fn last_pipeline_statuses(&self) -> &[u8];
 
-    /// Returns the shell's official version string (if available).
-    fn version(&self) -> Option<&str>;
+    /// 返回上次 SECONDS 计时的起始时刻.
+    fn last_stopwatch_time(&self) -> std::time::SystemTime;
 
-    /// Returns the exit status of the last command executed in this shell.
-    fn last_exit_status(&self) -> u8;
+    /// 返回上次 SECONDS 的偏移量.
+    fn last_stopwatch_offset(&self) -> u32;
 
-    /// Updates the last exit status.
-    fn set_last_exit_status(&mut self, status: u8);
+    /// 返回当前 shell 名称 ($0), 受调用栈影响.
+    fn current_shell_name(&self) -> Option<Cow<'_, str>>;
 
-    /// Returns the key bindings helper for the shell.
-    fn key_bindings(&self) -> Option<&KeyBindingsHelper>;
-
-    /// Sets the key bindings helper for the shell.
-    fn set_key_bindings(&mut self, key_bindings: Option<KeyBindingsHelper>);
-
-    /// Returns the shell's current working directory.
+    /// 返回当前工作目录.
     fn working_dir(&self) -> &Path;
 
-    /// Returns a mutable reference to the shell's current working directory.
-    /// This is only accessible within the crate.
-    fn working_dir_mut(&mut self) -> &mut PathBuf;
+    /// 返回 shell 的别名表.
+    fn aliases(&self) -> &HashMap<String, String>;
 
-    /// Returns the product display name for this shell.
-    fn product_display_str(&self) -> Option<&str>;
+    /// 返回命令路径缓存.
+    fn program_location_cache(&self) -> &PathCache;
+
+    /// 返回目录栈.
+    fn directory_stack(&self) -> &[PathBuf];
 }

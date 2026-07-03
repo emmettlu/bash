@@ -1,4 +1,4 @@
-use crate::engine::{ExecutionResult, builtins, error};
+use crate::engine::{ExecutionResult, builtins};
 
 /// No-op command.
 pub(crate) struct ColonCommand {}
@@ -15,7 +15,6 @@ impl builtins::SimpleCommand for ColonCommand {
             }
             builtins::ContentType::ShortUsage => Ok(":: :".into()),
             builtins::ContentType::ShortDescription => Ok(": - Null command".into()),
-            builtins::ContentType::ManPage => error::unimp("man page not yet implemented"),
         }
     }
 

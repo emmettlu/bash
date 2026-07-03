@@ -3,7 +3,7 @@ use itertools::Itertools;
 use std::io::Write;
 
 use crate::engine::{
-    ExecutionExitCode, ExecutionResult, builtins,
+    ExecutionResult, builtins,
     env::{EnvironmentLookup, EnvironmentScope},
     parser::ast,
     variables,
@@ -82,7 +82,7 @@ impl ExportCommand {
                         }
                     } else {
                         writeln!(context.stderr(), "{s}: not a function")?;
-                        return Ok(ExecutionExitCode::InvalidUsage.into());
+                        return Ok(ExecutionResult::invalid_usage());
                     }
                 }
                 // Try to find the variable already present; if we find it, then mark it
@@ -100,7 +100,7 @@ impl ExportCommand {
                     ast::AssignmentName::VariableName(name) => name,
                     ast::AssignmentName::ArrayElementName(_, _) => {
                         writeln!(context.stderr(), "not a valid variable name")?;
-                        return Ok(ExecutionExitCode::InvalidUsage.into());
+                        return Ok(ExecutionResult::invalid_usage());
                     }
                 };
 

@@ -11,7 +11,7 @@ use crate::engine::{Shell, ShellFd, results, sys};
 pub struct Error {
     /// The kind of error.
     #[source]
-    kind: ErrorKind,
+    kind: Box<ErrorKind>,
 
     /// Whether or not the error should be considered a "fatal" error that would
     /// result in abnormal exit of a non-interactive shell.
@@ -373,7 +373,7 @@ pub(crate) fn io_error_exit_code(io_err: &std::io::Error) -> u8 {
 
 impl From<&Error> for u8 {
     fn from(error: &Error) -> Self {
-        u8::from(&error.kind)
+        u8::from(error.kind())
     }
 }
 
@@ -383,7 +383,7 @@ where
 {
     fn from(convertible_to_kind: T) -> Self {
         Self {
-            kind: convertible_to_kind.into(),
+            kind: Box::new(convertible_to_kind.into()),
             fatal: false,
         }
     }
@@ -403,13 +403,13 @@ impl Error {
     }
 
     /// Returns a reference to the error kind.
-    pub const fn kind(&self) -> &ErrorKind {
+    pub fn kind(&self) -> &ErrorKind {
         &self.kind
     }
 
     /// Try to extract a reference to the underlying `std::io::Error`, if any.
     pub fn as_io_error(&self) -> Option<&std::io::Error> {
-        match &self.kind {
+        match self.kind() {
             ErrorKind::IoError(io_err) => Some(io_err),
             ErrorKind::BuiltinError(inner, _) => inner.as_io_error(),
             _ => None,

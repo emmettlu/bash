@@ -2098,7 +2098,7 @@ echo there
         let loc = parse(INPUT).location().unwrap();
 
         assert_eq!(
-            *(loc.start),
+            loc.start,
             SourcePosition {
                 line: 1,
                 column: 1,
@@ -2106,7 +2106,7 @@ echo there
             }
         );
         assert_eq!(
-            *(loc.end),
+            loc.end,
             SourcePosition {
                 line: 2,
                 column: 11,
@@ -2134,7 +2134,7 @@ my_func
         let loc = func_def.location().unwrap();
 
         assert_eq!(
-            *(loc.start),
+            loc.start,
             SourcePosition {
                 line: 1,
                 column: 1,
@@ -2142,7 +2142,7 @@ my_func
             }
         );
         assert_eq!(
-            *(loc.end),
+            loc.end,
             SourcePosition {
                 line: 4,
                 column: 2,
@@ -2165,7 +2165,7 @@ my_func
         let loc = cmd.location().unwrap();
 
         assert_eq!(
-            *(loc.start),
+            loc.start,
             SourcePosition {
                 line: 1,
                 column: 1,
@@ -2173,7 +2173,7 @@ my_func
             }
         );
         assert_eq!(
-            *(loc.end),
+            loc.end,
             SourcePosition {
                 line: 1,
                 column: 28,

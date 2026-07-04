@@ -6,8 +6,6 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use futures::lock::Mutex;
-
 use crate::engine::{
     ExecutionControlFlow, ExecutionResult, builtins, env::ShellEnvironment, error, extensions,
     functions, interfaces, jobs, keywords, openfiles, options::RuntimeOptions, pathcache,
@@ -15,7 +13,7 @@ use crate::engine::{
 };
 
 /// Type for storing a key bindings helper.
-pub type KeyBindingsHelper = Arc<Mutex<dyn interfaces::KeyBindings>>;
+pub type KeyBindingsHelper = Box<dyn interfaces::KeyBindings>;
 
 /// Type alias for shell file descriptors.
 pub type ShellFd = i32;
@@ -162,7 +160,7 @@ impl Clone for Shell {
             external_command_completion_cache: self.external_command_completion_cache.clone(),
             last_stopwatch_time: self.last_stopwatch_time,
             last_stopwatch_offset: self.last_stopwatch_offset,
-            key_bindings: self.key_bindings.clone(),
+            key_bindings: None,
             history: self.history.clone(),
             depth: self.depth + 1,
         }
@@ -564,9 +562,9 @@ impl Shell {
         self.last_exit_status_change_count += 1;
     }
 
-    /// 返回按键绑定辅助器.
-    pub fn key_bindings(&self) -> Option<&KeyBindingsHelper> {
-        self.key_bindings.as_ref()
+    /// 临时取出按键绑定辅助器.
+    pub fn take_key_bindings(&mut self) -> Option<KeyBindingsHelper> {
+        self.key_bindings.take()
     }
 
     /// 设置按键绑定辅助器.

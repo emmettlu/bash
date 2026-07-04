@@ -30,7 +30,7 @@ impl From<&InteractiveExecutionResult> for i32 {
 /// Represents an interactive shell that displays prompts, interactively reads user input, etc.
 pub struct InteractiveShell<'a, IB: InputBackend> {
     /// The underlying shell instance.
-    shell: crate::interactive::ShellRef,
+    shell: &'a mut crate::engine::Shell,
     /// The input backend to use.
     input: &'a mut IB,
     /// 终端控制 guard, 当这个循环持有 controlling terminal 时存在。
@@ -50,7 +50,7 @@ impl<'a, IB: InputBackend> InteractiveShell<'a, IB> {
     /// * `input` - The input backend to use.
     /// * `options` - The user interface options to use.
     pub fn new(
-        shell: &crate::interactive::ShellRef,
+        shell: &'a mut crate::engine::Shell,
         input: &'a mut IB,
         options: &crate::interactive::UIOptions,
     ) -> Result<Self, ShellError> {
@@ -82,7 +82,7 @@ impl<'a, IB: InputBackend> InteractiveShell<'a, IB> {
         };
 
         Ok(Self {
-            shell: shell.clone(),
+            shell,
             input,
             _terminal_control: terminal_control,
             terminal_integration,
@@ -94,15 +94,12 @@ impl<'a, IB: InputBackend> InteractiveShell<'a, IB> {
     /// results to standard output and standard error. Continues until the shell
     /// normally exits or until a fatal error occurs.
     pub async fn run_interactively(&mut self) -> Result<(), ShellError> {
-        let mut shell = self.shell.lock().await;
-
-        let mut announce_exit = self.options.interactive_session && shell.options().interactive;
+        let mut announce_exit =
+            self.options.interactive_session && self.shell.options().interactive;
 
         if self.options.interactive_session {
-            shell.start_interactive_session()?;
+            self.shell.start_interactive_session()?;
         }
-
-        drop(shell);
 
         loop {
             let result = self.run_interactively_once().await?;
@@ -123,33 +120,28 @@ impl<'a, IB: InputBackend> InteractiveShell<'a, IB> {
                 InteractiveExecutionResult::Executed(_) => {}
                 InteractiveExecutionResult::Failed(err) => {
                     // Report the error, but continue to execute.
-                    let shell = self.shell.lock().await;
-                    let mut stderr = shell.stderr();
-                    let _ = shell.display_error(&mut stderr, &err);
-
-                    drop(shell);
+                    let mut stderr = self.shell.stderr();
+                    let _ = self.shell.display_error(&mut stderr, &err);
                 }
                 InteractiveExecutionResult::Eof => {
                     break;
                 }
             }
 
-            if self.shell.lock().await.options().exit_after_one_command {
+            if self.shell.options().exit_after_one_command {
                 announce_exit = false;
                 break;
             }
         }
 
-        let mut shell = self.shell.lock().await;
-
         if self.options.interactive_session {
-            shell.end_interactive_session()?;
+            self.shell.end_interactive_session()?;
 
             if announce_exit {
-                writeln!(shell.stderr(), "exit")?;
+                writeln!(self.shell.stderr(), "exit")?;
             }
 
-            if let Err(e) = shell.save_history() {
+            if let Err(e) = self.shell.save_history() {
                 // N.B. This seems like the sort of thing that's worth being noisy about,
                 // but bash doesn't do that -- and probably for a reason.
                 log::debug!("couldn't save history: {e}");
@@ -157,9 +149,7 @@ impl<'a, IB: InputBackend> InteractiveShell<'a, IB> {
         }
 
         // Give the shell an opportunity to perform any on-exit operations.
-        shell.on_exit().await?;
-
-        drop(shell);
+        self.shell.on_exit().await?;
 
         Ok(())
     }
@@ -183,40 +173,34 @@ impl<'a, IB: InputBackend> InteractiveShell<'a, IB> {
                 }
                 InteractiveExecutionResult::Executed(_) => {}
                 InteractiveExecutionResult::Failed(err) => {
-                    let shell = self.shell.lock().await;
-                    let mut stderr = shell.stderr();
-                    let _ = shell.display_error(&mut stderr, &err);
-                    drop(shell);
+                    let mut stderr = self.shell.stderr();
+                    let _ = self.shell.display_error(&mut stderr, &err);
                 }
             }
 
-            if self.shell.lock().await.options().exit_after_one_command {
+            if self.shell.options().exit_after_one_command {
                 break;
             }
         }
 
-        self.shell.lock().await.on_exit().await?;
+        self.shell.on_exit().await?;
         Ok(())
     }
 
     /// Runs the interactive shell loop once, reading a single command from standard input.
     async fn run_interactively_once(&mut self) -> Result<InteractiveExecutionResult, ShellError> {
-        let mut shell = self.shell.lock().await;
-
         // Run any pre-prompt actions.
-        Self::run_pre_prompt_actions(&mut shell, &self.options).await?;
+        Self::run_pre_prompt_actions(self.shell, &self.options).await?;
 
         // Compose the prompt.
         let prompt = if self.options.display_prompt {
-            Self::compose_prompt(&mut shell, self.terminal_integration.as_ref()).await?
+            Self::compose_prompt(self.shell, self.terminal_integration.as_ref()).await?
         } else {
             Self::empty_prompt()
         };
 
-        drop(shell);
-
         // Read input.
-        match self.input.read_line(&self.shell, prompt)? {
+        match self.input.read_line(self.shell, prompt)? {
             ReadResult::Input(read_result) => {
                 // We got a line of input -- execute it.
                 self.execute_line(read_result, true /* user input */).await
@@ -232,10 +216,7 @@ impl<'a, IB: InputBackend> InteractiveShell<'a, IB> {
             ReadResult::Interrupted => {
                 // We were interrupted; report that appropriately.
                 let result = crate::engine::ExecutionResult::interrupted();
-                self.shell
-                    .lock()
-                    .await
-                    .set_last_exit_status(result.exit_code);
+                self.shell.set_last_exit_status(result.exit_code);
                 Ok(InteractiveExecutionResult::Executed(result))
             }
         }
@@ -246,17 +227,14 @@ impl<'a, IB: InputBackend> InteractiveShell<'a, IB> {
     ) -> Result<InteractiveExecutionResult, ShellError> {
         let prompt = Self::empty_prompt();
 
-        match self.input.read_line(&self.shell, prompt)? {
+        match self.input.read_line(self.shell, prompt)? {
             ReadResult::Input(read_result) | ReadResult::BoundCommand(read_result) => {
                 self.execute_line(read_result, false /* user input */).await
             }
             ReadResult::Eof => Ok(InteractiveExecutionResult::Eof),
             ReadResult::Interrupted => {
                 let result = crate::engine::ExecutionResult::interrupted();
-                self.shell
-                    .lock()
-                    .await
-                    .set_last_exit_status(result.exit_code);
+                self.shell.set_last_exit_status(result.exit_code);
                 Ok(InteractiveExecutionResult::Executed(result))
             }
         }
@@ -311,13 +289,11 @@ impl<'a, IB: InputBackend> InteractiveShell<'a, IB> {
         user_input: bool,
     ) -> Result<InteractiveExecutionResult, ShellError> {
         if read_result.trim().is_empty() {
-            let exit_code = self.shell.lock().await.last_exit_status();
+            let exit_code = self.shell.last_exit_status();
             return Ok(InteractiveExecutionResult::Executed(
                 crate::engine::ExecutionResult::new(exit_code),
             ));
         }
-
-        let mut shell = self.shell.lock().await;
 
         // See if the the user interface has a non-empty read buffer.
         let buffer_info = self.input.get_read_buffer();
@@ -327,7 +303,7 @@ impl<'a, IB: InputBackend> InteractiveShell<'a, IB> {
         // process and/or transform the buffer.
         let nonempty_buffer = if let Some((buffer, cursor)) = buffer_info {
             if !buffer.is_empty() {
-                shell.set_edit_buffer(buffer, cursor)?;
+                self.shell.set_edit_buffer(buffer, cursor)?;
                 true
             } else {
                 false
@@ -340,7 +316,7 @@ impl<'a, IB: InputBackend> InteractiveShell<'a, IB> {
         // need to do a few more things before executing it.
         if user_input {
             Self::run_pre_exec_actions(
-                &mut shell,
+                self.shell,
                 read_result.as_str(),
                 &self.options,
                 self.terminal_integration.as_ref(),
@@ -352,23 +328,25 @@ impl<'a, IB: InputBackend> InteractiveShell<'a, IB> {
         let line_count = read_result.lines().count().max(1);
 
         // Execute the command.
-        let params = shell.default_exec_params();
+        let params = self.shell.default_exec_params();
         let source_info = crate::engine::SourceInfo::from("main");
-        let result = match shell.run_string(read_result, &source_info, &params).await {
+        let result = match self
+            .shell
+            .run_string(read_result, &source_info, &params)
+            .await
+        {
             Ok(result) => Ok(InteractiveExecutionResult::Executed(result)),
             Err(e) => Ok(InteractiveExecutionResult::Failed(e)),
         };
 
         // Update cumulative line counter based on actual lines in the command.
-        shell.increment_interactive_line_offset(line_count);
+        self.shell.increment_interactive_line_offset(line_count);
 
         // See if the shell has input buffer state that we need to reflect back to
         // the user interface. It may be state that originally came from the user
         // interface, or it may be state that was programmatically generated by
         // the command we just executed.
-        let mut buffer_and_cursor = shell.pop_edit_buffer()?;
-
-        drop(shell);
+        let mut buffer_and_cursor = self.shell.pop_edit_buffer()?;
 
         if buffer_and_cursor.is_none() && nonempty_buffer {
             buffer_and_cursor = Some((String::new(), 0));

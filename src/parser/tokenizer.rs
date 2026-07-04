@@ -1,6 +1,5 @@
 use std::borrow::Cow;
 use std::cell::RefCell;
-use std::sync::Arc;
 use utf8_chars::BufReadCharsExt;
 
 use crate::parser::{SourcePosition, SourceSpan};
@@ -252,7 +251,7 @@ struct TokenParseState {
 impl TokenParseState {
     pub fn new(start_position: &SourcePosition) -> Self {
         Self {
-            start_position: start_position.to_owned(),
+            start_position: *start_position,
             token_so_far: String::new(),
             token_is_operator: false,
             in_escape: false,
@@ -261,10 +260,9 @@ impl TokenParseState {
     }
 
     pub fn pop(&mut self, end_position: &SourcePosition) -> Token {
-        let end = Arc::new(end_position.to_owned());
         let token_location = SourceSpan {
-            start: Arc::new(std::mem::take(&mut self.start_position)),
-            end,
+            start: std::mem::take(&mut self.start_position),
+            end: *end_position,
         };
 
         let token = if std::mem::take(&mut self.token_is_operator) {
@@ -273,7 +271,7 @@ impl TokenParseState {
             Token::Word(std::mem::take(&mut self.token_so_far), token_location)
         };
 
-        end_position.clone_into(&mut self.start_position);
+        self.start_position = *end_position;
         self.in_escape = false;
         self.quote_mode = QuoteMode::None;
 
@@ -374,7 +372,7 @@ impl TokenParseState {
                     tag,
                     tag_was_escaped_or_quoted,
                     remove_tabs,
-                    position: cross_token_state.cursor.clone(),
+                    position: cross_token_state.cursor,
                     tokens: vec![operator_token_result, tag_token_result],
                     pending_tokens_after: vec![],
                 });
@@ -547,7 +545,7 @@ impl<'a, R: ?Sized + std::io::BufRead> Tokenizer<'a, R> {
 
     #[expect(clippy::unnecessary_wraps)]
     pub fn current_location(&self) -> Option<SourcePosition> {
-        Some(self.cross_state.cursor.clone())
+        Some(self.cross_state.cursor)
     }
 
     fn next_char(&mut self) -> Result<Option<char>, TokenizerError> {
@@ -851,15 +849,15 @@ impl<'a, R: ?Sized + std::io::BufRead> Tokenizer<'a, R> {
                     }
                 } else if c == '\'' {
                     if state.token_so_far.ends_with('$') {
-                        state.quote_mode = QuoteMode::AnsiC(self.cross_state.cursor.clone());
+                        state.quote_mode = QuoteMode::AnsiC(self.cross_state.cursor);
                     } else {
-                        state.quote_mode = QuoteMode::Single(self.cross_state.cursor.clone());
+                        state.quote_mode = QuoteMode::Single(self.cross_state.cursor);
                     }
 
                     self.consume_char()?;
                     state.append_char(c);
                 } else if c == '\"' {
-                    state.quote_mode = QuoteMode::Double(self.cross_state.cursor.clone());
+                    state.quote_mode = QuoteMode::Double(self.cross_state.cursor);
                     self.consume_char()?;
                     state.append_char(c);
                 }
@@ -1028,7 +1026,7 @@ impl<'a, R: ?Sized + std::io::BufRead> Tokenizer<'a, R> {
                 } else {
                     // We look for the terminating backquote. First disable normal consumption and
                     // consume the starting backquote.
-                    let backquote_pos = self.cross_state.cursor.clone();
+                    let backquote_pos = self.cross_state.cursor;
                     self.consume_char()?;
 
                     // Add the opening backquote to the token.
@@ -1095,7 +1093,7 @@ impl<'a, R: ?Sized + std::io::BufRead> Tokenizer<'a, R> {
                         }
                     } else {
                         return Err(TokenizerError::UnterminatedExtendedGlob(
-                            self.cross_state.cursor.clone(),
+                            self.cross_state.cursor,
                         ));
                     }
                 }

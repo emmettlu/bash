@@ -4,7 +4,6 @@ use crate::engine::{functions, traps};
 use std::{
     borrow::Cow,
     collections::{HashSet, VecDeque},
-    sync::Arc,
 };
 
 use crate::parser::ast::SourceLocation;
@@ -156,13 +155,13 @@ pub struct Frame {
     pub source_info: crate::engine::SourceInfo,
     /// The location of the entry point into this frame, within the frame of
     /// reference of `source_info`. May be `None` if the entry point is not known.
-    pub entry: Option<Arc<crate::engine::SourcePosition>>,
+    pub entry: Option<crate::engine::SourcePosition>,
     /// Information about the currently executing location. For the topmost frame on
     /// the stack, this represents the current execution location. For older frames,
     /// this represents the site from which a control transfer was made to the next
     /// younger frame. May be `None` if the current location is not known. When present,
     /// it is relative to the frame of reference of `source_info`.
-    pub current: Option<Arc<crate::engine::SourcePosition>>,
+    pub current: Option<crate::engine::SourcePosition>,
     /// Positional arguments (not including $0). May not be present for all frames.
     pub args: Vec<String>,
     /// Optionally, indicates an additional line offset within the current source context.
@@ -184,11 +183,11 @@ impl Frame {
 
     fn pos_as_source_info(
         &self,
-        pos: Option<&Arc<crate::engine::SourcePosition>>,
+        pos: Option<&crate::engine::SourcePosition>,
     ) -> crate::engine::SourceInfo {
-        let mut new_start = if let Some(existing_start) = &self.source_info.start {
+        let mut new_start = if let Some(existing_start) = self.source_info.start {
             if let Some(current) = pos {
-                Some(Arc::new(crate::engine::SourcePosition {
+                Some(crate::engine::SourcePosition {
                     index: existing_start.index + current.index,
                     line: existing_start.line + (current.line - 1),
                     column: if current.line <= 1 {
@@ -196,26 +195,25 @@ impl Frame {
                     } else {
                         current.column
                     },
-                }))
+                })
             } else {
-                Some(existing_start.clone())
+                Some(existing_start)
             }
         } else {
-            pos.cloned()
+            pos.copied()
         };
 
         if self.current_line_offset > 0 {
-            new_start = if let Some(new_start) = new_start {
-                let mut pos = (*new_start).clone();
+            new_start = if let Some(mut pos) = new_start {
                 pos.line += self.current_line_offset;
 
-                Some(Arc::new(pos))
+                Some(pos)
             } else {
-                Some(Arc::new(crate::engine::SourcePosition {
+                Some(crate::engine::SourcePosition {
                     index: 0,
                     line: self.current_line_offset + 1,
                     column: 1,
-                }))
+                })
             };
         }
 
@@ -423,7 +421,7 @@ impl CallStack {
     }
 
     /// Updates the currently executing position in the top stack frame.
-    pub fn set_current_pos(&mut self, position: Option<Arc<crate::engine::SourcePosition>>) {
+    pub fn set_current_pos(&mut self, position: Option<crate::engine::SourcePosition>) {
         if let Some(frame) = self.frames.front_mut() {
             frame.current = position;
         }

@@ -12,9 +12,6 @@ pub use input_backend::{InputBackend, InteractivePrompt, ReadResult};
 mod options;
 pub use options::UIOptions;
 
-mod refs;
-pub use refs::ShellRef;
-
 mod term;
 mod term_detection;
 mod term_integration;

@@ -382,7 +382,7 @@ impl Display for Key {
 }
 
 /// Encapsulates the shell's interaction with key bindings for input.
-pub trait KeyBindings: Send {
+pub trait KeyBindings: Send + Sync {
     /// Retrieves current bindings.
     fn get_current(&self) -> HashMap<KeySequence, KeyAction>;
 

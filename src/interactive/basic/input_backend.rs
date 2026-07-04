@@ -19,7 +19,7 @@ pub struct BasicInputBackend {
 impl InputBackend for BasicInputBackend {
     fn read_line(
         &mut self,
-        shell: &crate::interactive::ShellRef,
+        shell: &mut Shell,
         prompt: InteractivePrompt,
     ) -> Result<ReadResult, ShellError> {
         let is_terminal = std::io::stdin().is_terminal();
@@ -49,7 +49,7 @@ impl InputBackend for BasicInputBackend {
 impl BasicInputBackend {
     fn read_line_via<R: super::LineReader>(
         &self,
-        shell_ref: &crate::interactive::ShellRef,
+        shell: &mut Shell,
         reader: &R,
         prompt: &InteractivePrompt,
     ) -> Result<ReadResult, ShellError> {
@@ -59,18 +59,12 @@ impl BasicInputBackend {
 
         loop {
             match reader.read_line(prompt_to_use, |line, cursor| {
-                let mut shell =
-                    compio::runtime::Runtime::with_current(|rt| rt.block_on(shell_ref.lock()));
-
-                Self::generate_completions(&mut shell, line, cursor)
+                Self::generate_completions(shell, line, cursor)
             })? {
                 ReadResult::Input(s) => {
                     result.push_str(s.as_str());
 
-                    let shell =
-                        compio::runtime::Runtime::with_current(|rt| rt.block_on(shell_ref.lock()));
-
-                    if Self::is_valid_input(&shell, result.as_str()) {
+                    if Self::is_valid_input(shell, result.as_str()) {
                         break;
                     }
 

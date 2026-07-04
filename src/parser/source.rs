@@ -1,7 +1,7 @@
-use std::{fmt::Display, sync::Arc};
+use std::fmt::Display;
 
 /// Represents a position in source text.
-#[derive(Clone, Default, Debug)]
+#[derive(Clone, Copy, Default, Debug)]
 #[cfg_attr(test, derive(PartialEq, Eq, serde::Serialize, serde::Deserialize))]
 pub struct SourcePosition {
     /// The 0-based index of the character in the input stream.
@@ -55,11 +55,9 @@ pub struct SourcePositionOffset {
 #[cfg_attr(test, derive(PartialEq, Eq, serde::Serialize, serde::Deserialize))]
 pub struct SourceSpan {
     /// The start position.
-    #[cfg_attr(test, serde(with = "source_position_arc_serde"))]
-    pub start: Arc<SourcePosition>,
+    pub start: SourcePosition,
     /// The end position of the span (exclusive).
-    #[cfg_attr(test, serde(with = "source_position_arc_serde"))]
-    pub end: Arc<SourcePosition>,
+    pub end: SourcePosition,
 }
 
 impl SourceSpan {
@@ -69,36 +67,8 @@ impl SourceSpan {
     }
     pub(crate) fn within(start: &Self, end: &Self) -> Self {
         Self {
-            start: start.start.clone(),
-            end: end.end.clone(),
+            start: start.start,
+            end: end.end,
         }
-    }
-}
-
-// This test-only module is intentionally placed after all other items
-// to avoid the `clippy::items_after_test_module` lint.
-#[cfg(test)]
-mod source_position_arc_serde {
-    use std::sync::Arc;
-
-    use serde::{Deserialize as _, Serialize as _};
-
-    use super::SourcePosition;
-
-    pub(super) fn serialize<S>(
-        value: &Arc<SourcePosition>,
-        serializer: S,
-    ) -> Result<S::Ok, S::Error>
-    where
-        S: serde::Serializer,
-    {
-        value.as_ref().serialize(serializer)
-    }
-
-    pub(super) fn deserialize<'de, D>(deserializer: D) -> Result<Arc<SourcePosition>, D::Error>
-    where
-        D: serde::Deserializer<'de>,
-    {
-        SourcePosition::deserialize(deserializer).map(Arc::new)
     }
 }

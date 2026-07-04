@@ -91,7 +91,7 @@ pub(crate) fn convert_peg_parse_error(
 
     if approx_token_index < tokens.len() {
         let token = &tokens[approx_token_index];
-        let position = (*token.location().start).clone();
+        let position = token.location().start;
 
         if err.expected.tokens().next().is_some() {
             ParseError::ParsingNearWithExpected {

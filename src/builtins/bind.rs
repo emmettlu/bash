@@ -1,6 +1,5 @@
-use futures::lock::Mutex;
 use itertools::Itertools as _;
-use std::{collections::HashMap, io::Write, str::FromStr, sync::Arc};
+use std::{collections::HashMap, io::Write, str::FromStr};
 use strum::IntoEnumIterator;
 
 use crate::engine::{
@@ -214,14 +213,16 @@ impl builtins::Command for BindCommand {
         &self,
         context: crate::engine::ExecutionContext<'_>,
     ) -> Result<crate::engine::ExecutionResult, Self::Error> {
-        if let Some(key_bindings) = context.shell.key_bindings() {
-            Ok(self.execute_impl(key_bindings, &context).await?)
-        } else {
+        let Some(mut key_bindings) = context.shell.take_key_bindings() else {
             log::debug!(target: trace_categories::INPUT,
                  "bind: key bindings not supported in this config");
 
-            self.execute_without_key_bindings(&context)
-        }
+            return self.execute_without_key_bindings(&context);
+        };
+
+        let result = self.execute_impl(&mut *key_bindings, &context).await;
+        context.shell.set_key_bindings(Some(key_bindings));
+        result
     }
 }
 
@@ -270,11 +271,9 @@ impl BindCommand {
     #[allow(clippy::too_many_lines)]
     async fn execute_impl(
         &self,
-        bindings: &Arc<Mutex<dyn interfaces::KeyBindings>>,
+        bindings: &mut dyn interfaces::KeyBindings,
         context: &crate::engine::ExecutionContext<'_>,
     ) -> Result<ExecutionResult, BindError> {
-        let mut bindings = bindings.lock().await;
-
         if self.list_funcs {
             for func in interfaces::InputFunction::iter() {
                 writeln!(context.stdout(), "{func}")?;
@@ -282,19 +281,19 @@ impl BindCommand {
         }
 
         if self.list_funcs_and_bindings {
-            display_funcs_and_bindings(&*bindings, context, false /* reusable? */)?;
+            display_funcs_and_bindings(bindings, context, false /* reusable? */)?;
         }
 
         if self.list_funcs_and_bindings_reusable {
-            display_funcs_and_bindings(&*bindings, context, true /* reusable? */)?;
+            display_funcs_and_bindings(bindings, context, true /* reusable? */)?;
         }
 
         if self.list_key_seqs_that_invoke_macros {
-            display_macros(&*bindings, context, false /* reusable? */)?;
+            display_macros(bindings, context, false /* reusable? */)?;
         }
 
         if self.list_key_seqs_that_invoke_macros_reusable {
-            display_macros(&*bindings, context, true /* reusable? */)?;
+            display_macros(bindings, context, true /* reusable? */)?;
         }
 
         if self.list_vars {
@@ -306,7 +305,7 @@ impl BindCommand {
         }
 
         if let Some(func_str) = &self.query_func_bindings {
-            let seqs = find_key_seqs_bound_to_function(&*bindings, func_str)?;
+            let seqs = find_key_seqs_bound_to_function(bindings, func_str)?;
 
             if !seqs.is_empty() {
                 writeln!(
@@ -321,7 +320,7 @@ impl BindCommand {
         }
 
         if let Some(func_str) = &self.remove_func_bindings {
-            let found_seqs = find_key_seqs_bound_to_function(&*bindings, func_str)?;
+            let found_seqs = find_key_seqs_bound_to_function(bindings, func_str)?;
 
             for seq in found_seqs {
                 let _ = bindings.try_unbind(seq);
@@ -368,8 +367,6 @@ impl BindCommand {
             let (key_seq, target) = parse_key_sequence_and_readline_target(key_sequence.as_str())?;
             bind_key_sequence_to_readline_target(&mut *bindings, key_seq, target)?;
         }
-
-        drop(bindings);
 
         Ok(ExecutionResult::success())
     }

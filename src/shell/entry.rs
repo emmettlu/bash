@@ -4,16 +4,13 @@ use crate::shell::args::CommandLineArgs;
 use crate::shell::args::InputBackendType;
 
 use crate::shell::error_formatter;
-use crate::shell::events;
+
 use crate::shell::productinfo;
 use std::path::Path;
-use std::sync::{Arc, LazyLock, Mutex as StdMutex};
+use std::sync::Arc;
 
 #[allow(unused_imports, reason = "only used in some configs")]
 use std::io::IsTerminal;
-
-static TRACE_EVENT_CONFIG: LazyLock<Arc<StdMutex<Option<events::TraceEventConfig>>>> =
-    LazyLock::new(|| Arc::new(StdMutex::new(None)));
 
 type BashShell = crate::engine::Shell;
 
@@ -114,12 +111,12 @@ impl std::fmt::Debug for InputBackendTypeDebug {
 ///
 /// # Arguments
 ///
-/// * `shell_ref` - A reference to the shell to run.
+/// * `shell` - The shell to run.
 /// * `args` - The parsed command-line arguments.
 /// * `input_backend` - The input backend to use.
 /// * `ui_options` - The user interface options to use.
 pub(crate) async fn run_in_shell(
-    shell_ref: &crate::interactive::ShellRef,
+    shell: &mut crate::engine::Shell,
     args: CommandLineArgs,
     input_backend: &mut impl crate::interactive::InputBackend,
     ui_options: &crate::interactive::UIOptions,
@@ -127,12 +124,12 @@ pub(crate) async fn run_in_shell(
     let plan = ShellRunPlan::from_args(&args);
 
     // First load profile and rc files as appropriate.
-    initialize_shell(shell_ref, &args).await?;
+    initialize_shell(shell, &args).await?;
 
     match plan.mode {
         // If a command was specified via -c, then run that command and then exit.
         ShellRunMode::CommandString(command) => {
-            shell_ref.lock().await.run_dash_c_command(command).await?;
+            shell.run_dash_c_command(command).await?;
         }
 
         // If -s was provided, then read commands from stdin. If there was a script (and optionally
@@ -140,35 +137,27 @@ pub(crate) async fn run_in_shell(
         // parameters but do *not* execute it.
         ShellRunMode::Stdin => {
             let interactive_options = crate::interactive::UIOptions::stdin_input_loop();
-            crate::interactive::InteractiveShell::new(
-                shell_ref,
-                input_backend,
-                &interactive_options,
-            )?
-            .run_stdin_input_loop()
-            .await?;
+            crate::interactive::InteractiveShell::new(shell, input_backend, &interactive_options)?
+                .run_stdin_input_loop()
+                .await?;
         }
 
         // If a script path was provided, then run the script.
         ShellRunMode::Script { path, args } => {
-            shell_ref
-                .lock()
-                .await
-                .run_script(Path::new(&path), args.iter())
-                .await?;
+            shell.run_script(Path::new(&path), args.iter()).await?;
         }
 
         // If we got down here, then we don't have any commands to run. We'll be reading
         // them in from stdin one way or the other.
         ShellRunMode::Interactive => {
-            crate::interactive::InteractiveShell::new(shell_ref, input_backend, ui_options)?
+            crate::interactive::InteractiveShell::new(shell, input_backend, ui_options)?
                 .run_interactively()
                 .await?;
         }
     }
 
     // Make sure to return the last result observed in the shell.
-    let result = shell_ref.lock().await.last_exit_status();
+    let result = shell.last_exit_status();
 
     Ok(result)
 }
@@ -177,10 +166,10 @@ pub(crate) async fn run_in_shell(
 ///
 /// # Arguments
 ///
-/// * `shell_ref` - A reference to the shell to initialize.
+/// * `shell` - The shell to initialize.
 /// * `args` - The parsed command-line arguments.
 async fn initialize_shell(
-    shell_ref: &crate::interactive::ShellRef,
+    shell: &mut crate::engine::Shell,
     args: &CommandLineArgs,
 ) -> Result<(), crate::interactive::ShellError> {
     // Compute desired profile-loading behavior.
@@ -199,7 +188,7 @@ async fn initialize_shell(
         crate::engine::RcLoadBehavior::LoadDefault
     };
 
-    shell_ref.lock().await.load_config(&profile, &rc).await?;
+    shell.load_config(&profile, &rc).await?;
 
     Ok(())
 }
@@ -342,10 +331,6 @@ fn new_error_behavior(args: &CommandLineArgs) -> Arc<dyn crate::engine::ErrorFor
 
 pub(crate) fn get_default_input_backend_type(args: &CommandLineArgs) -> InputBackendType {
     ShellRunPlan::from_args(args).default_input_backend
-}
-
-pub(crate) fn get_event_config() -> Arc<StdMutex<Option<events::TraceEventConfig>>> {
-    TRACE_EVENT_CONFIG.clone()
 }
 
 #[cfg(test)]

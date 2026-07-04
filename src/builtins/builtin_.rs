@@ -1,22 +1,28 @@
-use clap::Parser;
-
-use crate::engine::{ExecutionResult, builtins};
+use crate::engine::{CommandArg, ExecutionResult, builtins};
 
 /// Directly invokes a built-in, without going through typical search order.
-#[derive(Default, Parser)]
+#[derive(Default)]
 pub(crate) struct BuiltinCommand {
-    #[clap(skip)]
-    args: Vec<crate::engine::CommandArg>,
+    args: Vec<CommandArg>,
 }
 
 impl builtins::DeclarationCommand for BuiltinCommand {
-    fn set_declarations(&mut self, args: Vec<crate::engine::CommandArg>) {
+    fn set_declarations(&mut self, args: Vec<CommandArg>) {
         self.args = args;
     }
 }
 
 impl builtins::Command for BuiltinCommand {
     type Error = crate::engine::Error;
+
+    fn new<I>(args: I) -> Result<Self, String>
+    where
+        I: IntoIterator<Item = String>,
+    {
+        Ok(Self {
+            args: args.into_iter().map(CommandArg::String).collect(),
+        })
+    }
 
     async fn execute(
         &self,

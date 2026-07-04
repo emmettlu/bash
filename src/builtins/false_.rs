@@ -3,6 +3,24 @@ use crate::engine::{ExecutionResult, builtins};
 /// Return exit code 1.
 pub(crate) struct FalseCommand {}
 
+impl builtins::Command for FalseCommand {
+    type Error = crate::engine::Error;
+
+    fn new<I>(_args: I) -> Result<Self, String>
+    where
+        I: IntoIterator<Item = String>,
+    {
+        Ok(Self {})
+    }
+
+    async fn execute(
+        &self,
+        _context: crate::engine::ExecutionContext<'_>,
+    ) -> Result<ExecutionResult, Self::Error> {
+        Ok(ExecutionResult::general_error())
+    }
+}
+
 impl builtins::SimpleCommand for FalseCommand {
     fn get_content(
         _name: &str,

@@ -1,22 +1,35 @@
-use clap::Parser;
 use std::io::Write;
 
 use crate::engine::{ExecutionResult, builtins};
 
 /// Manage aliases within the shell.
-#[derive(Parser)]
 pub(crate) struct AliasCommand {
     /// Print all defined aliases in a reusable format.
-    #[arg(short = 'p')]
     print: bool,
 
     /// List of aliases to display or update.
-    #[arg(name = "name[=value]")]
     aliases: Vec<String>,
 }
 
 impl builtins::Command for AliasCommand {
     type Error = crate::engine::Error;
+
+    fn new<I>(args: I) -> Result<Self, String>
+    where
+        I: IntoIterator<Item = String>,
+    {
+        let mut args = builtins::BuiltinArgs::new(args);
+        let mut print = false;
+        let aliases = args.parse_flags(|flag| match flag {
+            'p' => {
+                print = true;
+                Ok(true)
+            }
+            _ => Err(format!("alias: -{flag}: invalid option")),
+        })?;
+
+        Ok(Self { print, aliases })
+    }
 
     async fn execute(
         &self,

@@ -56,15 +56,14 @@ impl Config {
     /// 2. Config file values
     /// 3. Default values
     ///
-    /// CLI defaults are automatically inferred from clap's parsed defaults.
+    /// CLI defaults are provided by `CommandLineArgs::default_values()`.
     ///
     /// # Arguments
     ///
     /// * `args` - The parsed command-line arguments
     #[must_use]
     pub fn to_ui_options(&self, args: &CommandLineArgs) -> UIOptions {
-        // Get clap's defaults by parsing an empty argument list.
-        // This lets us detect which CLI values were explicitly set vs. defaulted.
+        // 使用命令行默认值检测 CLI 参数是否显式覆盖配置。
         let defaults = CommandLineArgs::default_values();
 
         let enable_highlighting = merge_bool_setting(
@@ -410,11 +409,9 @@ mod tests {
 
         // Simulate CLI explicitly setting values different from defaults
         // by parsing with the flags enabled
-        let args = <CommandLineArgs as clap::Parser>::try_parse_from([
-            "bash",
-            "--enable-highlighting",
-            "--enable-zsh-hooks",
-        ])
+        let args = CommandLineArgs::try_parse_from(
+            ["bash", "--enable-highlighting", "--enable-zsh-hooks"].map(String::from),
+        )
         .unwrap();
 
         // CLI explicitly enables highlighting and zsh-hooks (differs from default)
@@ -427,11 +424,9 @@ mod tests {
     #[test]
     fn to_ui_options_cli_only_settings() {
         let config = Config::default();
-        let args = <CommandLineArgs as clap::Parser>::try_parse_from([
-            "bash",
-            "--disable-bracketed-paste",
-            "--disable-color",
-        ])
+        let args = CommandLineArgs::try_parse_from(
+            ["bash", "--disable-bracketed-paste", "--disable-color"].map(String::from),
+        )
         .unwrap();
 
         let ui = config.to_ui_options(&args);

@@ -1,23 +1,60 @@
-use clap::Parser;
 use std::io::Write;
 
 use crate::engine::{ErrorKind, ExecutionResult, builtins, escape, expansion};
 
 /// Format a string.
-#[derive(Parser)]
-#[clap(disable_help_flag = true, disable_version_flag = true)]
 pub(crate) struct PrintfCommand {
     /// If specified, the output of the command is assigned to this variable.
-    #[arg(short = 'v')]
     output_variable: Option<String>,
 
     /// Format string + arguments to the format string.
-    #[arg(trailing_var_arg = true, required = true, allow_hyphen_values = true)]
     format_and_args: Vec<String>,
 }
 
 impl builtins::Command for PrintfCommand {
     type Error = crate::engine::Error;
+
+    fn new<I>(args: I) -> Result<Self, String>
+    where
+        I: IntoIterator<Item = String>,
+    {
+        let mut args = builtins::BuiltinArgs::new(args);
+        let mut output_variable = None;
+        let mut format_and_args = Vec::new();
+
+        if let Some(arg) = args.next_arg() {
+            match arg.as_str() {
+                "--" => format_and_args.extend(args.rest()),
+                "-v" => {
+                    output_variable = Some(args.next_value("-v")?);
+                    if args.peek() == Some("--") {
+                        let _ = args.next_arg();
+                    }
+                    format_and_args.extend(args.rest());
+                }
+                _ if arg.starts_with("-v") && arg.len() > 2 => {
+                    output_variable = Some(arg[2..].to_owned());
+                    if args.peek() == Some("--") {
+                        let _ = args.next_arg();
+                    }
+                    format_and_args.extend(args.rest());
+                }
+                _ => {
+                    format_and_args.push(arg);
+                    format_and_args.extend(args.rest());
+                }
+            }
+        }
+
+        if format_and_args.is_empty() {
+            return Err(String::from("missing operand"));
+        }
+
+        Ok(Self {
+            output_variable,
+            format_and_args,
+        })
+    }
 
     async fn execute(
         &self,

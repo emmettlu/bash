@@ -1,16 +1,22 @@
 use crate::engine::{ExecutionResult, builtins};
-use clap::Parser;
 
 /// Evaluate the given string as script.
-#[derive(Parser)]
 pub(crate) struct EvalCommand {
     /// The script to evaluate.
-    #[clap(allow_hyphen_values = true)]
     args: Vec<String>,
 }
 
 impl builtins::Command for EvalCommand {
     type Error = crate::engine::Error;
+
+    fn new<I>(args: I) -> Result<Self, String>
+    where
+        I: IntoIterator<Item = String>,
+    {
+        Ok(Self {
+            args: builtins::BuiltinArgs::new(args).rest(),
+        })
+    }
 
     async fn execute(
         &self,

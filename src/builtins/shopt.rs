@@ -1,30 +1,23 @@
-use clap::Parser;
 use itertools::Itertools;
 use std::io::Write;
 
 use crate::engine::{ExecutionResult, builtins};
 
 /// Manage shopt-style options.
-#[derive(Parser)]
 pub(crate) struct ShoptCommand {
     /// Manage set -o options.
-    #[arg(short = 'o')]
     set_o_names_only: bool,
 
     /// Print options' current values.
-    #[arg(short = 'p')]
     print: bool,
 
     /// Suppress typical output.
-    #[arg(short = 'q')]
     quiet: bool,
 
     /// Set the specified options.
-    #[arg(short = 's')]
     set: bool,
 
     /// Unset the specified options.
-    #[arg(short = 'u')]
     unset: bool,
 
     /// Names of options to operate on.
@@ -33,6 +26,46 @@ pub(crate) struct ShoptCommand {
 
 impl builtins::Command for ShoptCommand {
     type Error = crate::engine::Error;
+
+    fn new<I>(args: I) -> Result<Self, String>
+    where
+        I: IntoIterator<Item = String>,
+    {
+        let mut command = Self {
+            set_o_names_only: false,
+            print: false,
+            quiet: false,
+            set: false,
+            unset: false,
+            options: Vec::new(),
+        };
+        let mut args = builtins::BuiltinArgs::new(args);
+        let options = args.parse_flags(|flag| match flag {
+            'o' => {
+                command.set_o_names_only = true;
+                Ok(true)
+            }
+            'p' => {
+                command.print = true;
+                Ok(true)
+            }
+            'q' => {
+                command.quiet = true;
+                Ok(true)
+            }
+            's' => {
+                command.set = true;
+                Ok(true)
+            }
+            'u' => {
+                command.unset = true;
+                Ok(true)
+            }
+            _ => Err(format!("shopt: -{flag}: invalid option")),
+        })?;
+        command.options = options;
+        Ok(command)
+    }
 
     #[allow(clippy::too_many_lines)]
     async fn execute(

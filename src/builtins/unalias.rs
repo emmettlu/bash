@@ -1,13 +1,10 @@
-use clap::Parser;
 use std::io::Write;
 
 use crate::engine::{ExecutionResult, builtins};
 
 /// Unset a shell alias.
-#[derive(Parser)]
 pub(crate) struct UnaliasCommand {
     /// Remove all aliases.
-    #[arg(short = 'a')]
     remove_all: bool,
 
     /// Names of aliases to operate on.
@@ -16,6 +13,26 @@ pub(crate) struct UnaliasCommand {
 
 impl builtins::Command for UnaliasCommand {
     type Error = crate::engine::Error;
+
+    fn new<I>(args: I) -> Result<Self, String>
+    where
+        I: IntoIterator<Item = String>,
+    {
+        let mut command = Self {
+            remove_all: false,
+            aliases: Vec::new(),
+        };
+        let mut args = builtins::BuiltinArgs::new(args);
+        let aliases = args.parse_flags(|flag| match flag {
+            'a' => {
+                command.remove_all = true;
+                Ok(true)
+            }
+            _ => Err(format!("unalias: -{flag}: invalid option")),
+        })?;
+        command.aliases = aliases;
+        Ok(command)
+    }
 
     async fn execute(
         &self,

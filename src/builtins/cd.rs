@@ -1,28 +1,18 @@
 use std::io::Write;
 use std::path::PathBuf;
 
-use clap::Parser;
-
 use crate::engine::{ExecutionResult, builtins, error};
 
 /// Change the current shell working directory.
-#[derive(Parser)]
 pub(crate) struct CdCommand {
-    /// Force following symlinks.
-    #[arg(short = 'L', overrides_with = "use_physical_dir")]
-    force_follow_symlinks: bool,
-
     /// Use physical dir structure without following symlinks.
-    #[arg(short = 'P', overrides_with = "force_follow_symlinks")]
     use_physical_dir: bool,
 
     /// Exit with non zero exit status if current working directory resolution fails.
-    #[arg(short = 'e')]
     exit_on_failed_cwd_resolution: bool,
 
     /// Show file with extended attributes as a dir with extended
     /// attributes.
-    #[arg(short = '@')]
     file_with_xattr_as_dir: bool,
 
     /// By default it is the value of the HOME shell variable. If `TARGET_DIR` is "-", it is
@@ -32,6 +22,49 @@ pub(crate) struct CdCommand {
 
 impl builtins::Command for CdCommand {
     type Error = crate::engine::Error;
+
+    fn new<I>(args: I) -> Result<Self, String>
+    where
+        I: IntoIterator<Item = String>,
+    {
+        let mut args = builtins::BuiltinArgs::new(args);
+        let mut use_physical_dir = false;
+        let mut exit_on_failed_cwd_resolution = false;
+        let mut file_with_xattr_as_dir = false;
+
+        let positionals = args.parse_flags(|flag| match flag {
+            'L' => {
+                use_physical_dir = false;
+                Ok(true)
+            }
+            'P' => {
+                use_physical_dir = true;
+                Ok(true)
+            }
+            'e' => {
+                exit_on_failed_cwd_resolution = true;
+                Ok(true)
+            }
+            '@' => {
+                file_with_xattr_as_dir = true;
+                Ok(true)
+            }
+            _ => Err(format!("cd: -{flag}: invalid option")),
+        })?;
+
+        let target_dir = match positionals.as_slice() {
+            [] => None,
+            [target_dir] => Some(PathBuf::from(target_dir)),
+            _ => return Err("cd: too many arguments".into()),
+        };
+
+        Ok(Self {
+            use_physical_dir,
+            exit_on_failed_cwd_resolution,
+            file_with_xattr_as_dir,
+            target_dir,
+        })
+    }
 
     async fn execute(
         &self,

@@ -1,7 +1,6 @@
-use clap::{Parser, ValueEnum};
 use futures::lock::Mutex;
 use itertools::Itertools as _;
-use std::{collections::HashMap, io::Write, str::FromStr as _, sync::Arc};
+use std::{collections::HashMap, io::Write, str::FromStr, sync::Arc};
 use strum::IntoEnumIterator;
 
 use crate::engine::{
@@ -11,18 +10,28 @@ use crate::engine::{
 };
 
 /// Identifier for a keymap
-#[derive(Clone, ValueEnum)]
+#[derive(Clone)]
 enum BindKeyMap {
-    #[clap(name = "emacs-standard", alias = "emacs")]
     EmacsStandard,
-    #[clap(name = "emacs-meta")]
     EmacsMeta,
-    #[clap(name = "emacs-ctlx")]
     EmacsCtlx,
-    #[clap(name = "vi-command", aliases = &["vi", "vi-move"])]
     ViCommand,
-    #[clap(name = "vi-insert")]
     ViInsert,
+}
+
+impl FromStr for BindKeyMap {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "emacs-standard" | "emacs" => Ok(Self::EmacsStandard),
+            "emacs-meta" => Ok(Self::EmacsMeta),
+            "emacs-ctlx" => Ok(Self::EmacsCtlx),
+            "vi-command" | "vi" | "vi-move" => Ok(Self::ViCommand),
+            "vi-insert" => Ok(Self::ViInsert),
+            _ => Err(format!("bind: {value}: invalid keymap")),
+        }
+    }
 }
 
 impl BindKeyMap {
@@ -40,52 +49,148 @@ impl BindKeyMap {
 }
 
 /// Inspect and modify key bindings and other input configuration.
-#[derive(Parser)]
+#[derive(Default)]
 pub(crate) struct BindCommand {
     /// Name of key map to use.
-    #[arg(short = 'm')]
     keymap: Option<BindKeyMap>,
     /// List functions.
-    #[arg(short = 'l')]
     list_funcs: bool,
     /// List functions and bindings.
-    #[arg(short = 'P')]
     list_funcs_and_bindings: bool,
     /// List functions and bindings in a format suitable for use as input.
-    #[arg(short = 'p')]
     list_funcs_and_bindings_reusable: bool,
     /// List key sequences that invoke macros.
-    #[arg(short = 'S')]
     list_key_seqs_that_invoke_macros: bool,
     /// List key sequences that invoke macros in a format suitable for use as input.
-    #[arg(short = 's')]
     list_key_seqs_that_invoke_macros_reusable: bool,
     /// List variables.
-    #[arg(short = 'V')]
     list_vars: bool,
     /// List variables in a format suitable for use as input.
-    #[arg(short = 'v')]
     list_vars_reusable: bool,
     /// Find the keys bound to the given named function.
-    #[arg(short = 'q', value_name = "FUNC_NAME")]
     query_func_bindings: Option<String>,
     /// Remove all bindings for the given named function.
-    #[arg(short = 'u', value_name = "FUNC_NAME")]
     remove_func_bindings: Option<String>,
     /// Remove the binding for the given key sequence.
-    #[arg(short = 'r', value_name = "KEY_SEQ")]
     remove_key_seq_binding: Option<String>,
     /// Import bindings from the given file.
-    #[arg(short = 'f', value_name = "PATH")]
     bindings_file: Option<String>,
     /// Bind key sequence to command.
-    #[arg(short = 'x', value_name = "BINDING")]
     key_seq_bindings: Vec<String>,
     /// List key sequence bindings.
-    #[arg(short = 'X')]
     list_key_seq_bindings: bool,
     /// Key sequence binding to readline function or command.
     key_sequence: Option<String>,
+}
+
+fn parse_bind_args<I>(args: I) -> Result<BindCommand, String>
+where
+    I: IntoIterator<Item = String>,
+{
+    let mut command = BindCommand::default();
+    let mut args = builtins::BuiltinArgs::new(args);
+    let positionals = parse_bind_options(&mut args, &mut command)?;
+
+    match positionals.as_slice() {
+        [] => {}
+        [key_sequence] => command.key_sequence = Some(key_sequence.clone()),
+        _ => return Err("bind: too many arguments".into()),
+    }
+
+    Ok(command)
+}
+
+fn parse_bind_options(
+    args: &mut builtins::BuiltinArgs,
+    command: &mut BindCommand,
+) -> Result<Vec<String>, String> {
+    let mut positionals = Vec::new();
+    while let Some(arg) = args.next_arg() {
+        if arg == "--" {
+            positionals.extend(collect_remaining(args));
+            break;
+        }
+
+        let Some(flags) = arg.strip_prefix('-') else {
+            positionals.push(arg);
+            positionals.extend(collect_remaining(args));
+            break;
+        };
+
+        if flags.is_empty() {
+            positionals.push(arg);
+            positionals.extend(collect_remaining(args));
+            break;
+        }
+
+        for (idx, flag) in flags.char_indices() {
+            let rest_start = idx + flag.len_utf8();
+            match flag {
+                'm' => {
+                    let value = option_value(args, flags, rest_start, "bind: -m")?;
+                    command.keymap = Some(value.parse()?);
+                    break;
+                }
+                'q' => {
+                    command.query_func_bindings =
+                        Some(option_value(args, flags, rest_start, "bind: -q")?);
+                    break;
+                }
+                'u' => {
+                    command.remove_func_bindings =
+                        Some(option_value(args, flags, rest_start, "bind: -u")?);
+                    break;
+                }
+                'r' => {
+                    command.remove_key_seq_binding =
+                        Some(option_value(args, flags, rest_start, "bind: -r")?);
+                    break;
+                }
+                'f' => {
+                    command.bindings_file =
+                        Some(option_value(args, flags, rest_start, "bind: -f")?);
+                    break;
+                }
+                'x' => {
+                    command
+                        .key_seq_bindings
+                        .push(option_value(args, flags, rest_start, "bind: -x")?);
+                    break;
+                }
+                'l' => command.list_funcs = true,
+                'P' => command.list_funcs_and_bindings = true,
+                'p' => command.list_funcs_and_bindings_reusable = true,
+                'S' => command.list_key_seqs_that_invoke_macros = true,
+                's' => command.list_key_seqs_that_invoke_macros_reusable = true,
+                'V' => command.list_vars = true,
+                'v' => command.list_vars_reusable = true,
+                'X' => command.list_key_seq_bindings = true,
+                _ => return Err(format!("bind: -{flag}: invalid option")),
+            }
+        }
+    }
+    Ok(positionals)
+}
+
+fn option_value(
+    args: &mut builtins::BuiltinArgs,
+    flags: &str,
+    rest_start: usize,
+    option: &str,
+) -> Result<String, String> {
+    if rest_start < flags.len() {
+        Ok(flags[rest_start..].to_owned())
+    } else {
+        args.next_value(option)
+    }
+}
+
+fn collect_remaining(args: &mut builtins::BuiltinArgs) -> Vec<String> {
+    let mut rest = Vec::new();
+    while let Some(arg) = args.next_arg() {
+        rest.push(arg);
+    }
+    rest
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -121,6 +226,13 @@ impl From<&BindError> for u8 {
 
 impl builtins::Command for BindCommand {
     type Error = BindError;
+
+    fn new<I>(args: I) -> Result<Self, String>
+    where
+        I: IntoIterator<Item = String>,
+    {
+        parse_bind_args(args)
+    }
 
     async fn execute(
         &self,

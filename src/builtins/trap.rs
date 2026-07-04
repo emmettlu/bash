@@ -1,18 +1,14 @@
-use clap::Parser;
 use std::io::Write;
 
 use crate::engine::traps::TrapSignal;
 use crate::engine::{ExecutionResult, builtins};
 
 /// Manage signal traps.
-#[derive(Parser)]
 pub(crate) struct TrapCommand {
     /// List all signal names.
-    #[arg(short = 'l')]
     list_signals: bool,
 
     /// Print registered trap commands.
-    #[arg(short = 'p')]
     print_trap_commands: bool,
 
     args: Vec<String>,
@@ -20,6 +16,31 @@ pub(crate) struct TrapCommand {
 
 impl builtins::Command for TrapCommand {
     type Error = crate::engine::Error;
+
+    fn new<I>(args: I) -> Result<Self, String>
+    where
+        I: IntoIterator<Item = String>,
+    {
+        let mut command = Self {
+            list_signals: false,
+            print_trap_commands: false,
+            args: Vec::new(),
+        };
+        let mut args = builtins::BuiltinArgs::new(args);
+        let positionals = args.parse_flags(|flag| match flag {
+            'l' => {
+                command.list_signals = true;
+                Ok(true)
+            }
+            'p' => {
+                command.print_trap_commands = true;
+                Ok(true)
+            }
+            _ => Err(format!("trap: -{flag}: invalid option")),
+        })?;
+        command.args = positionals;
+        Ok(command)
+    }
 
     async fn execute(
         &self,

@@ -1,17 +1,29 @@
-use clap::Parser;
-
 use crate::engine::{ExecutionControlFlow, ExecutionResult, builtins};
 
 /// Continue to the next iteration of a control-flow loop.
-#[derive(Parser)]
 pub(crate) struct ContinueCommand {
     /// If specified, indicates which nested loop to continue to the next iteration of.
-    #[clap(default_value_t = 1)]
     which_loop: i8,
 }
 
 impl builtins::Command for ContinueCommand {
     type Error = crate::engine::Error;
+
+    fn new<I>(args: I) -> Result<Self, String>
+    where
+        I: IntoIterator<Item = String>,
+    {
+        let args = builtins::BuiltinArgs::new(args).rest();
+        match args.as_slice() {
+            [] => Ok(Self { which_loop: 1 }),
+            [which_loop] => Ok(Self {
+                which_loop: which_loop
+                    .parse()
+                    .map_err(|_| format!("continue: {which_loop}: numeric argument required"))?,
+            }),
+            _ => Err("continue: too many arguments".into()),
+        }
+    }
 
     async fn execute(
         &self,

@@ -1,4 +1,3 @@
-use clap::Parser;
 use itertools::Itertools;
 use std::io::Write;
 
@@ -13,94 +12,69 @@ use crate::engine::{
     },
 };
 
-crate::minus_or_plus_flag_arg!(
-    MakeIndexedArrayFlag,
-    'a',
-    "Make the variable an indexed array."
-);
-crate::minus_or_plus_flag_arg!(
-    MakeAssociativeArrayFlag,
-    'A',
-    "Make the variable an associative array."
-);
-crate::minus_or_plus_flag_arg!(
-    CapitalizeValueOnAssignmentFlag,
-    'c',
-    "Enable capitalize-on-assignment for the variable."
-);
-crate::minus_or_plus_flag_arg!(MakeIntegerFlag, 'i', "Mark the variable as integer-typed");
-crate::minus_or_plus_flag_arg!(
-    LowercaseValueOnAssignmentFlag,
-    'l',
-    "Enable lowercase-on-assignment for the variable."
-);
-crate::minus_or_plus_flag_arg!(
-    MakeNameRefFlag,
-    'n',
-    "Mark the variable as a name reference"
-);
-crate::minus_or_plus_flag_arg!(MakeReadonlyFlag, 'r', "Mark the variable as read-only.");
-crate::minus_or_plus_flag_arg!(MakeTracedFlag, 't', "Enable tracing for the variable.");
-crate::minus_or_plus_flag_arg!(
-    UppercaseValueOnAssignmentFlag,
-    'u',
-    "Enable uppercase-on-assignment for the variable."
-);
-crate::minus_or_plus_flag_arg!(MakeExportedFlag, 'x', "Mark the variable for export.");
+#[derive(Default)]
+struct PlusMinusFlag {
+    enable: bool,
+    disable: bool,
+}
+
+impl PlusMinusFlag {
+    const fn is_some(&self) -> bool {
+        self.enable || self.disable
+    }
+
+    const fn to_bool(&self) -> Option<bool> {
+        match (self.enable, self.disable) {
+            (true, false) => Some(true),
+            (false, true) => Some(false),
+            _ => None,
+        }
+    }
+
+    fn set(&mut self, enabled: bool) {
+        if enabled {
+            self.enable = true;
+        } else {
+            self.disable = true;
+        }
+    }
+}
 
 /// Display or update variables and their attributes.
-#[derive(Parser)]
-#[clap(override_usage = "declare [OPTIONS] [DECLARATIONS]...")]
+#[derive(Default)]
 pub(crate) struct DeclareCommand {
     /// Constrain to function names or definitions.
-    #[arg(short = 'f')]
     function_names_or_defs_only: bool,
 
     /// Constrain to function names only.
-    #[arg(short = 'F')]
     function_names_only: bool,
 
     /// Create global variable, if applicable.
-    #[arg(short = 'g')]
     create_global: bool,
 
     /// When creating a local variable that shadows another variable of the same name,
     /// then initialize it with the contents and attributes of the variable being shadowed.
-    #[arg(short = 'I')]
     locals_inherit_from_prev_scope: bool,
 
     /// Display each item's attributes and values.
-    #[arg(short = 'p')]
     print: bool,
 
     //
     // Attribute options
-    #[clap(flatten)] // -a
-    make_indexed_array: MakeIndexedArrayFlag,
-    #[clap(flatten)] // -A
-    make_associative_array: MakeAssociativeArrayFlag,
-    #[clap(flatten)] // -c
-    capitalize_value_on_assignment: CapitalizeValueOnAssignmentFlag,
-    #[clap(flatten)] // -i
-    make_integer: MakeIntegerFlag,
-    #[clap(flatten)] // -l
-    lowercase_value_on_assignment: LowercaseValueOnAssignmentFlag,
-    #[clap(flatten)] // -n
-    make_nameref: MakeNameRefFlag,
-    #[clap(flatten)] // -r
-    make_readonly: MakeReadonlyFlag,
-    #[clap(flatten)] // -t
-    make_traced: MakeTracedFlag,
-    #[clap(flatten)] // -u
-    uppercase_value_on_assignment: UppercaseValueOnAssignmentFlag,
-    #[clap(flatten)] // -x
-    make_exported: MakeExportedFlag,
+    make_indexed_array: PlusMinusFlag,
+    make_associative_array: PlusMinusFlag,
+    capitalize_value_on_assignment: PlusMinusFlag,
+    make_integer: PlusMinusFlag,
+    lowercase_value_on_assignment: PlusMinusFlag,
+    make_nameref: PlusMinusFlag,
+    make_readonly: PlusMinusFlag,
+    make_traced: PlusMinusFlag,
+    uppercase_value_on_assignment: PlusMinusFlag,
+    make_exported: PlusMinusFlag,
 
     //
     // Declarations
     //
-    // N.B. These are skipped by clap, but filled in by the BuiltinDeclarationCommand trait.
-    #[clap(skip)]
     declarations: Vec<crate::engine::CommandArg>,
 }
 
@@ -117,12 +91,76 @@ impl builtins::DeclarationCommand for DeclareCommand {
     }
 }
 
-impl builtins::Command for DeclareCommand {
-    fn takes_plus_options() -> bool {
-        true
+fn parse_declare_args<I>(args: I) -> Result<DeclareCommand, String>
+where
+    I: IntoIterator<Item = String>,
+{
+    let mut command = DeclareCommand::default();
+    let mut args = builtins::BuiltinArgs::new(args);
+
+    while let Some(arg) = args.next_arg() {
+        if arg == "--" {
+            break;
+        }
+
+        if let Some(flags) = arg.strip_prefix('-') {
+            if flags.is_empty() {
+                return Err("declare: -: invalid option".into());
+            }
+            parse_declare_flags(&mut command, flags, true)?;
+        } else if let Some(flags) = arg.strip_prefix('+') {
+            if flags.is_empty() {
+                return Err("declare: +: invalid option".into());
+            }
+            parse_declare_flags(&mut command, flags, false)?;
+        } else {
+            return Err(format!("declare: {arg}: invalid option"));
+        }
     }
 
+    Ok(command)
+}
+
+fn parse_declare_flags(
+    command: &mut DeclareCommand,
+    flags: &str,
+    enabled: bool,
+) -> Result<(), String> {
+    for flag in flags.chars() {
+        match flag {
+            'f' if enabled => command.function_names_or_defs_only = true,
+            'F' if enabled => command.function_names_only = true,
+            'g' if enabled => command.create_global = true,
+            'I' if enabled => command.locals_inherit_from_prev_scope = true,
+            'p' if enabled => command.print = true,
+            'a' => command.make_indexed_array.set(enabled),
+            'A' => command.make_associative_array.set(enabled),
+            'c' => command.capitalize_value_on_assignment.set(enabled),
+            'i' => command.make_integer.set(enabled),
+            'l' => command.lowercase_value_on_assignment.set(enabled),
+            'n' => command.make_nameref.set(enabled),
+            'r' => command.make_readonly.set(enabled),
+            't' => command.make_traced.set(enabled),
+            'u' => command.uppercase_value_on_assignment.set(enabled),
+            'x' => command.make_exported.set(enabled),
+            _ => {
+                let prefix = if enabled { '-' } else { '+' };
+                return Err(format!("declare: {prefix}{flag}: invalid option"));
+            }
+        }
+    }
+    Ok(())
+}
+
+impl builtins::Command for DeclareCommand {
     type Error = crate::engine::Error;
+
+    fn new<I>(args: I) -> Result<Self, String>
+    where
+        I: IntoIterator<Item = String>,
+    {
+        parse_declare_args(args)
+    }
 
     async fn execute(
         &self,

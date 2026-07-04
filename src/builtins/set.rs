@@ -1,185 +1,193 @@
 use std::collections::HashMap;
 use std::io::Write;
 
-use clap::Parser;
 use itertools::Itertools;
 
 use crate::engine::{ExecutionResult, builtins, variables};
 
-crate::minus_or_plus_flag_arg!(
-    ExportVariablesOnModification,
-    'a',
-    "Export variables on modification"
-);
-crate::minus_or_plus_flag_arg!(
-    NotifyJobTerminationImmediately,
-    'b',
-    "Notify job termination immediately"
-);
-crate::minus_or_plus_flag_arg!(
-    ExitOnNonzeroCommandExit,
-    'e',
-    "Exit on nonzero command exit"
-);
-crate::minus_or_plus_flag_arg!(DisableFilenameGlobbing, 'f', "Disable filename globbing");
-crate::minus_or_plus_flag_arg!(RememberCommandLocations, 'h', "Remember command locations");
-crate::minus_or_plus_flag_arg!(
-    PlaceAllAssignmentArgsInCommandEnv,
-    'k',
-    "Place all assignment args in command environment"
-);
-crate::minus_or_plus_flag_arg!(EnableJobControl, 'm', "Enable job control");
-crate::minus_or_plus_flag_arg!(DoNotExecuteCommands, 'n', "Do not execute commands");
-crate::minus_or_plus_flag_arg!(RealEffectiveUidMismatch, 'p', "Real effective UID mismatch");
-crate::minus_or_plus_flag_arg!(ExitAfterOneCommand, 't', "Exit after one command");
-crate::minus_or_plus_flag_arg!(
-    TreatUnsetVariablesAsError,
-    'u',
-    "Treat unset variables as error"
-);
-crate::minus_or_plus_flag_arg!(PrintShellInputLines, 'v', "Print shell input lines");
-crate::minus_or_plus_flag_arg!(
-    PrintCommandsAndArguments,
-    'x',
-    "Print commands and arguments"
-);
-crate::minus_or_plus_flag_arg!(PerformBraceExpansion, 'B', "Perform brace expansion");
-crate::minus_or_plus_flag_arg!(
-    DisallowOverwritingRegularFilesViaOutputRedirection,
-    'C',
-    "Disallow overwriting regular files via output redirection"
-);
-crate::minus_or_plus_flag_arg!(
-    ShellFunctionsInheritErrTrap,
-    'E',
-    "Shell functions inherit ERR trap"
-);
-crate::minus_or_plus_flag_arg!(
-    EnableBangStyleHistorySubstitution,
-    'H',
-    "Enable bang style history substitution"
-);
-crate::minus_or_plus_flag_arg!(
-    DoNotResolveSymlinksWhenChangingDir,
-    'P',
-    "Do not resolve symlinks when changing dir"
-);
-crate::minus_or_plus_flag_arg!(
-    ShellFunctionsInheritDebugAndReturnTraps,
-    'T',
-    "Shell functions inherit DEBUG and RETURN traps"
-);
+#[derive(Default)]
+struct PlusMinusFlag {
+    enable: bool,
+    disable: bool,
+}
 
-#[derive(clap::Parser)]
+impl PlusMinusFlag {
+    const fn to_bool(&self) -> Option<bool> {
+        match (self.enable, self.disable) {
+            (true, false) => Some(true),
+            (false, true) => Some(false),
+            _ => None,
+        }
+    }
+
+    fn set(&mut self, enabled: bool) {
+        if enabled {
+            self.enable = true;
+        } else {
+            self.disable = true;
+        }
+    }
+}
+
+#[derive(Default)]
 pub(crate) struct SetOption {
-    #[arg(short = 'o', name = "setopt_enable", num_args=0..=1, value_name = "OPT")]
     enable: Option<Vec<String>>,
-    #[arg(long = concat!("+o"), name = "setopt_disable", hide = true, num_args=0..=1)]
     disable: Option<Vec<String>>,
 }
 
 /// Manage set-based shell options.
-#[derive(Parser)]
-#[clap(disable_help_flag = true)]
+#[derive(Default)]
 pub(crate) struct SetCommand {
-    /// Display help for this command.
-    #[clap(long, action = clap::ArgAction::HelpLong)]
-    help: Option<bool>,
+    export_variables_on_modification: PlusMinusFlag,
+    notify_job_termination_immediately: PlusMinusFlag,
+    exit_on_nonzero_command_exit: PlusMinusFlag,
+    disable_filename_globbing: PlusMinusFlag,
+    remember_command_locations: PlusMinusFlag,
+    place_all_assignment_args_in_command_env: PlusMinusFlag,
+    enable_job_control: PlusMinusFlag,
+    do_not_execute_commands: PlusMinusFlag,
+    real_effective_uid_mismatch: PlusMinusFlag,
+    exit_after_one_command: PlusMinusFlag,
+    treat_unset_variables_as_error: PlusMinusFlag,
+    print_shell_input_lines: PlusMinusFlag,
+    print_commands_and_arguments: PlusMinusFlag,
+    perform_brace_expansion: PlusMinusFlag,
+    disallow_overwriting_regular_files_via_output_redirection: PlusMinusFlag,
+    shell_functions_inherit_err_trap: PlusMinusFlag,
+    enable_bang_style_history_substitution: PlusMinusFlag,
+    do_not_resolve_symlinks_when_changing_dir: PlusMinusFlag,
+    shell_functions_inherit_debug_and_return_traps: PlusMinusFlag,
 
-    #[clap(flatten)]
-    export_variables_on_modification: ExportVariablesOnModification,
-    #[clap(flatten)]
-    notify_job_termination_immediately: NotifyJobTerminationImmediately,
-    #[clap(flatten)]
-    exit_on_nonzero_command_exit: ExitOnNonzeroCommandExit,
-    #[clap(flatten)]
-    disable_filename_globbing: DisableFilenameGlobbing,
-    #[clap(flatten)]
-    remember_command_locations: RememberCommandLocations,
-    #[clap(flatten)]
-    place_all_assignment_args_in_command_env: PlaceAllAssignmentArgsInCommandEnv,
-    #[clap(flatten)]
-    enable_job_control: EnableJobControl,
-    #[clap(flatten)]
-    do_not_execute_commands: DoNotExecuteCommands,
-    #[clap(flatten)]
-    real_effective_uid_mismatch: RealEffectiveUidMismatch,
-    #[clap(flatten)]
-    exit_after_one_command: ExitAfterOneCommand,
-    #[clap(flatten)]
-    treat_unset_variables_as_error: TreatUnsetVariablesAsError,
-    #[clap(flatten)]
-    print_shell_input_lines: PrintShellInputLines,
-    #[clap(flatten)]
-    print_commands_and_arguments: PrintCommandsAndArguments,
-    #[clap(flatten)]
-    perform_brace_expansion: PerformBraceExpansion,
-    #[clap(flatten)]
-    disallow_overwriting_regular_files_via_output_redirection:
-        DisallowOverwritingRegularFilesViaOutputRedirection,
-    #[clap(flatten)]
-    shell_functions_inherit_err_trap: ShellFunctionsInheritErrTrap,
-    #[clap(flatten)]
-    enable_bang_style_history_substitution: EnableBangStyleHistorySubstitution,
-    #[clap(flatten)]
-    do_not_resolve_symlinks_when_changing_dir: DoNotResolveSymlinksWhenChangingDir,
-    #[clap(flatten)]
-    shell_functions_inherit_debug_and_return_traps: ShellFunctionsInheritDebugAndReturnTraps,
-
-    #[clap(flatten)]
     set_option: SetOption,
 
-    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     positional_args: Vec<String>,
 }
 
-impl builtins::Command for SetCommand {
-    fn takes_plus_options() -> bool {
-        true
+fn parse_set_args<I>(args: I) -> Result<SetCommand, String>
+where
+    I: IntoIterator<Item = String>,
+{
+    let mut command = SetCommand::default();
+    let mut args = builtins::BuiltinArgs::new(args);
+
+    while let Some(arg) = args.next_arg() {
+        if arg == "-" || arg == "--" {
+            command.positional_args.push(arg);
+            command.positional_args.extend(args.rest());
+            break;
+        }
+
+        let Some((enabled, flags)) = parse_set_prefix(&arg) else {
+            command.positional_args.push(arg);
+            command.positional_args.extend(args.rest());
+            break;
+        };
+
+        if flags.is_empty() {
+            command.positional_args.push(arg);
+            command.positional_args.extend(args.rest());
+            break;
+        }
+
+        parse_set_flags(&mut args, &mut command, flags, enabled)?;
     }
 
-    /// `set` 暂时保留自定义解析: 它同时需要 `+/-` 选项转换, `-o/+o` 可选值,
-    /// 以及第一个位置参数后的特殊停止规则。后续可在公共策略支持这些语义后迁移。
-    fn new<I>(args: I) -> Result<Self, clap::Error>
+    Ok(command)
+}
+
+fn parse_set_prefix(arg: &str) -> Option<(bool, &str)> {
+    if let Some(flags) = arg.strip_prefix('-') {
+        Some((true, flags))
+    } else {
+        arg.strip_prefix('+').map(|flags| (false, flags))
+    }
+}
+
+fn parse_set_flags(
+    args: &mut builtins::BuiltinArgs,
+    command: &mut SetCommand,
+    flags: &str,
+    enabled: bool,
+) -> Result<(), String> {
+    for (idx, flag) in flags.char_indices() {
+        let rest_start = idx + flag.len_utf8();
+        if flag == 'o' {
+            let value = optional_set_o_value(args, flags, rest_start);
+            let target = if enabled {
+                &mut command.set_option.enable
+            } else {
+                &mut command.set_option.disable
+            };
+            add_set_o_value(target, value);
+            break;
+        }
+
+        let Some(target) = command.flag_mut(flag) else {
+            let prefix = if enabled { '-' } else { '+' };
+            return Err(format!("set: {prefix}{flag}: invalid option"));
+        };
+        target.set(enabled);
+    }
+    Ok(())
+}
+
+fn optional_set_o_value(
+    args: &mut builtins::BuiltinArgs,
+    flags: &str,
+    rest_start: usize,
+) -> Option<String> {
+    if rest_start < flags.len() {
+        Some(flags[rest_start..].to_owned())
+    } else {
+        args.next_arg()
+    }
+}
+
+fn add_set_o_value(target: &mut Option<Vec<String>>, value: Option<String>) {
+    match (target, value) {
+        (slot @ None, Some(value)) => *slot = Some(vec![value]),
+        (Some(values), Some(value)) => values.push(value),
+        (slot @ None, None) => *slot = Some(Vec::new()),
+        (Some(_), None) => {}
+    }
+}
+
+impl SetCommand {
+    fn flag_mut(&mut self, flag: char) -> Option<&mut PlusMinusFlag> {
+        match flag {
+            'a' => Some(&mut self.export_variables_on_modification),
+            'b' => Some(&mut self.notify_job_termination_immediately),
+            'e' => Some(&mut self.exit_on_nonzero_command_exit),
+            'f' => Some(&mut self.disable_filename_globbing),
+            'h' => Some(&mut self.remember_command_locations),
+            'k' => Some(&mut self.place_all_assignment_args_in_command_env),
+            'm' => Some(&mut self.enable_job_control),
+            'n' => Some(&mut self.do_not_execute_commands),
+            'p' => Some(&mut self.real_effective_uid_mismatch),
+            't' => Some(&mut self.exit_after_one_command),
+            'u' => Some(&mut self.treat_unset_variables_as_error),
+            'v' => Some(&mut self.print_shell_input_lines),
+            'x' => Some(&mut self.print_commands_and_arguments),
+            'B' => Some(&mut self.perform_brace_expansion),
+            'C' => Some(&mut self.disallow_overwriting_regular_files_via_output_redirection),
+            'E' => Some(&mut self.shell_functions_inherit_err_trap),
+            'H' => Some(&mut self.enable_bang_style_history_substitution),
+            'P' => Some(&mut self.do_not_resolve_symlinks_when_changing_dir),
+            'T' => Some(&mut self.shell_functions_inherit_debug_and_return_traps),
+            _ => None,
+        }
+    }
+}
+
+impl builtins::Command for SetCommand {
+    type Error = crate::engine::Error;
+
+    fn new<I>(args: I) -> Result<Self, String>
     where
         I: IntoIterator<Item = String>,
     {
-        // 应用与默认 Command::new 相同的 `+` 选项 workaround, 但只在仍处于选项区间时转换。
-        // `set` 的解析规则比 PreserveDoubleDashRest 更复杂, 因此暂留为特殊 parser。
-        let mut updated_args = vec![];
-        let mut now_parsing_positional_args = false;
-        let mut next_arg_is_option_value = false;
-        for (i, arg) in args.into_iter().enumerate() {
-            if now_parsing_positional_args || next_arg_is_option_value {
-                updated_args.push(arg);
-
-                next_arg_is_option_value = false;
-                continue;
-            }
-
-            if arg == "-" || arg == "--" || (i > 0 && !arg.starts_with(['-', '+'])) {
-                now_parsing_positional_args = true;
-            }
-
-            if let Some(plus_options) = arg.strip_prefix("+") {
-                next_arg_is_option_value = plus_options.ends_with('o');
-                for c in plus_options.chars() {
-                    updated_args.push(format!("--+{c}"));
-                }
-            } else {
-                next_arg_is_option_value = arg.starts_with('-') && arg.ends_with('o');
-                updated_args.push(arg);
-            }
-        }
-
-        let (mut this, rest_args) = crate::engine::builtins::try_parse_known::<Self>(updated_args)?;
-        if let Some(args) = rest_args {
-            this.positional_args.extend(args);
-        }
-        Ok(this)
+        parse_set_args(args)
     }
-
-    type Error = crate::engine::Error;
 
     #[expect(clippy::too_many_lines)]
     #[allow(clippy::useless_let_if_seq)]

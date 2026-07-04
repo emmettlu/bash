@@ -1,21 +1,39 @@
 use crate::engine::{ExecutionResult, builtins, sys};
-use clap::Parser;
 use std::{borrow::Cow, io::Write, path::Path};
 
 /// Display the current working directory.
-#[derive(Parser)]
 pub(crate) struct PwdCommand {
     /// Print the physical directory without any symlinks.
-    #[arg(short = 'P', overrides_with = "allow_symlinks")]
     physical: bool,
-
-    /// Print $PWD if it names the current working directory.
-    #[arg(short = 'L', overrides_with = "physical")]
-    allow_symlinks: bool,
 }
 
 impl builtins::Command for PwdCommand {
     type Error = crate::engine::Error;
+
+    fn new<I>(args: I) -> Result<Self, String>
+    where
+        I: IntoIterator<Item = String>,
+    {
+        let mut physical = false;
+        let mut args = builtins::BuiltinArgs::new(args);
+        let positionals = args.parse_flags(|flag| match flag {
+            'P' => {
+                physical = true;
+                Ok(true)
+            }
+            'L' => {
+                physical = false;
+                Ok(true)
+            }
+            _ => Err(format!("-{flag}: invalid option")),
+        })?;
+
+        if !positionals.is_empty() {
+            return Err(String::from("too many arguments"));
+        }
+
+        Ok(Self { physical })
+    }
 
     async fn execute(
         &self,

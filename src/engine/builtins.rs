@@ -1,7 +1,7 @@
 //! Facilities for implementing and managing builtins
 
-use clap::builder::styling;
 pub use futures::future::BoxFuture;
+use nanocolor::Colorize as _;
 use std::io::Write;
 
 use crate::engine::{BuiltinError, CommandArg, commands, error, results};
@@ -28,16 +28,8 @@ pub type CommandExecuteFunc = fn(
 pub type CommandContentFunc =
     fn(&str, ContentType, &ContentOptions) -> Result<String, error::Error>;
 
-/// 内置命令的参数解析策略。
-pub enum ArgParsing {
-    /// 使用 clap 的严格解析, `--` 只作为 clap 自身的参数分隔符处理。
-    Strict,
-    /// 保留第一个 `--` 及其后的参数, 并通过 [`Command::append_rest_args`] 写回命令对象。
-    PreserveDoubleDashRest,
-}
-
 /// Trait implemented by built-in shell commands.
-pub trait Command: clap::Parser {
+pub trait Command: Sized {
     /// The error type returned by the command.
     type Error: BuiltinError + 'static;
 
@@ -46,53 +38,9 @@ pub trait Command: clap::Parser {
     /// # Arguments
     ///
     /// * `args` - The arguments to the command.
-    fn new<I>(args: I) -> Result<Self, clap::Error>
+    fn new<I>(args: I) -> Result<Self, String>
     where
-        I: IntoIterator<Item = String>,
-    {
-        let args = if !Self::takes_plus_options() {
-            args.into_iter().collect()
-        } else {
-            // clap 不支持 `+x` 形式的命名选项, 因此先转换为隐藏长选项。
-            let mut updated_args = vec![];
-            for arg in args {
-                if let Some(plus_options) = arg.strip_prefix("+") {
-                    for c in plus_options.chars() {
-                        updated_args.push(format!("--+{c}"));
-                    }
-                } else {
-                    updated_args.push(arg);
-                }
-            }
-            updated_args
-        };
-
-        match Self::arg_parsing() {
-            ArgParsing::Strict => Self::try_parse_from(args),
-            ArgParsing::PreserveDoubleDashRest => {
-                let (mut this, rest_args) = try_parse_known::<Self>(args)?;
-                if let Some(args) = rest_args {
-                    this.append_rest_args(args.collect());
-                }
-                Ok(this)
-            }
-        }
-    }
-
-    /// Returns whether or not the command takes options with a leading '+' or '-' character.
-    fn takes_plus_options() -> bool {
-        false
-    }
-
-    /// 返回命令参数解析策略。
-    fn arg_parsing() -> ArgParsing {
-        ArgParsing::Strict
-    }
-
-    /// 接收 [`ArgParsing::PreserveDoubleDashRest`] 策略保留下来的参数。
-    fn append_rest_args(&mut self, rest: Vec<String>) {
-        let _ = rest;
-    }
+        I: IntoIterator<Item = String>;
 
     /// Executes the built-in command in the provided context.
     ///
@@ -118,23 +66,18 @@ pub trait Command: clap::Parser {
         content_type: ContentType,
         options: &ContentOptions,
     ) -> Result<String, error::Error> {
-        let mut clap_command = Self::command().styles(help_styles()).next_line_help(false);
-        clap_command.set_bin_name(name);
-
-        let s = match content_type {
-            ContentType::DetailedHelp => {
-                let rendered = clap_command.render_help();
-                if options.colorized {
-                    rendered.ansi().to_string()
-                } else {
-                    rendered.to_string()
-                }
-            }
-            ContentType::ShortUsage => get_builtin_short_usage(name, &mut clap_command),
-            ContentType::ShortDescription => get_builtin_short_description(name, &clap_command),
+        let description = "shell builtin";
+        let name_display = if options.colorized {
+            format!("{}", nanocolor::style(name).cyan().bold())
+        } else {
+            name.to_owned()
         };
 
-        Ok(s)
+        match content_type {
+            ContentType::DetailedHelp => Ok(format!("{name_display}: {description}\n")),
+            ContentType::ShortUsage => Ok(format!("{name}: {name}\n")),
+            ContentType::ShortDescription => Ok(format!("{name} - {description}\n")),
+        }
     }
 }
 
@@ -196,103 +139,97 @@ impl Registration {
     }
 }
 
-fn get_builtin_short_description(name: &str, command: &clap::Command) -> String {
-    let about = command
-        .get_about()
-        .map_or_else(String::new, |s| s.to_string());
-
-    std::format!("{name} - {about}\n")
-}
-
-fn get_builtin_short_usage(name: &str, command: &mut clap::Command) -> String {
-    let usage = command.render_usage().to_string();
-    // clap 输出 "Usage: name [OPTIONS]...", 去掉前缀
-    let body = usage.strip_prefix("Usage: ").unwrap_or(&usage);
-    std::format!("{name}: {body}\n")
-}
-
-fn help_styles() -> clap::builder::Styles {
-    styling::Styles::styled()
-        .header(
-            styling::AnsiColor::Yellow.on_default()
-                | styling::Effects::BOLD
-                | styling::Effects::UNDERLINE,
-        )
-        .usage(styling::AnsiColor::Green.on_default() | styling::Effects::BOLD)
-        .literal(styling::AnsiColor::Magenta.on_default() | styling::Effects::BOLD)
-        .placeholder(styling::AnsiColor::Cyan.on_default())
-}
-
-/// This function and the [`try_parse_known`] exists to deal with
-/// the Clap's limitation of treating `--` like a regular value
-/// `https://github.com/clap-rs/clap/issues/5055`
-///
-/// # Arguments
-///
-/// * `args` - An Iterator from [`std::env::args`]
-///
-/// # Returns
-///
-/// * a parsed struct T from [`clap::Parser::parse_from`]
-/// * the remain iterator `args` with `--` and the rest arguments if they present otherwise None
-///
-/// # Examples
-/// ```
-///    use clap::{builder::styling, Parser};
-///    #[derive(Parser)]
-///    struct CommandLineArgs {
-///       #[clap(allow_hyphen_values = true, num_args=1..)]
-///       script_args: Vec<String>,
-///    }
-///
-///    let (mut parsed_args, raw_args) =
-///        crate::engine::builtins::parse_known::<CommandLineArgs, _>(std::env::args());
-///    if raw_args.is_some() {
-///        parsed_args.script_args = raw_args.unwrap().collect();
-///    }
-/// ```
-/// 在参数列表中找到第一个 `--`, 将其前、自身、后三部分分开返回。
-fn split_at_double_dash<S>(
-    args: impl IntoIterator<Item = S>,
-) -> (Vec<S>, Option<S>, std::vec::IntoIter<S>)
-where
-    S: Clone + PartialEq<&'static str>,
-{
-    let mut args: Vec<S> = args.into_iter().collect();
-    let split_pos = args.iter().position(|a| *a == "--");
-    if let Some(pos) = split_pos {
+/// 在参数列表中找到第一个 `--`, 将其前、自身和之后参数分开返回。
+pub fn split_at_double_dash(
+    args: impl IntoIterator<Item = String>,
+) -> (Vec<String>, Option<Vec<String>>) {
+    let mut args: Vec<String> = args.into_iter().collect();
+    if let Some(pos) = args.iter().position(|a| a == "--") {
         let rest = args.split_off(pos);
-        let mut rest_iter = rest.into_iter();
-        let hyphen = rest_iter.next();
-        (args, hyphen, rest_iter)
+        (args, Some(rest))
     } else {
-        let rest_iter = Vec::new().into_iter();
-        (args, None, rest_iter)
+        (args, None)
     }
 }
 
-pub fn parse_known<T: clap::Parser, S>(
-    args: impl IntoIterator<Item = S>,
-) -> (T, Option<impl Iterator<Item = S>>)
-where
-    S: Into<std::ffi::OsString> + Clone + PartialEq<&'static str>,
-{
-    let (before, hyphen, rest) = split_at_double_dash(args);
-    let parsed_args = T::parse_from(before);
-    let raw_args = hyphen.map(|hyphen| std::iter::once(hyphen).chain(rest));
-    (parsed_args, raw_args)
+/// 内置命令参数游标, 用于替代 derive parser 的轻量解析。
+pub struct BuiltinArgs {
+    args: Vec<String>,
+    index: usize,
+    stop_options: bool,
 }
 
-/// Similar to [`parse_known`] but with [`clap::Parser::try_parse_from`]
-/// This function is used to parse arguments in builtins such as
-/// `crate::engine::echo::EchoCommand`
-pub fn try_parse_known<T: clap::Parser>(
-    args: impl IntoIterator<Item = String>,
-) -> Result<(T, Option<impl Iterator<Item = String>>), clap::Error> {
-    let (before, hyphen, rest) = split_at_double_dash(args);
-    let parsed_args = T::try_parse_from(before)?;
-    let raw_args = hyphen.map(|hyphen| std::iter::once(hyphen).chain(rest));
-    Ok((parsed_args, raw_args))
+impl BuiltinArgs {
+    pub fn new(args: impl IntoIterator<Item = String>) -> Self {
+        let args = args.into_iter().collect::<Vec<_>>();
+        let index = usize::from(!args.is_empty());
+        Self {
+            args,
+            index,
+            stop_options: false,
+        }
+    }
+
+    pub fn next_arg(&mut self) -> Option<String> {
+        let value = self.args.get(self.index).cloned()?;
+        self.index += 1;
+        Some(value)
+    }
+
+    pub fn peek(&self) -> Option<&str> {
+        self.args.get(self.index).map(String::as_str)
+    }
+
+    pub fn next_value(&mut self, option: &str) -> Result<String, String> {
+        self.next_arg()
+            .ok_or_else(|| format!("{option}: option requires an argument"))
+    }
+
+    pub fn rest(mut self) -> Vec<String> {
+        self.drain_rest()
+    }
+
+    fn drain_rest(&mut self) -> Vec<String> {
+        self.args.drain(self.index..).collect()
+    }
+
+    pub fn parse_flags(
+        &mut self,
+        mut on_flag: impl FnMut(char) -> Result<bool, String>,
+    ) -> Result<Vec<String>, String> {
+        let mut positionals = Vec::new();
+        while let Some(arg) = self.next_arg() {
+            if self.stop_options || arg == "--" {
+                if arg == "--" {
+                    self.stop_options = true;
+                } else {
+                    positionals.push(arg);
+                }
+                positionals.extend(self.drain_rest());
+                break;
+            }
+
+            let Some(flags) = arg.strip_prefix('-') else {
+                positionals.push(arg);
+                positionals.extend(self.drain_rest());
+                break;
+            };
+
+            if flags.is_empty() {
+                positionals.push(arg);
+                positionals.extend(self.drain_rest());
+                break;
+            }
+
+            for flag in flags.chars() {
+                if !on_flag(flag)? {
+                    positionals.extend(self.drain_rest());
+                    return Ok(positionals);
+                }
+            }
+        }
+        Ok(positionals)
+    }
 }
 
 /// A simple command that can be registered as a built-in.
@@ -351,9 +288,8 @@ pub fn decl_builtin<B: DeclarationCommand + Send + Sync>() -> Registration {
 #[allow(clippy::too_long_first_doc_paragraph)]
 /// Returns a built-in command registration, given an implementation of the
 /// `DeclarationCommand` trait that can be default-constructed. The command
-/// implementation is expected to implement clap's `Parser` trait solely
-/// for help/usage information. Arguments are passed directly to the command
-/// via `set_declarations`. This is primarily only expected to be used with
+/// implementation is default-constructed. Arguments are passed directly to
+/// the command via `set_declarations`. This is primarily only expected to be used with
 /// select builtin commands that wrap other builtins (e.g., "builtin").
 pub fn raw_arg_builtin<B: DeclarationCommand + Default + Send + Sync>() -> Registration {
     Registration {

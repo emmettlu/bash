@@ -1,51 +1,135 @@
 use std::io::{Read, Write};
 
-use clap::Parser;
-
 use crate::engine::{ErrorKind, ExecutionResult, builtins, env, error, variables};
 
 /// Read lines from standard input into an indexed array variable.
-#[derive(Parser)]
 pub(crate) struct MapFileCommand {
     /// Delimiter to use (defaults to newline).
-    #[arg(short = 'd')]
     delimiter: Option<String>,
 
     /// Maximum number of entries to read (0 means no limit).
-    #[arg(short = 'n', default_value_t = 0)]
     max_count: i64,
 
     /// Index into array at which to start assignment.
-    #[arg(short = 'O', allow_hyphen_values = true)]
     origin: Option<i64>,
 
     /// Number of initial entries to skip.
-    #[arg(short = 's', default_value_t = 0, value_parser = clap::value_parser!(i64).range(0..))]
     skip_count: i64,
 
     /// Whether or not to remove the delimiter from each read line.
-    #[arg(short = 't')]
     remove_delimiter: bool,
 
     /// File descriptor to read from (defaults to stdin).
-    #[arg(short = 'u', default_value_t = 0)]
     fd: crate::engine::ShellFd,
 
     /// Name of function to call for each group of lines.
-    #[arg(short = 'C')]
     callback: Option<String>,
 
     /// Number of lines to pass the callback for each group.
-    #[arg(short = 'c', default_value_t = 5000, value_parser = clap::value_parser!(i64).range(1..))]
     callback_group_size: i64,
 
     /// Name of array to read into.
-    #[arg(default_value = "MAPFILE")]
     array_var_name: String,
 }
 
 impl builtins::Command for MapFileCommand {
     type Error = crate::engine::Error;
+
+    fn new<I>(args: I) -> Result<Self, String>
+    where
+        I: IntoIterator<Item = String>,
+    {
+        let mut command = Self {
+            delimiter: None,
+            max_count: 0,
+            origin: None,
+            skip_count: 0,
+            remove_delimiter: false,
+            fd: 0,
+            callback: None,
+            callback_group_size: 5000,
+            array_var_name: String::from("MAPFILE"),
+        };
+        let mut args = builtins::BuiltinArgs::new(args);
+        let mut array_names = Vec::new();
+
+        while let Some(arg) = args.next_arg() {
+            if arg == "--" {
+                array_names.extend(args.rest());
+                break;
+            }
+
+            let Some(flags) = arg.strip_prefix('-') else {
+                array_names.push(arg);
+                array_names.extend(args.rest());
+                break;
+            };
+
+            if flags.is_empty() {
+                array_names.push(arg);
+                array_names.extend(args.rest());
+                break;
+            }
+
+            for (idx, flag) in flags.char_indices() {
+                match flag {
+                    't' => command.remove_delimiter = true,
+                    'd' => {
+                        command.delimiter = Some(option_value(flags, idx, flag, &mut args, "-d")?);
+                        break;
+                    }
+                    'n' => {
+                        let value = option_value(flags, idx, flag, &mut args, "-n")?;
+                        command.max_count = parse_i64_option("-n", &value)?;
+                        break;
+                    }
+                    'O' => {
+                        let value = option_value(flags, idx, flag, &mut args, "-O")?;
+                        command.origin = Some(parse_i64_option("-O", &value)?);
+                        break;
+                    }
+                    's' => {
+                        let value = option_value(flags, idx, flag, &mut args, "-s")?;
+                        let skip_count = parse_i64_option("-s", &value)?;
+                        if skip_count < 0 {
+                            return Err(format!("-s: invalid count: {value}"));
+                        }
+                        command.skip_count = skip_count;
+                        break;
+                    }
+                    'u' => {
+                        let value = option_value(flags, idx, flag, &mut args, "-u")?;
+                        command.fd = value
+                            .parse()
+                            .map_err(|_| format!("-u: invalid file descriptor: {value}"))?;
+                        break;
+                    }
+                    'C' => {
+                        command.callback = Some(option_value(flags, idx, flag, &mut args, "-C")?);
+                        break;
+                    }
+                    'c' => {
+                        let value = option_value(flags, idx, flag, &mut args, "-c")?;
+                        let callback_group_size = parse_i64_option("-c", &value)?;
+                        if callback_group_size < 1 {
+                            return Err(format!("-c: invalid count: {value}"));
+                        }
+                        command.callback_group_size = callback_group_size;
+                        break;
+                    }
+                    _ => return Err(format!("-{flag}: invalid option")),
+                }
+            }
+        }
+
+        match array_names.as_slice() {
+            [] => {}
+            [array_var_name] => command.array_var_name = array_var_name.clone(),
+            _ => return Err(String::from("too many arguments")),
+        }
+
+        Ok(command)
+    }
 
     async fn execute(
         &self,
@@ -119,6 +203,27 @@ impl builtins::Command for MapFileCommand {
 
         Ok(ExecutionResult::success())
     }
+}
+
+fn option_value(
+    flags: &str,
+    idx: usize,
+    flag: char,
+    args: &mut builtins::BuiltinArgs,
+    option: &str,
+) -> Result<String, String> {
+    let value_start = idx + flag.len_utf8();
+    if value_start < flags.len() {
+        Ok(flags[value_start..].to_owned())
+    } else {
+        args.next_value(option)
+    }
+}
+
+fn parse_i64_option(option: &str, value: &str) -> Result<i64, String> {
+    value
+        .parse()
+        .map_err(|_| format!("{option}: invalid number: {value}"))
 }
 
 impl MapFileCommand {

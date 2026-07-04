@@ -1,32 +1,24 @@
 use std::borrow::Cow;
 
-use clap::Parser;
-
 use crate::engine::{ExecutionResult, Shell, ShellValue, builtins, variables::ShellValueUnsetType};
 
 /// Unset a variable.
-#[derive(Parser)]
 pub(crate) struct UnsetCommand {
-    #[clap(flatten)]
     name_interpretation: UnsetNameInterpretation,
 
     /// Names of variables to unset.
     names: Vec<String>,
 }
 
-#[derive(Parser)]
-#[clap(group = clap::ArgGroup::new("name-interpretation").multiple(false).required(false))]
+#[derive(Default)]
 pub(crate) struct UnsetNameInterpretation {
     /// Treat each name as a shell function.
-    #[arg(short = 'f', group = "name-interpretation")]
     shell_functions: bool,
 
     /// Treat each name as a shell variable.
-    #[arg(short = 'v', group = "name-interpretation")]
     shell_variables: bool,
 
     /// Treat each name as a name reference.
-    #[arg(short = 'n', group = "name-interpretation")]
     name_references: bool,
 }
 
@@ -34,10 +26,49 @@ impl UnsetNameInterpretation {
     pub const fn unspecified(&self) -> bool {
         !self.shell_functions && !self.shell_variables && !self.name_references
     }
+
+    const fn specified_count(&self) -> usize {
+        self.shell_functions as usize
+            + self.shell_variables as usize
+            + self.name_references as usize
+    }
 }
 
 impl builtins::Command for UnsetCommand {
     type Error = crate::engine::Error;
+
+    fn new<I>(args: I) -> Result<Self, String>
+    where
+        I: IntoIterator<Item = String>,
+    {
+        let mut command = Self {
+            name_interpretation: UnsetNameInterpretation::default(),
+            names: Vec::new(),
+        };
+        let mut args = builtins::BuiltinArgs::new(args);
+        let names = args.parse_flags(|flag| match flag {
+            'f' => {
+                command.name_interpretation.shell_functions = true;
+                Ok(true)
+            }
+            'v' => {
+                command.name_interpretation.shell_variables = true;
+                Ok(true)
+            }
+            'n' => {
+                command.name_interpretation.name_references = true;
+                Ok(true)
+            }
+            _ => Err(format!("unset: -{flag}: invalid option")),
+        })?;
+        command.names = names;
+
+        if command.name_interpretation.specified_count() > 1 {
+            return Err("unset: -f, -v, and -n are mutually exclusive".into());
+        }
+
+        Ok(command)
+    }
 
     async fn execute(
         &self,

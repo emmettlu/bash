@@ -1,30 +1,80 @@
-use clap::Parser;
 use std::borrow::Cow;
 
 use crate::engine::{ExecutionResult, builtins, commands};
 
 /// Exec the provided command.
-#[derive(Parser)]
 pub(crate) struct ExecCommand {
     /// Pass given name as zeroth argument to command.
-    #[arg(short = 'a', value_name = "NAME")]
     name_for_argv0: Option<String>,
 
     /// Exec command with an empty environment.
-    #[arg(short = 'c')]
     empty_environment: bool,
 
     /// Exec command as a login shell.
-    #[arg(short = 'l')]
     exec_as_login: bool,
 
     /// Command and args.
-    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     args: Vec<String>,
 }
 
 impl builtins::Command for ExecCommand {
     type Error = crate::engine::Error;
+
+    fn new<I>(args: I) -> Result<Self, String>
+    where
+        I: IntoIterator<Item = String>,
+    {
+        let parsed_args = builtins::BuiltinArgs::new(args).rest();
+        let mut command = Self {
+            name_for_argv0: None,
+            empty_environment: false,
+            exec_as_login: false,
+            args: Vec::new(),
+        };
+
+        let mut index = 0;
+        while index < parsed_args.len() {
+            let arg = &parsed_args[index];
+            if arg == "--" {
+                index += 1;
+                break;
+            }
+            if arg == "-" || !arg.starts_with('-') {
+                break;
+            }
+
+            let flags = &arg[1..];
+            if flags.is_empty() {
+                break;
+            }
+
+            for (offset, flag) in flags.char_indices() {
+                match flag {
+                    'a' => {
+                        let value_start = offset + flag.len_utf8();
+                        if value_start < flags.len() {
+                            command.name_for_argv0 = Some(flags[value_start..].to_owned());
+                        } else {
+                            index += 1;
+                            let value = parsed_args.get(index).ok_or_else(|| {
+                                "exec: -a: option requires an argument".to_owned()
+                            })?;
+                            command.name_for_argv0 = Some(value.clone());
+                        }
+                        break;
+                    }
+                    'c' => command.empty_environment = true,
+                    'l' => command.exec_as_login = true,
+                    _ => return Err(format!("exec: -{flag}: invalid option")),
+                }
+            }
+
+            index += 1;
+        }
+
+        command.args = parsed_args[index..].to_vec();
+        Ok(command)
+    }
 
     async fn execute(
         &self,

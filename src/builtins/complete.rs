@@ -1,4 +1,3 @@
-use clap::Parser;
 use std::collections::HashMap;
 use std::fmt::Write as _;
 use std::io::Write;
@@ -6,90 +5,69 @@ use std::io::Write;
 use crate::engine::completion::{self, CompleteAction, CompleteOption, Spec};
 use crate::engine::{ExecutionResult, builtins, error, escape};
 
-#[derive(Parser)]
+#[derive(Default)]
 struct CommonCompleteCommandArgs {
     /// Options governing the behavior of completions.
-    #[arg(short = 'o')]
     options: Vec<CompleteOption>,
 
     /// Actions to apply to generate completions.
-    #[arg(short = 'A')]
     actions: Vec<CompleteAction>,
 
     /// File glob pattern to be expanded to generate completions.
-    #[arg(short = 'G', allow_hyphen_values = true, value_name = "GLOB")]
     glob_pattern: Option<String>,
 
     /// List of words that will be considered as completions.
-    #[arg(short = 'W', allow_hyphen_values = true)]
     word_list: Option<String>,
 
     /// Name of a shell function to invoke to generate completions.
-    #[arg(short = 'F', allow_hyphen_values = true, value_name = "FUNC_NAME")]
     function_name: Option<String>,
 
     /// Command to execute to generate completions.
-    #[arg(short = 'C', allow_hyphen_values = true)]
     command: Option<String>,
 
     /// Pattern used as filter for completions.
-    #[arg(short = 'X', allow_hyphen_values = true, value_name = "PATTERN")]
     filter_pattern: Option<String>,
 
     /// Prefix pattern used as filter for completions.
-    #[arg(short = 'P', allow_hyphen_values = true)]
     prefix: Option<String>,
 
     /// Suffix pattern used as filter for completions.
-    #[arg(short = 'S', allow_hyphen_values = true)]
     suffix: Option<String>,
 
     /// Complete with valid aliases.
-    #[arg(short = 'a')]
     action_alias: bool,
 
     /// Complete with names of shell builtins.
-    #[arg(short = 'b')]
     action_builtin: bool,
 
     /// Complete with names of executable commands.
-    #[arg(short = 'c')]
     action_command: bool,
 
     /// Complete with directory names.
-    #[arg(short = 'd')]
     action_directory: bool,
 
     /// Complete with names of exported shell variables.
-    #[arg(short = 'e')]
     action_exported: bool,
 
     /// Complete with filenames.
-    #[arg(short = 'f')]
     action_file: bool,
 
     /// Complete with valid user groups.
-    #[arg(short = 'g')]
     action_group: bool,
 
     /// Complete with job specs.
-    #[arg(short = 'j')]
     action_job: bool,
 
     /// Complete with keywords.
-    #[arg(short = 'k')]
     action_keyword: bool,
 
     /// Complete with names of system services.
-    #[arg(short = 's')]
     action_service: bool,
 
     /// Complete with valid usernames.
-    #[arg(short = 'u')]
     action_user: bool,
 
     /// Complete with names of shell variables.
-    #[arg(short = 'v')]
     action_variable: bool,
 }
 
@@ -189,30 +167,136 @@ impl CommonCompleteCommandArgs {
     }
 }
 
+fn parse_complete_options(
+    args: &mut builtins::BuiltinArgs,
+    common: &mut CommonCompleteCommandArgs,
+    mut on_extra_flag: impl FnMut(char) -> Result<bool, String>,
+) -> Result<Vec<String>, String> {
+    let mut positionals = Vec::new();
+    while let Some(arg) = args.next_arg() {
+        if arg == "--" {
+            positionals.extend(collect_remaining(args));
+            break;
+        }
+
+        let Some(flags) = arg.strip_prefix('-') else {
+            positionals.push(arg);
+            positionals.extend(collect_remaining(args));
+            break;
+        };
+
+        if flags.is_empty() {
+            positionals.push(arg);
+            positionals.extend(collect_remaining(args));
+            break;
+        }
+
+        for (idx, flag) in flags.char_indices() {
+            let rest_start = idx + flag.len_utf8();
+            if on_extra_flag(flag)? {
+                continue;
+            }
+
+            match flag {
+                'o' => {
+                    let value = option_value(args, flags, rest_start, "complete: -o")?;
+                    common.options.push(value.parse::<CompleteOption>()?);
+                    break;
+                }
+                'A' => {
+                    let value = option_value(args, flags, rest_start, "complete: -A")?;
+                    common.actions.push(value.parse::<CompleteAction>()?);
+                    break;
+                }
+                'G' => {
+                    common.glob_pattern =
+                        Some(option_value(args, flags, rest_start, "complete: -G")?);
+                    break;
+                }
+                'W' => {
+                    common.word_list = Some(option_value(args, flags, rest_start, "complete: -W")?);
+                    break;
+                }
+                'F' => {
+                    common.function_name =
+                        Some(option_value(args, flags, rest_start, "complete: -F")?);
+                    break;
+                }
+                'C' => {
+                    common.command = Some(option_value(args, flags, rest_start, "complete: -C")?);
+                    break;
+                }
+                'X' => {
+                    common.filter_pattern =
+                        Some(option_value(args, flags, rest_start, "complete: -X")?);
+                    break;
+                }
+                'P' => {
+                    common.prefix = Some(option_value(args, flags, rest_start, "complete: -P")?);
+                    break;
+                }
+                'S' => {
+                    common.suffix = Some(option_value(args, flags, rest_start, "complete: -S")?);
+                    break;
+                }
+                'a' => common.action_alias = true,
+                'b' => common.action_builtin = true,
+                'c' => common.action_command = true,
+                'd' => common.action_directory = true,
+                'e' => common.action_exported = true,
+                'f' => common.action_file = true,
+                'g' => common.action_group = true,
+                'j' => common.action_job = true,
+                'k' => common.action_keyword = true,
+                's' => common.action_service = true,
+                'u' => common.action_user = true,
+                'v' => common.action_variable = true,
+                _ => return Err(format!("complete: -{flag}: invalid option")),
+            }
+        }
+    }
+    Ok(positionals)
+}
+
+fn option_value(
+    args: &mut builtins::BuiltinArgs,
+    flags: &str,
+    rest_start: usize,
+    option: &str,
+) -> Result<String, String> {
+    if rest_start < flags.len() {
+        Ok(flags[rest_start..].to_owned())
+    } else {
+        args.next_value(option)
+    }
+}
+
+fn collect_remaining(args: &mut builtins::BuiltinArgs) -> Vec<String> {
+    let mut rest = Vec::new();
+    while let Some(arg) = args.next_arg() {
+        rest.push(arg);
+    }
+    rest
+}
+
 /// Configure programmable command completion.
-#[derive(Parser)]
+#[derive(Default)]
 pub(crate) struct CompleteCommand {
     /// Display registered completion settings.
-    #[arg(short = 'p')]
     print: bool,
 
     /// Remove the completion settings associated with the given command.
-    #[arg(short = 'r')]
     remove: bool,
 
     /// Apply these settings to the default completion scenario.
-    #[arg(short = 'D')]
     use_as_default: bool,
 
     /// Apply these settings to completion of empty lines.
-    #[arg(short = 'E')]
     use_for_empty_line: bool,
 
     /// Apply these settings to completion of the initial word of the input line.
-    #[arg(short = 'I')]
     use_for_initial_word: bool,
 
-    #[clap(flatten)]
     common_args: CommonCompleteCommandArgs,
 
     names: Vec<String>,
@@ -220,6 +304,39 @@ pub(crate) struct CompleteCommand {
 
 impl builtins::Command for CompleteCommand {
     type Error = crate::engine::Error;
+
+    fn new<I>(args: I) -> Result<Self, String>
+    where
+        I: IntoIterator<Item = String>,
+    {
+        let mut common_args = CommonCompleteCommandArgs::default();
+        let mut print = false;
+        let mut remove = false;
+        let mut use_as_default = false;
+        let mut use_for_empty_line = false;
+        let mut use_for_initial_word = false;
+        let mut args = builtins::BuiltinArgs::new(args);
+        let names = parse_complete_options(&mut args, &mut common_args, |flag| {
+            match flag {
+                'p' => print = true,
+                'r' => remove = true,
+                'D' => use_as_default = true,
+                'E' => use_for_empty_line = true,
+                'I' => use_for_initial_word = true,
+                _ => return Ok(false),
+            }
+            Ok(true)
+        })?;
+        Ok(Self {
+            print,
+            remove,
+            use_as_default,
+            use_for_empty_line,
+            use_for_initial_word,
+            common_args,
+            names,
+        })
+    }
 
     async fn execute(
         &self,
@@ -478,9 +595,8 @@ impl CompleteCommand {
 }
 
 /// Generate command completions.
-#[derive(Parser)]
+#[derive(Default)]
 pub(crate) struct CompGenCommand {
-    #[clap(flatten)]
     common_args: CommonCompleteCommandArgs,
 
     // N.B. The word can only start with a hyphen if it's after a --.
@@ -489,6 +605,22 @@ pub(crate) struct CompGenCommand {
 
 impl builtins::Command for CompGenCommand {
     type Error = crate::engine::Error;
+
+    fn new<I>(args: I) -> Result<Self, String>
+    where
+        I: IntoIterator<Item = String>,
+    {
+        let mut command = Self::default();
+        let mut args = builtins::BuiltinArgs::new(args);
+        let positionals =
+            parse_complete_options(&mut args, &mut command.common_args, |_| Ok(false))?;
+        match positionals.as_slice() {
+            [] => {}
+            [word] => command.word = Some(word.clone()),
+            _ => return Err("compgen: too many arguments".into()),
+        }
+        Ok(command)
+    }
 
     async fn execute(
         &self,
@@ -544,32 +676,108 @@ impl builtins::Command for CompGenCommand {
 }
 
 /// Set programmable command completion options.
-#[derive(Parser)]
+#[derive(Default)]
 pub(crate) struct CompOptCommand {
     /// Update the default completion settings.
-    #[arg(short = 'D')]
     update_default: bool,
 
     /// Update the completion settings for empty lines.
-    #[arg(short = 'E')]
     update_empty: bool,
 
     /// Update the completion settings for the initial word of the input line.
-    #[arg(short = 'I')]
     update_initial_word: bool,
 
     /// Enable the specified option for selected completion scenarios.
-    #[arg(short = 'o', value_name = "OPT")]
     enabled_options: Vec<CompleteOption>,
-    #[arg(long = concat!("+o"), hide = true)]
     disabled_options: Vec<CompleteOption>,
 
     /// If specified, scopes updates to completions of the named commands.
     names: Vec<String>,
 }
 
+fn parse_compopt_args<I>(args: I) -> Result<CompOptCommand, String>
+where
+    I: IntoIterator<Item = String>,
+{
+    let mut command = CompOptCommand::default();
+    let mut args = builtins::BuiltinArgs::new(args);
+    let mut positionals = Vec::new();
+
+    while let Some(arg) = args.next_arg() {
+        if arg == "--" {
+            positionals.extend(args.rest());
+            break;
+        }
+
+        if let Some(flags) = arg.strip_prefix('-') {
+            if flags.is_empty() {
+                positionals.push(arg);
+                positionals.extend(args.rest());
+                break;
+            }
+            parse_compopt_minus_flags(&mut args, &mut command, flags)?;
+        } else if let Some(flags) = arg.strip_prefix('+') {
+            if flags == "o" {
+                let value = args.next_value("compopt: +o")?;
+                command
+                    .disabled_options
+                    .push(value.parse::<CompleteOption>()?);
+            } else if let Some(value) = flags.strip_prefix('o') {
+                if value.is_empty() {
+                    return Err("compopt: +o: option requires an argument".into());
+                }
+                command
+                    .disabled_options
+                    .push(value.parse::<CompleteOption>()?);
+            } else {
+                positionals.push(arg);
+                positionals.extend(args.rest());
+                break;
+            }
+        } else {
+            positionals.push(arg);
+            positionals.extend(args.rest());
+            break;
+        }
+    }
+
+    command.names = positionals;
+    Ok(command)
+}
+
+fn parse_compopt_minus_flags(
+    args: &mut builtins::BuiltinArgs,
+    command: &mut CompOptCommand,
+    flags: &str,
+) -> Result<(), String> {
+    for (idx, flag) in flags.char_indices() {
+        let rest_start = idx + flag.len_utf8();
+        match flag {
+            'D' => command.update_default = true,
+            'E' => command.update_empty = true,
+            'I' => command.update_initial_word = true,
+            'o' => {
+                let value = option_value(args, flags, rest_start, "compopt: -o")?;
+                command
+                    .enabled_options
+                    .push(value.parse::<CompleteOption>()?);
+                break;
+            }
+            _ => return Err(format!("compopt: -{flag}: invalid option")),
+        }
+    }
+    Ok(())
+}
+
 impl builtins::Command for CompOptCommand {
     type Error = crate::engine::Error;
+
+    fn new<I>(args: I) -> Result<Self, String>
+    where
+        I: IntoIterator<Item = String>,
+    {
+        parse_compopt_args(args)
+    }
 
     async fn execute(
         &self,

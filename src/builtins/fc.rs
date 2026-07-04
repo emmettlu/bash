@@ -1,41 +1,101 @@
 use crate::engine::{ExecutionResult, builtins, error, history};
-use clap::Parser;
 use std::io::Write;
 
 /// Process command history list.
-#[derive(Parser)]
 pub(crate) struct FcCommand {
     /// List commands instead of editing them.
-    #[arg(short = 'l')]
     list: bool,
 
     /// Suppress line numbers when listing.
-    #[arg(short = 'n', requires = "list")]
     no_line_numbers: bool,
 
     /// Reverse the order of commands.
-    #[arg(short = 'r')]
     reverse: bool,
 
     /// Re-execute command after substitution (old=new format).
-    #[arg(short = 's')]
     substitute: bool,
 
     /// Editor to use (only relevant when not listing or substituting).
-    #[arg(short = 'e', value_name = "ENAME")]
     editor: Option<String>,
 
     /// First command in range (number or string prefix).
-    #[arg(value_name = "FIRST", allow_hyphen_values = true)]
     first: Option<String>,
 
     /// Last command in range (number or string prefix).
-    #[arg(value_name = "LAST", allow_hyphen_values = true)]
     last: Option<String>,
 }
 
 impl builtins::Command for FcCommand {
     type Error = crate::engine::Error;
+
+    fn new<I>(args: I) -> Result<Self, String>
+    where
+        I: IntoIterator<Item = String>,
+    {
+        let mut command = Self {
+            list: false,
+            no_line_numbers: false,
+            reverse: false,
+            substitute: false,
+            editor: None,
+            first: None,
+            last: None,
+        };
+        let mut args = builtins::BuiltinArgs::new(args);
+        let mut positionals = Vec::new();
+
+        while let Some(arg) = args.next_arg() {
+            if arg == "--" {
+                positionals.extend(args.rest());
+                break;
+            }
+
+            let Some(flags) = arg.strip_prefix('-') else {
+                positionals.push(arg);
+                positionals.extend(args.rest());
+                break;
+            };
+
+            if flags.is_empty() || flags.chars().next().is_some_and(|c| c.is_ascii_digit()) {
+                positionals.push(arg);
+                positionals.extend(args.rest());
+                break;
+            }
+
+            for (idx, flag) in flags.char_indices() {
+                match flag {
+                    'l' => command.list = true,
+                    'n' => command.no_line_numbers = true,
+                    'r' => command.reverse = true,
+                    's' => command.substitute = true,
+                    'e' => {
+                        let value_start = idx + flag.len_utf8();
+                        let value = if value_start < flags.len() {
+                            flags[value_start..].to_owned()
+                        } else {
+                            args.next_value("-e")?
+                        };
+                        command.editor = Some(value);
+                        break;
+                    }
+                    _ => return Err(format!("-{flag}: invalid option")),
+                }
+            }
+        }
+
+        if command.no_line_numbers && !command.list {
+            return Err(String::from("-n requires -l"));
+        }
+
+        if positionals.len() > 2 {
+            return Err(String::from("too many arguments"));
+        }
+
+        command.first = positionals.first().cloned();
+        command.last = positionals.get(1).cloned();
+
+        Ok(command)
+    }
 
     async fn execute(
         &self,

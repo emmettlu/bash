@@ -1,10 +1,8 @@
-use clap::Parser;
 use std::io::Write;
 
 use crate::engine::{ExecutionControlFlow, ExecutionResult, builtins};
 
 /// Return from the current function.
-#[derive(Parser)]
 pub(crate) struct ReturnCommand {
     /// The exit code to return.
     code: Option<i32>,
@@ -12,6 +10,26 @@ pub(crate) struct ReturnCommand {
 
 impl builtins::Command for ReturnCommand {
     type Error = crate::engine::Error;
+
+    fn new<I>(args: I) -> Result<Self, String>
+    where
+        I: IntoIterator<Item = String>,
+    {
+        let mut args = builtins::BuiltinArgs::new(args);
+        let code = match args.next_arg() {
+            Some(arg) => Some(
+                arg.parse()
+                    .map_err(|_| format!("return: {arg}: numeric argument required"))?,
+            ),
+            None => None,
+        };
+
+        if args.next_arg().is_some() {
+            return Err("return: too many arguments".into());
+        }
+
+        Ok(Self { code })
+    }
 
     async fn execute(
         &self,

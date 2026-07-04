@@ -1,29 +1,22 @@
 use crate::engine::sys;
-use clap::Parser;
 use std::{io::Write, path::PathBuf};
 
 use crate::engine::{ExecutionResult, builtins};
 
-#[derive(Parser)]
 pub(crate) struct HashCommand {
     /// Remove entries associated with the given names.
-    #[arg(short = 'd')]
     remove: bool,
 
     /// Display paths in a format usable for input.
-    #[arg(short = 'l')]
     display_as_usable_input: bool,
 
     /// The path to associate with the names.
-    #[arg(short = 'p', value_name = "PATH")]
     path_to_use: Option<PathBuf>,
 
     /// Remove all entries.
-    #[arg(short = 'r')]
     remove_all: bool,
 
     /// Display the paths associated with the names.
-    #[arg(short = 't')]
     display_paths: bool,
 
     /// Names to process.
@@ -32,6 +25,62 @@ pub(crate) struct HashCommand {
 
 impl builtins::Command for HashCommand {
     type Error = crate::engine::Error;
+
+    fn new<I>(args: I) -> Result<Self, String>
+    where
+        I: IntoIterator<Item = String>,
+    {
+        let mut command = Self {
+            remove: false,
+            display_as_usable_input: false,
+            path_to_use: None,
+            remove_all: false,
+            display_paths: false,
+            names: Vec::new(),
+        };
+        let mut args = builtins::BuiltinArgs::new(args);
+
+        while let Some(arg) = args.next_arg() {
+            if arg == "--" {
+                command.names.extend(args.rest());
+                break;
+            }
+
+            let Some(flags) = arg.strip_prefix('-') else {
+                command.names.push(arg);
+                command.names.extend(args.rest());
+                break;
+            };
+
+            if flags.is_empty() {
+                command.names.push(arg);
+                command.names.extend(args.rest());
+                break;
+            }
+
+            for (idx, flag) in flags.char_indices() {
+                match flag {
+                    'd' => command.remove = true,
+                    'l' => command.display_as_usable_input = true,
+                    'r' => command.remove_all = true,
+                    't' => command.display_paths = true,
+                    'p' => {
+                        let value_start = idx + flag.len_utf8();
+                        let value = if value_start < flags.len() {
+                            flags[value_start..].to_owned()
+                        } else {
+                            args.next_value("-p")?
+                        };
+                        command.path_to_use = Some(PathBuf::from(value));
+                        break;
+                    }
+                    _ => return Err(format!("-{flag}: invalid option")),
+                }
+            }
+        }
+
+        Ok(command)
+    }
 
     async fn execute(
         &self,

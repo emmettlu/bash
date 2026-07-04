@@ -11,12 +11,14 @@ categories = ["command-line-utilities", "development-tools"]
 anyhow = "1"
 bon = "3"
 chrono = "0"
-clap = { version = "4", features = ["derive", "wrap_help"] }
+
 compio = { version = "0", default-features = false, features = ["macros", "runtime"] }
 fancy-regex = "0"
 futures = "0"
 itertools = "0"
 log = "0"
+nanoargs = { version = "0", features = ["color"] }
+nanocolor = "0"
 nanologger = { version = "0", features = ["log"] }
 peg = "0"
 serde = { version = "1", features = ["derive"] }

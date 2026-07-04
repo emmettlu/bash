@@ -1,14 +1,19 @@
-use clap::Parser;
 use std::io::Write;
 
 use crate::engine::{ExecutionResult, builtins};
 
 /// Clear the terminal screen.
-#[derive(Parser)]
 pub(crate) struct ClearCommand {}
 
 impl builtins::Command for ClearCommand {
     type Error = crate::engine::Error;
+
+    fn new<I>(_args: I) -> Result<Self, String>
+    where
+        I: IntoIterator<Item = String>,
+    {
+        Ok(Self {})
+    }
 
     async fn execute(
         &self,

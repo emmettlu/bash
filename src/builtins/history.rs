@@ -1,47 +1,36 @@
 use crate::engine::{ExecutionResult, builtins, error, history};
-use clap::Parser;
 use std::{io::Write, path::PathBuf};
 
 /// Query or manipulate the shell's command history.
 // TODO(history): Evaluate which of the options conflict with each other.
-#[derive(Parser)]
 #[expect(clippy::option_option)]
 pub(crate) struct HistoryCommand {
     /// Clears all history.
-    #[arg(short = 'c')]
     clear_history: bool,
 
     /// Deletes the history entry at the given offset. Positive offsets are relative to the
     /// beginning of the history, while negative offsets are relative to the end of the history.
-    #[arg(short = 'd', value_name = "OFFSET")]
     delete_offset: Option<i64>,
 
     /// Appends the history from the current session to the history file.
-    #[arg(short = 'a', group = "anrw", num_args = 0..=1, value_name = "HIST_FILE")]
     append_session_to_file: Option<Option<String>>,
 
     /// Appends any remaining history from the history file to the current session.
-    #[arg(short = 'n', group = "anrw", num_args = 0..=1, value_name = "HIST_FILE")]
     append_rest_of_file_to_session: Option<Option<String>>,
 
     /// Appends the history from the history file to the current session.
-    #[arg(short = 'r', group = "anrw", num_args = 0..=1, value_name = "HIST_FILE")]
     append_file_to_session: Option<Option<String>>,
 
     /// Replaces the history file with the current session history.
-    #[arg(short = 'w', group = "anrw", num_args = 0..=1, value_name = "HIST_FILE")]
     write_session_to_file: Option<Option<String>>,
 
     /// History-expands positional arguments and displays them.
-    #[arg(short = 'p', num_args = 0.., value_name = "ARG")]
     expand_args: Option<Vec<String>>,
 
     /// Appends positional arguments as an entry in the current session.
-    #[arg(short = 's', num_args = 0.., value_name = "ARG")]
     append_args_to_session: Option<Vec<String>>,
 
     /// Arguments.
-    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     args: Vec<String>,
 }
 
@@ -52,6 +41,103 @@ struct HistoryConfig {
 
 impl builtins::Command for HistoryCommand {
     type Error = crate::engine::Error;
+
+    fn new<I>(args: I) -> Result<Self, String>
+    where
+        I: IntoIterator<Item = String>,
+    {
+        let mut command = Self {
+            clear_history: false,
+            delete_offset: None,
+            append_session_to_file: None,
+            append_rest_of_file_to_session: None,
+            append_file_to_session: None,
+            write_session_to_file: None,
+            expand_args: None,
+            append_args_to_session: None,
+            args: Vec::new(),
+        };
+        let mut args = builtins::BuiltinArgs::new(args);
+
+        while let Some(arg) = args.next_arg() {
+            if arg == "--" {
+                command.args.extend(args.rest());
+                break;
+            }
+
+            let Some(flags) = arg.strip_prefix('-') else {
+                command.args.push(arg);
+                command.args.extend(args.rest());
+                break;
+            };
+
+            if flags.is_empty() {
+                command.args.push(arg);
+                command.args.extend(args.rest());
+                break;
+            }
+
+            for (idx, flag) in flags.char_indices() {
+                let value_start = idx + flag.len_utf8();
+                let attached_value =
+                    (value_start < flags.len()).then(|| flags[value_start..].to_owned());
+
+                match flag {
+                    'c' => command.clear_history = true,
+                    'd' => {
+                        let value = attached_value.unwrap_or_default();
+                        let value = if value.is_empty() {
+                            args.next_value("-d")?
+                        } else {
+                            value
+                        };
+                        command.delete_offset = Some(
+                            value
+                                .parse()
+                                .map_err(|_| format!("-d: invalid offset: {value}"))?,
+                        );
+                        break;
+                    }
+                    'a' => {
+                        command.append_session_to_file =
+                            Some(take_optional_history_file(&mut args));
+                    }
+                    'n' => {
+                        command.append_rest_of_file_to_session =
+                            Some(take_optional_history_file(&mut args));
+                    }
+                    'r' => {
+                        command.append_file_to_session =
+                            Some(take_optional_history_file(&mut args));
+                    }
+                    'w' => {
+                        command.write_session_to_file = Some(take_optional_history_file(&mut args));
+                    }
+                    'p' => {
+                        let mut values = Vec::new();
+                        if let Some(value) = attached_value {
+                            values.push(value);
+                        }
+                        values.extend(args.rest());
+                        command.expand_args = Some(values);
+                        return Ok(command);
+                    }
+                    's' => {
+                        let mut values = Vec::new();
+                        if let Some(value) = attached_value {
+                            values.push(value);
+                        }
+                        values.extend(args.rest());
+                        command.append_args_to_session = Some(values);
+                        return Ok(command);
+                    }
+                    _ => return Err(format!("-{flag}: invalid option")),
+                }
+            }
+        }
+
+        Ok(command)
+    }
 
     async fn execute(
         &self,
@@ -221,6 +307,17 @@ fn get_effective_history_file_path(
     )
 }
 
+fn take_optional_history_file(args: &mut builtins::BuiltinArgs) -> Option<String> {
+    if args
+        .peek()
+        .is_some_and(|arg| arg == "-" || !arg.starts_with('-'))
+    {
+        args.next_arg()
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -229,13 +326,18 @@ mod tests {
 
     #[test]
     fn test_parse_dash_a() -> Result<()> {
-        let cmd = HistoryCommand::try_parse_from(["history", "5"])?;
+        let cmd = <HistoryCommand as builtins::Command>::new(["history", "5"].map(String::from))
+            .map_err(anyhow::Error::msg)?;
         assert_matches!(cmd.append_session_to_file, None);
 
-        let cmd = HistoryCommand::try_parse_from(["history", "-a"])?;
+        let cmd = <HistoryCommand as builtins::Command>::new(["history", "-a"].map(String::from))
+            .map_err(anyhow::Error::msg)?;
         assert_matches!(cmd.append_session_to_file, Some(None));
 
-        let cmd = HistoryCommand::try_parse_from(["history", "-a", "token"])?;
+        let cmd = <HistoryCommand as builtins::Command>::new(
+            ["history", "-a", "token"].map(String::from),
+        )
+        .map_err(anyhow::Error::msg)?;
         assert_eq!(
             cmd.append_session_to_file,
             Some(Some(String::from("token")))

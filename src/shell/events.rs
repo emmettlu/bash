@@ -1,59 +1,70 @@
 //! Facilities for configuring logging events in the shell.
 
-use std::{collections::HashSet, fmt::Display};
+use std::{collections::HashSet, fmt::Display, str::FromStr};
 
-/// Type of event to log.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, clap::ValueEnum)]
+/// 要记录的事件类型。
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum TraceEvent {
-    /// Traces parsing and evaluation of arithmetic expressions.
-    #[clap(name = "arithmetic")]
+    /// 跟踪算术表达式解析和求值。
     Arithmetic,
-    /// Traces command execution.
-    #[clap(name = "commands")]
+    /// 跟踪命令执行。
     Commands,
-    /// Traces command completion generation.
-    #[clap(name = "complete")]
+    /// 跟踪命令补全生成。
     Complete,
-    /// Traces word expansion.
-    #[clap(name = "expand")]
+    /// 跟踪单词展开。
     Expand,
-    /// Traces functions.
-    #[clap(name = "functions")]
+    /// 跟踪函数。
     Functions,
-    /// Traces input controls.
-    #[clap(name = "input")]
+    /// 跟踪输入控制。
     Input,
-    /// Traces job management.
-    #[clap(name = "jobs")]
+    /// 跟踪作业管理。
     Jobs,
-    /// Traces the process of parsing tokens into an abstract syntax tree.
-    #[clap(name = "parse")]
+    /// 跟踪 token 到 AST 的解析过程。
     Parse,
-    /// Traces pattern matching.
-    #[clap(name = "pattern")]
+    /// 跟踪模式匹配。
     Pattern,
-    /// Traces the process of tokenizing input text.
-    #[clap(name = "tokenize")]
+    /// 跟踪输入文本 token 化过程。
     Tokenize,
-    /// Traces usage of unimplemented functionality.
-    #[clap(name = "unimplemented", alias = "unimp")]
+    /// 跟踪未实现功能的使用。
     Unimplemented,
 }
 
 impl Display for TraceEvent {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Arithmetic => write!(f, "arithmetic"),
-            Self::Commands => write!(f, "commands"),
-            Self::Complete => write!(f, "complete"),
-            Self::Expand => write!(f, "expand"),
-            Self::Functions => write!(f, "functions"),
-            Self::Input => write!(f, "input"),
-            Self::Jobs => write!(f, "jobs"),
-            Self::Parse => write!(f, "parse"),
-            Self::Pattern => write!(f, "pattern"),
-            Self::Tokenize => write!(f, "tokenize"),
-            Self::Unimplemented => write!(f, "unimplemented"),
+        let value = match self {
+            Self::Arithmetic => "arithmetic",
+            Self::Commands => "commands",
+            Self::Complete => "complete",
+            Self::Expand => "expand",
+            Self::Functions => "functions",
+            Self::Input => "input",
+            Self::Jobs => "jobs",
+            Self::Parse => "parse",
+            Self::Pattern => "pattern",
+            Self::Tokenize => "tokenize",
+            Self::Unimplemented => "unimplemented",
+        };
+        f.write_str(value)
+    }
+}
+
+impl FromStr for TraceEvent {
+    type Err = String;
+
+    fn from_str(value: &str) -> Result<Self, Self::Err> {
+        match value {
+            "arithmetic" => Ok(Self::Arithmetic),
+            "commands" => Ok(Self::Commands),
+            "complete" => Ok(Self::Complete),
+            "expand" => Ok(Self::Expand),
+            "functions" => Ok(Self::Functions),
+            "input" => Ok(Self::Input),
+            "jobs" => Ok(Self::Jobs),
+            "parse" => Ok(Self::Parse),
+            "pattern" => Ok(Self::Pattern),
+            "tokenize" => Ok(Self::Tokenize),
+            "unimplemented" | "unimp" => Ok(Self::Unimplemented),
+            _ => Err(format!("unknown trace event '{value}'")),
         }
     }
 }

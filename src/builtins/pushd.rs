@@ -1,12 +1,8 @@
-use clap::Parser;
-
 use crate::engine::{ExecutionResult, builtins};
 
 /// Push a path onto the current directory stack.
-#[derive(Parser)]
 pub(crate) struct PushdCommand {
     /// Push the path without changing the current working directory.
-    #[clap(short = 'n')]
     no_directory_change: bool,
 
     /// Directory to push on the directory stack.
@@ -17,6 +13,34 @@ pub(crate) struct PushdCommand {
 
 impl builtins::Command for PushdCommand {
     type Error = crate::engine::Error;
+
+    fn new<I>(args: I) -> Result<Self, String>
+    where
+        I: IntoIterator<Item = String>,
+    {
+        let mut no_directory_change = false;
+        let mut args = builtins::BuiltinArgs::new(args);
+        let positionals = args.parse_flags(|flag| match flag {
+            'n' => {
+                no_directory_change = true;
+                Ok(true)
+            }
+            _ => Err(format!("-{flag}: invalid option")),
+        })?;
+
+        let [dir] = positionals.as_slice() else {
+            return Err(if positionals.is_empty() {
+                String::from("missing directory")
+            } else {
+                String::from("too many arguments")
+            });
+        };
+
+        Ok(Self {
+            no_directory_change,
+            dir: dir.clone(),
+        })
+    }
 
     async fn execute(
         &self,

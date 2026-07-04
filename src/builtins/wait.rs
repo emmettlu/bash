@@ -1,22 +1,17 @@
-use clap::Parser;
 use std::io::Write;
 
 use crate::engine::{ExecutionResult, builtins, error};
 
 /// Wait for jobs to terminate.
-#[derive(Parser)]
 pub(crate) struct WaitCommand {
     /// Wait for specified job to terminate (instead of change status).
-    #[arg(short = 'f')]
     wait_for_terminate: bool,
 
     /// Wait for a single job to change status; if jobs are specified, waits for
     /// the first to change status, and otherwise waits for the next change.
-    #[arg(short = 'n')]
     wait_for_first_or_next: bool,
 
     /// Name of variable to receive the job ID of the job whose status is indicated.
-    #[arg(short = 'p', value_name = "VAR_NAME")]
     variable_to_receive_id: Option<String>,
 
     /// Process IDs or job specs to wait for.
@@ -25,6 +20,21 @@ pub(crate) struct WaitCommand {
 
 impl builtins::Command for WaitCommand {
     type Error = crate::engine::Error;
+
+    fn new<I>(args: I) -> Result<Self, String>
+    where
+        I: IntoIterator<Item = String>,
+    {
+        let mut command = Self {
+            wait_for_terminate: false,
+            wait_for_first_or_next: false,
+            variable_to_receive_id: None,
+            ids: Vec::new(),
+        };
+        let mut args = builtins::BuiltinArgs::new(args);
+        command.ids = parse_wait_args(&mut args, &mut command)?;
+        Ok(command)
+    }
 
     async fn execute(
         &self,
@@ -76,4 +86,56 @@ impl builtins::Command for WaitCommand {
 
         Ok(result)
     }
+}
+
+fn parse_wait_args(
+    args: &mut builtins::BuiltinArgs,
+    command: &mut WaitCommand,
+) -> Result<Vec<String>, String> {
+    let mut positionals = Vec::new();
+    while let Some(arg) = args.next_arg() {
+        if arg == "--" {
+            positionals.extend(collect_remaining(args));
+            break;
+        }
+
+        let Some(flags) = arg.strip_prefix('-') else {
+            positionals.push(arg);
+            positionals.extend(collect_remaining(args));
+            break;
+        };
+
+        if flags.is_empty() {
+            positionals.push(arg);
+            positionals.extend(collect_remaining(args));
+            break;
+        }
+
+        for (idx, flag) in flags.char_indices() {
+            let rest_start = idx + flag.len_utf8();
+            match flag {
+                'f' => command.wait_for_terminate = true,
+                'n' => command.wait_for_first_or_next = true,
+                'p' => {
+                    let value = if rest_start < flags.len() {
+                        flags[rest_start..].to_owned()
+                    } else {
+                        args.next_value("wait: -p")?
+                    };
+                    command.variable_to_receive_id = Some(value);
+                    break;
+                }
+                _ => return Err(format!("wait: -{flag}: invalid option")),
+            }
+        }
+    }
+    Ok(positionals)
+}
+
+fn collect_remaining(args: &mut builtins::BuiltinArgs) -> Vec<String> {
+    let mut rest = Vec::new();
+    while let Some(arg) = args.next_arg() {
+        rest.push(arg);
+    }
+    rest
 }

@@ -1,14 +1,23 @@
-use clap::Parser;
 use std::io::Write;
 
 use crate::engine::{ExecutionResult, builtins, timing};
 
 /// Report on usage time.
-#[derive(Parser)]
 pub(crate) struct TimesCommand {}
 
 impl builtins::Command for TimesCommand {
     type Error = crate::engine::Error;
+
+    fn new<I>(args: I) -> Result<Self, String>
+    where
+        I: IntoIterator<Item = String>,
+    {
+        let mut args = builtins::BuiltinArgs::new(args);
+        if args.next_arg().is_some() {
+            return Err("times: too many arguments".into());
+        }
+        Ok(Self {})
+    }
 
     async fn execute(
         &self,

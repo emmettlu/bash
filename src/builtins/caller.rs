@@ -1,9 +1,7 @@
 use crate::engine::{ExecutionResult, builtins, callstack};
-use clap::Parser;
 use std::io::Write;
 
 /// Return the context of the current subroutine call.
-#[derive(Parser)]
 pub(crate) struct CallerCommand {
     /// The number of call frames to go back.
     expr: Option<usize>,
@@ -11,6 +9,23 @@ pub(crate) struct CallerCommand {
 
 impl builtins::Command for CallerCommand {
     type Error = crate::engine::Error;
+
+    fn new<I>(args: I) -> Result<Self, String>
+    where
+        I: IntoIterator<Item = String>,
+    {
+        let args = builtins::BuiltinArgs::new(args).rest();
+        match args.as_slice() {
+            [] => Ok(Self { expr: None }),
+            [expr] => Ok(Self {
+                expr: Some(
+                    expr.parse()
+                        .map_err(|_| format!("caller: {expr}: numeric argument required"))?,
+                ),
+            }),
+            _ => Err("caller: too many arguments".into()),
+        }
+    }
 
     async fn execute(
         &self,

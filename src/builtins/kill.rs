@@ -1,22 +1,17 @@
-use clap::Parser;
 use std::io::Write;
 use std::process::Command;
 
 use crate::engine::{ExecutionResult, builtins};
 
 /// Signal a job or process.
-#[derive(Parser)]
 pub(crate) struct KillCommand {
     /// Name of the signal to send.
-    #[arg(short = 's', value_name = "SIG_NAME")]
     signal_name: Option<String>,
 
     /// Number of the signal to send.
-    #[arg(short = 'n', value_name = "SIG_NUM")]
     signal_number: Option<usize>,
 
     /// List signal names.
-    #[arg(short = 'l')]
     list_signals: bool,
 
     /// PIDs to terminate.
@@ -25,6 +20,71 @@ pub(crate) struct KillCommand {
 
 impl builtins::Command for KillCommand {
     type Error = crate::engine::Error;
+
+    fn new<I>(args: I) -> Result<Self, String>
+    where
+        I: IntoIterator<Item = String>,
+    {
+        let mut command = Self {
+            signal_name: None,
+            signal_number: None,
+            list_signals: false,
+            args: Vec::new(),
+        };
+        let mut args = builtins::BuiltinArgs::new(args);
+
+        while let Some(arg) = args.next_arg() {
+            if arg == "--" {
+                command.args.extend(args.rest());
+                break;
+            }
+
+            let Some(flags) = arg.strip_prefix('-') else {
+                command.args.push(arg);
+                command.args.extend(args.rest());
+                break;
+            };
+
+            if flags.is_empty() {
+                command.args.push(arg);
+                command.args.extend(args.rest());
+                break;
+            }
+
+            for (idx, flag) in flags.char_indices() {
+                match flag {
+                    'l' => command.list_signals = true,
+                    's' => {
+                        let value_start = idx + flag.len_utf8();
+                        let value = if value_start < flags.len() {
+                            flags[value_start..].to_owned()
+                        } else {
+                            args.next_value("-s")?
+                        };
+                        command.signal_name = Some(value);
+                        break;
+                    }
+                    'n' => {
+                        let value_start = idx + flag.len_utf8();
+                        let value = if value_start < flags.len() {
+                            flags[value_start..].to_owned()
+                        } else {
+                            args.next_value("-n")?
+                        };
+                        command.signal_number = Some(
+                            value
+                                .parse()
+                                .map_err(|_| format!("-n: invalid signal number: {value}"))?,
+                        );
+                        break;
+                    }
+                    _ => return Err(format!("-{flag}: invalid option")),
+                }
+            }
+        }
+
+        Ok(command)
+    }
 
     async fn execute(
         &self,

@@ -1,25 +1,22 @@
-use clap::Parser;
 use std::io::Write;
 
 use crate::engine::{ErrorKind, ExecutionParameters, ExecutionResult, Shell, builtins, tests};
 
 /// Evaluate test expression.
-#[derive(Parser)]
-#[clap(disable_help_flag = true, disable_version_flag = true)]
 pub(crate) struct TestCommand {
-    #[clap(allow_hyphen_values = true)]
     args: Vec<String>,
 }
 
 impl builtins::Command for TestCommand {
     type Error = crate::engine::Error;
 
-    fn arg_parsing() -> builtins::ArgParsing {
-        builtins::ArgParsing::PreserveDoubleDashRest
-    }
-
-    fn append_rest_args(&mut self, rest: Vec<String>) {
-        self.args.extend(rest);
+    fn new<I>(args: I) -> Result<Self, String>
+    where
+        I: IntoIterator<Item = String>,
+    {
+        Ok(Self {
+            args: builtins::BuiltinArgs::new(args).rest(),
+        })
     }
 
     async fn execute(

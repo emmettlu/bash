@@ -1,17 +1,13 @@
 use crate::engine::{ExecutionResult, builtins};
-use clap::Parser;
 use itertools::Itertools;
 use std::io::Write;
 
 /// Display command help.
-#[derive(Parser)]
 pub(crate) struct HelpCommand {
     /// Display a short description for the commands.
-    #[arg(short = 'd')]
     short_description: bool,
 
     /// Display a short usage summary for the commands.
-    #[arg(short = 's')]
     short_usage: bool,
 
     /// Patterns of topics to display help for.
@@ -20,6 +16,32 @@ pub(crate) struct HelpCommand {
 
 impl builtins::Command for HelpCommand {
     type Error = crate::engine::Error;
+
+    fn new<I>(args: I) -> Result<Self, String>
+    where
+        I: IntoIterator<Item = String>,
+    {
+        let mut short_description = false;
+        let mut short_usage = false;
+        let mut args = builtins::BuiltinArgs::new(args);
+        let topic_patterns = args.parse_flags(|flag| match flag {
+            'd' => {
+                short_description = true;
+                Ok(true)
+            }
+            's' => {
+                short_usage = true;
+                Ok(true)
+            }
+            _ => Err(format!("-{flag}: invalid option")),
+        })?;
+
+        Ok(Self {
+            short_description,
+            short_usage,
+            topic_patterns,
+        })
+    }
 
     async fn execute(
         &self,

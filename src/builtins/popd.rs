@@ -1,12 +1,8 @@
-use clap::Parser;
-
 use crate::engine::{ExecutionResult, builtins};
 
 /// Pop a path from the current directory stack.
-#[derive(Parser)]
 pub(crate) struct PopdCommand {
     /// Pop the path without changing the current working directory.
-    #[clap(short = 'n')]
     no_directory_change: bool,
     //
     // TODO(popd): implement +N and -N
@@ -14,6 +10,29 @@ pub(crate) struct PopdCommand {
 
 impl builtins::Command for PopdCommand {
     type Error = crate::builtins::dirs::DirError;
+
+    fn new<I>(args: I) -> Result<Self, String>
+    where
+        I: IntoIterator<Item = String>,
+    {
+        let mut no_directory_change = false;
+        let mut args = builtins::BuiltinArgs::new(args);
+        let positionals = args.parse_flags(|flag| match flag {
+            'n' => {
+                no_directory_change = true;
+                Ok(true)
+            }
+            _ => Err(format!("-{flag}: invalid option")),
+        })?;
+
+        if !positionals.is_empty() {
+            return Err(String::from("too many arguments"));
+        }
+
+        Ok(Self {
+            no_directory_change,
+        })
+    }
 
     async fn execute(
         &self,

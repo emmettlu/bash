@@ -1,11 +1,8 @@
 use std::{collections::HashMap, io::Write};
 
-use clap::Parser;
-
 use crate::engine::{ExecutionResult, builtins, env, variables};
 
 /// Parse command options.
-#[derive(Parser)]
 pub(crate) struct GetOptsCommand {
     /// Specification for options
     options_string: String,
@@ -14,7 +11,6 @@ pub(crate) struct GetOptsCommand {
     variable_name: String,
 
     /// Arguments to parse
-    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     args: Vec<String>,
 }
 
@@ -83,12 +79,23 @@ fn parse_option_spec(spec: &str) -> OptionSpec {
 impl builtins::Command for GetOptsCommand {
     type Error = crate::engine::Error;
 
-    fn arg_parsing() -> builtins::ArgParsing {
-        builtins::ArgParsing::PreserveDoubleDashRest
-    }
+    fn new<I>(args: I) -> Result<Self, String>
+    where
+        I: IntoIterator<Item = String>,
+    {
+        let mut args = builtins::BuiltinArgs::new(args);
+        let options_string = args
+            .next_arg()
+            .ok_or_else(|| String::from("missing options string"))?;
+        let variable_name = args
+            .next_arg()
+            .ok_or_else(|| String::from("missing variable name"))?;
 
-    fn append_rest_args(&mut self, rest: Vec<String>) {
-        self.args.extend(rest);
+        Ok(Self {
+            options_string,
+            variable_name,
+            args: args.rest(),
+        })
     }
 
     async fn execute(

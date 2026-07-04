@@ -1,4 +1,3 @@
-use clap::Parser;
 use itertools::Itertools;
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
@@ -23,53 +22,41 @@ const DEFAULT_DELIMITER: char = '\n';
 const NUL_DELIMITER: char = '\0';
 
 /// Parse standard input.
-#[derive(Parser)]
 pub(crate) struct ReadCommand {
     /// Optionally, name of an array variable to receive read words
     /// of input.
-    #[clap(short = 'a', value_name = "VAR_NAME")]
     array_variable: Option<String>,
 
     /// Optionally, a delimiter to use other than a newline character.
-    #[clap(short = 'd')]
     delimiter: Option<String>,
 
     /// Use readline-like input.
-    #[clap(short = 'e')]
     use_readline: bool,
 
     /// Provide text to use as initial input for readline.
-    #[clap(short = 'i', value_name = "STR")]
     initial_text: Option<String>,
 
     /// Read only the first N characters or until a specified
     /// delimiter is reached, whichever happens first.
-    #[clap(short = 'n', value_name = "COUNT")]
     return_after_n_chars: Option<usize>,
 
     /// Read exactly N characters, ignoring any specified delimiter.
-    #[clap(short = 'N', value_name = "COUNT")]
     return_after_n_chars_no_delimiter: Option<usize>,
 
     /// Prompt to display before reading.
-    #[clap(short = 'p')]
     prompt: Option<String>,
 
     /// Read input in raw mode; no escape sequences.
-    #[clap(short = 'r')]
     raw_mode: bool,
 
     /// Do not echo input.
-    #[clap(short = 's')]
     silent: bool,
 
     /// Specify timeout in seconds; fail if the timeout elapses before
     /// input is completed.
-    #[clap(short = 't', value_name = "SECONDS", allow_hyphen_values = true)]
     timeout_in_seconds: Option<f64>,
 
     /// File descriptor to read from instead of stdin.
-    #[clap(short = 'u', name = "FD")]
     fd_num_to_read: Option<u8>,
 
     /// Optionally, names of variables to receive read input.
@@ -78,6 +65,104 @@ pub(crate) struct ReadCommand {
 
 impl builtins::Command for ReadCommand {
     type Error = crate::engine::Error;
+
+    fn new<I>(args: I) -> Result<Self, String>
+    where
+        I: IntoIterator<Item = String>,
+    {
+        let mut command = Self {
+            array_variable: None,
+            delimiter: None,
+            use_readline: false,
+            initial_text: None,
+            return_after_n_chars: None,
+            return_after_n_chars_no_delimiter: None,
+            prompt: None,
+            raw_mode: false,
+            silent: false,
+            timeout_in_seconds: None,
+            fd_num_to_read: None,
+            variable_names: Vec::new(),
+        };
+        let mut args = builtins::BuiltinArgs::new(args);
+
+        while let Some(arg) = args.next_arg() {
+            if arg == "--" {
+                command.variable_names.extend(args.rest());
+                break;
+            }
+
+            let Some(flags) = arg.strip_prefix('-') else {
+                command.variable_names.push(arg);
+                command.variable_names.extend(args.rest());
+                break;
+            };
+
+            if flags.is_empty() {
+                command.variable_names.push(arg);
+                command.variable_names.extend(args.rest());
+                break;
+            }
+
+            for (idx, flag) in flags.char_indices() {
+                match flag {
+                    'e' => command.use_readline = true,
+                    'r' => command.raw_mode = true,
+                    's' => command.silent = true,
+                    'a' => {
+                        command.array_variable =
+                            Some(option_value(flags, idx, flag, &mut args, "-a")?);
+                        break;
+                    }
+                    'd' => {
+                        command.delimiter = Some(option_value(flags, idx, flag, &mut args, "-d")?);
+                        break;
+                    }
+                    'i' => {
+                        command.initial_text =
+                            Some(option_value(flags, idx, flag, &mut args, "-i")?);
+                        break;
+                    }
+                    'n' => {
+                        let value = option_value(flags, idx, flag, &mut args, "-n")?;
+                        command.return_after_n_chars = Some(parse_usize_option("-n", &value)?);
+                        break;
+                    }
+                    'N' => {
+                        let value = option_value(flags, idx, flag, &mut args, "-N")?;
+                        command.return_after_n_chars_no_delimiter =
+                            Some(parse_usize_option("-N", &value)?);
+                        break;
+                    }
+                    'p' => {
+                        command.prompt = Some(option_value(flags, idx, flag, &mut args, "-p")?);
+                        break;
+                    }
+                    't' => {
+                        let value = option_value(flags, idx, flag, &mut args, "-t")?;
+                        command.timeout_in_seconds = Some(
+                            value
+                                .parse()
+                                .map_err(|_| format!("-t: invalid timeout: {value}"))?,
+                        );
+                        break;
+                    }
+                    'u' => {
+                        let value = option_value(flags, idx, flag, &mut args, "-u")?;
+                        command.fd_num_to_read = Some(
+                            value
+                                .parse()
+                                .map_err(|_| format!("-u: invalid file descriptor: {value}"))?,
+                        );
+                        break;
+                    }
+                    _ => return Err(format!("-{flag}: invalid option")),
+                }
+            }
+        }
+
+        Ok(command)
+    }
 
     async fn execute(
         &self,
@@ -152,6 +237,27 @@ impl builtins::Command for ReadCommand {
 
         Ok(result)
     }
+}
+
+fn option_value(
+    flags: &str,
+    idx: usize,
+    flag: char,
+    args: &mut builtins::BuiltinArgs,
+    option: &str,
+) -> Result<String, String> {
+    let value_start = idx + flag.len_utf8();
+    if value_start < flags.len() {
+        Ok(flags[value_start..].to_owned())
+    } else {
+        args.next_value(option)
+    }
+}
+
+fn parse_usize_option(option: &str, value: &str) -> Result<usize, String> {
+    value
+        .parse()
+        .map_err(|_| format!("{option}: invalid count: {value}"))
 }
 
 /// Assigns read input to shell variables based on the specified options.

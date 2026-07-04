@@ -1,38 +1,71 @@
-use clap::Parser;
 use std::io::Write;
 
 use crate::engine::{ExecutionResult, builtins, escape};
 
 /// Echo text to standard output.
-#[derive(Parser)]
-#[clap(disable_help_flag = true, disable_version_flag = true)]
 pub(crate) struct EchoCommand {
     /// Suppress the trailing newline from the output.
-    #[arg(short = 'n')]
     no_trailing_newline: bool,
 
     /// Interpret backslash escapes in the provided text.
-    #[arg(short = 'e')]
     interpret_backslash_escapes: bool,
 
     /// Do not interpret backslash escapes in the provided text.
-    #[arg(short = 'E')]
     no_interpret_backslash_escapes: bool,
 
     /// Tokens to echo to standard output.
-    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     args: Vec<String>,
 }
 
 impl builtins::Command for EchoCommand {
     type Error = crate::engine::Error;
 
-    fn arg_parsing() -> builtins::ArgParsing {
-        builtins::ArgParsing::PreserveDoubleDashRest
-    }
+    fn new<I>(args: I) -> Result<Self, String>
+    where
+        I: IntoIterator<Item = String>,
+    {
+        let (option_args, double_dash_rest) = builtins::split_at_double_dash(args);
+        let args = builtins::BuiltinArgs::new(option_args).rest();
+        let mut command = Self {
+            no_trailing_newline: false,
+            interpret_backslash_escapes: false,
+            no_interpret_backslash_escapes: false,
+            args: Vec::new(),
+        };
 
-    fn append_rest_args(&mut self, rest: Vec<String>) {
-        self.args.extend(rest);
+        let mut first_arg = args.len();
+        for (index, arg) in args.iter().enumerate() {
+            let Some(flags) = arg.strip_prefix('-') else {
+                first_arg = index;
+                break;
+            };
+            if flags.is_empty() || !flags.chars().all(|flag| matches!(flag, 'n' | 'e' | 'E')) {
+                first_arg = index;
+                break;
+            }
+
+            for flag in flags.chars() {
+                match flag {
+                    'n' => command.no_trailing_newline = true,
+                    'e' => {
+                        command.interpret_backslash_escapes = true;
+                        command.no_interpret_backslash_escapes = false;
+                    }
+                    'E' => {
+                        command.interpret_backslash_escapes = false;
+                        command.no_interpret_backslash_escapes = true;
+                    }
+                    _ => unreachable!(),
+                }
+            }
+        }
+
+        command.args.extend(args[first_arg..].iter().cloned());
+        if let Some(rest) = double_dash_rest {
+            command.args.extend(rest);
+        }
+
+        Ok(command)
     }
 
     async fn execute(
@@ -42,7 +75,7 @@ impl builtins::Command for EchoCommand {
         let mut trailing_newline = !self.no_trailing_newline;
         let mut stdout = context.stdout();
 
-        if self.interpret_backslash_escapes {
+        if self.interpret_backslash_escapes && !self.no_interpret_backslash_escapes {
             let mut s = String::new();
             for (i, arg) in self.args.iter().enumerate() {
                 if i > 0 {

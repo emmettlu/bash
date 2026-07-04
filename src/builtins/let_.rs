@@ -1,18 +1,23 @@
-use clap::Parser;
 use std::io::Write;
 
 use crate::engine::{ExecutionResult, arithmetic::Evaluatable, builtins};
 
 /// Evaluate arithmetic expressions.
-#[derive(Parser)]
 pub(crate) struct LetCommand {
     /// Arithmetic expressions to evaluate.
-    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     exprs: Vec<String>,
 }
 
 impl builtins::Command for LetCommand {
     type Error = crate::engine::Error;
+
+    fn new<I>(args: I) -> Result<Self, String>
+    where
+        I: IntoIterator<Item = String>,
+    {
+        let args = builtins::BuiltinArgs::new(args);
+        Ok(Self { exprs: args.rest() })
+    }
 
     async fn execute(
         &self,

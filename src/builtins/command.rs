@@ -1,25 +1,20 @@
-use clap::Parser;
 use std::{io::Write, path::PathBuf};
 
 use crate::engine::{ExecutionResult, builtins, commands, sys};
 
 /// Directly invokes an external command, without going through typical search order.
-#[derive(Default, Parser)]
+#[derive(Default)]
 pub(crate) struct CommandCommand {
     /// Use default PATH value.
-    #[arg(short = 'p')]
     pub use_default_path: bool,
 
     /// Display a short description of the command.
-    #[arg(short = 'v')]
     pub print_description: bool,
 
     /// Display a more verbose description of the command.
-    #[arg(short = 'V')]
     pub print_verbose_description: bool,
 
     /// Command and arguments.
-    #[arg(trailing_var_arg = true, allow_hyphen_values = true)]
     pub command_and_args: Vec<String>,
 }
 
@@ -31,6 +26,30 @@ impl CommandCommand {
 
 impl builtins::Command for CommandCommand {
     type Error = crate::engine::Error;
+
+    fn new<I>(args: I) -> Result<Self, String>
+    where
+        I: IntoIterator<Item = String>,
+    {
+        let mut args = builtins::BuiltinArgs::new(args);
+        let mut command = Self::default();
+        command.command_and_args = args.parse_flags(|flag| match flag {
+            'p' => {
+                command.use_default_path = true;
+                Ok(true)
+            }
+            'v' => {
+                command.print_description = true;
+                Ok(true)
+            }
+            'V' => {
+                command.print_verbose_description = true;
+                Ok(true)
+            }
+            _ => Err(format!("command: -{flag}: invalid option")),
+        })?;
+        Ok(command)
+    }
 
     async fn execute(
         &self,

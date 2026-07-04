@@ -7,7 +7,6 @@ use crate::shell::args::InputBackendType;
 use crate::shell::error_formatter;
 use crate::shell::events;
 use crate::shell::productinfo;
-use clap::CommandFactory;
 use std::path::Path;
 use std::sync::{Arc, LazyLock, Mutex as StdMutex};
 
@@ -18,99 +17,6 @@ static TRACE_EVENT_CONFIG: LazyLock<Arc<StdMutex<Option<events::TraceEventConfig
     LazyLock::new(|| Arc::new(StdMutex::new(None)));
 
 type BashShell = crate::engine::Shell;
-
-// WARN: this implementation shadows `clap::Parser::parse_from` one so it must be defined
-// after the `use clap::Parser`
-impl CommandLineArgs {
-    // Work around clap's limitation handling `--` like a regular value
-    // TODO(cmdline): We can safely remove this `impl` after the issue is resolved
-    // https://github.com/clap-rs/clap/issues/5055
-    // This function takes precedence over [`clap::Parser::parse_from`]
-    pub(crate) fn try_parse_from(
-        itr: impl IntoIterator<Item = String>,
-    ) -> Result<Self, clap::Error> {
-        let mut args: Vec<String> = itr.into_iter().collect();
-
-        // In bash, `-c` treats `--` as an option terminator and takes its
-        // command string from the first argument *after* `--`. (Other
-        // value-taking flags like `-o` and `-O` instead consume `--` as their
-        // literal value in bash, rejecting it as an invalid option name.)
-        //
-        // Remove the `--` so that `-c` naturally consumes the next token as its
-        // value via clap. Other value-taking flags are unaffected: for them
-        // try_parse_known splits at `--` before clap sees it, so they still
-        // produce an error for invocations like `-o --`/`-O --` (via a missing
-        // value rather than an invalid option name). In both cases, we
-        // intentionally do not treat `--` as an option terminator for those
-        // flags.
-        if let Some(dd_idx) = args.iter().position(|a| a == "--")
-            && let Some(flag_idx) = dd_idx
-                .checked_sub(1)
-                .filter(|&i| Self::has_pending_c_flag(&args[i]))
-        {
-            // Remove the option-terminating `--`.
-            args.remove(dd_idx);
-
-            // If the command value (now at dd_idx) is itself `--`, merge it
-            // into the flag as an attached value (e.g., "-c" + "--" → "-c--").
-            // Clap parses `-c--` as `-c` with value `"--"` (standard POSIX
-            // short-option-with-attached-value syntax). This prevents
-            // try_parse_known from splitting at it again.
-            if args.get(dd_idx).map(String::as_str) == Some("--") {
-                let value = args.remove(dd_idx);
-                args[flag_idx].push_str(&value);
-            }
-        }
-
-        let (mut this, script_args) = crate::engine::builtins::try_parse_known::<Self>(args)?;
-
-        // Collect any args from after `--` (handled by try_parse_known) into
-        // script_args, which become positional parameters ($0, $1, ...).
-        if let Some(args) = script_args {
-            this.script_args.extend(args);
-        }
-
-        Ok(this)
-    }
-
-    /// Returns true if `arg` is `-c` or a combined short-flag group ending in
-    /// `c` (like `-ec`) where all preceding characters are boolean flags.
-    ///
-    /// This specifically targets `-c` because it is the only short flag with
-    /// special `--` option-terminator behavior in bash. Other value-taking flags
-    /// (`-o`, `-O`) consume `--` as their literal value instead.
-    ///
-    /// Uses clap's argument definitions to validate preceding flags, avoiding
-    /// a hardcoded list of boolean flag characters.
-    fn has_pending_c_flag(arg: &str) -> bool {
-        // Must be a short flag group ending in 'c': "-c", "-ec", "-xec", etc.
-        let Some(flags) = arg.strip_prefix('-') else {
-            return false;
-        };
-        let Some(preceding) = flags.strip_suffix('c') else {
-            return false;
-        };
-        // Reject long-option-like args (e.g., "--c").
-        if preceding.starts_with('-') {
-            return false;
-        }
-
-        // For "-c" alone, preceding is empty and the check below is vacuously
-        // true. For combined flags like `-ec`, verify all chars before the
-        // trailing `c` are boolean flags. If any preceding char takes a value
-        // (like `o`), then `c` is consumed as that flag's value, not as `-c`.
-        let cmd = Self::command();
-        preceding.chars().all(|ch| {
-            cmd.get_arguments().any(|a| {
-                a.get_short() == Some(ch)
-                    && !matches!(
-                        a.get_action(),
-                        clap::ArgAction::Set | clap::ArgAction::Append
-                    )
-            })
-        })
-    }
-}
 
 pub(crate) const DEFAULT_ENABLE_HIGHLIGHTING: bool = false;
 
@@ -608,10 +514,8 @@ mod tests {
         // Unlike -c, bash's -o consumes -- as its literal value (invalid option
         // name), not as an option terminator. Verify we don't transform it.
         let result = CommandLineArgs::try_parse_from(args(&["bash", "-o", "--"]));
-        // Here, try_parse_from / try_parse_known splits at --, so -o ends up
-        // without a value and parsing correctly fails. The key assertion is
-        // that we MUST NOT reinterpret -- as an option terminator for -o and
-        // then take any later argument as its value.
+        // 这里 -o 不能把 -- 当作 -c 那样的分隔符, 因此缺少值并解析失败。
+        // 关键断言是不能把 -- 后面的参数重新解释成 -o 的值。
         assert!(result.is_err());
     }
 
@@ -640,25 +544,11 @@ mod tests {
 
     #[test]
     fn parse_c_with_double_dash_and_later_double_dash() -> Result<()> {
-        // After removing the first --, -c gets "echo". The second -- is
-        // handled by try_parse_known and appears in script_args.
+        // 第一个 -- 作为 -c 的特殊分隔符被消费, 第二个 -- 保留在 script_args 中。
         let parsed_args =
             CommandLineArgs::try_parse_from(args(&["bash", "-c", "--", "echo", "--", "more"]))?;
         assert_eq!(parsed_args.command, Some("echo".to_string()));
         assert_eq!(parsed_args.script_args, ["--", "more"]);
         Ok(())
-    }
-
-    #[test]
-    fn has_pending_c_flag_edge_cases() {
-        // Direct tests for the detection function.
-        assert!(CommandLineArgs::has_pending_c_flag("-c"));
-        assert!(CommandLineArgs::has_pending_c_flag("-ec"));
-        assert!(!CommandLineArgs::has_pending_c_flag("-C")); // uppercase, different flag
-        assert!(!CommandLineArgs::has_pending_c_flag("-oc")); // -o takes a value
-        assert!(!CommandLineArgs::has_pending_c_flag("--c")); // long-option-like
-        assert!(!CommandLineArgs::has_pending_c_flag("-")); // bare dash
-        assert!(!CommandLineArgs::has_pending_c_flag("c")); // no leading dash
-        assert!(!CommandLineArgs::has_pending_c_flag("")); // empty
     }
 }

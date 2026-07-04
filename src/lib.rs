@@ -30,27 +30,13 @@ impl std::error::Error for ExitCode {}
 
 /// Main entry point for the shell.
 pub async fn run() -> anyhow::Result<()> {
-    let mut cli_args: Vec<_> = std::env::args().collect();
-
-    // Work around clap's limitations handling +O options.
-    for arg in &mut cli_args {
-        if arg.starts_with("+O") {
-            arg.insert_str(0, "--");
-        }
-    }
+    let cli_args: Vec<_> = std::env::args().collect();
 
     let args = match shell::args::CommandLineArgs::try_parse_from(cli_args.iter().cloned()) {
         Ok(parsed_args) => parsed_args,
         Err(e) => {
+            let exit_code = e.exit_code();
             let _ = e.print();
-
-            // Check for whether this is something we'd truly consider fatal. clap returns
-            // errors for `--help`, `--version`, etc.
-            let exit_code = match e.kind() {
-                clap::error::ErrorKind::DisplayVersion | clap::error::ErrorKind::DisplayHelp => 0,
-                _ => 2,
-            };
-
             return Err(ExitCode::new(exit_code).into());
         }
     };

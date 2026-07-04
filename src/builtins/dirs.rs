@@ -1,5 +1,4 @@
 use crate::engine::sys;
-use clap::Parser;
 use std::io::Write;
 
 use crate::engine::{ExecutionResult, builtins};
@@ -27,22 +26,18 @@ impl From<&DirError> for u8 {
 impl crate::engine::BuiltinError for DirError {}
 
 /// Manage the current directory stack.
-#[derive(Default, Parser)]
+#[derive(Default)]
 pub(crate) struct DirsCommand {
     /// Clear the directory stack.
-    #[arg(short = 'c')]
     clear: bool,
 
     /// Don't tilde-shorten paths.
-    #[arg(short = 'l')]
     tilde_long: bool,
 
     /// Print one directory per line instead of all on one line.
-    #[arg(short = 'p')]
     print_one_per_line: bool,
 
     /// Print one directory per line with its index.
-    #[arg(short = 'v')]
     print_one_per_line_with_index: bool,
     //
     // TODO(dirs): implement +N and -N
@@ -50,6 +45,39 @@ pub(crate) struct DirsCommand {
 
 impl builtins::Command for DirsCommand {
     type Error = crate::engine::Error;
+
+    fn new<I>(args: I) -> Result<Self, String>
+    where
+        I: IntoIterator<Item = String>,
+    {
+        let mut args = builtins::BuiltinArgs::new(args);
+        let mut command = Self::default();
+        let positionals = args.parse_flags(|flag| match flag {
+            'c' => {
+                command.clear = true;
+                Ok(true)
+            }
+            'l' => {
+                command.tilde_long = true;
+                Ok(true)
+            }
+            'p' => {
+                command.print_one_per_line = true;
+                Ok(true)
+            }
+            'v' => {
+                command.print_one_per_line_with_index = true;
+                Ok(true)
+            }
+            _ => Err(format!("dirs: -{flag}: invalid option")),
+        })?;
+
+        if !positionals.is_empty() {
+            return Err(format!("dirs: {}: invalid argument", positionals[0]));
+        }
+
+        Ok(command)
+    }
 
     async fn execute(
         &self,

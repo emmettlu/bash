@@ -1,33 +1,25 @@
 use std::io::Write;
 
-use clap::Parser;
-
 use crate::engine::commands::{self, ResolveOptions, ResolvedCommand};
 use crate::engine::sys;
 use crate::engine::{ExecutionResult, builtins};
 
 /// Inspect the type of a named shell item.
-#[derive(Parser)]
 pub(crate) struct TypeCommand {
     /// Display all locations of the specified name, not just the first.
-    #[arg(short = 'a')]
     all_locations: bool,
 
     /// Don't consider functions when resolving the name.
-    #[arg(short = 'f')]
     suppress_func_lookup: bool,
 
     /// Force searching by file path, even if the name is an alias, built-in
     /// command, or shell function.
-    #[arg(short = 'P')]
     force_path_search: bool,
 
     /// Show file path only.
-    #[arg(short = 'p')]
     show_path_only: bool,
 
     /// Only display the type of the specified name.
-    #[arg(short = 't')]
     type_only: bool,
 
     /// Names to search for.
@@ -36,6 +28,46 @@ pub(crate) struct TypeCommand {
 
 impl builtins::Command for TypeCommand {
     type Error = crate::engine::Error;
+
+    fn new<I>(args: I) -> Result<Self, String>
+    where
+        I: IntoIterator<Item = String>,
+    {
+        let mut command = Self {
+            all_locations: false,
+            suppress_func_lookup: false,
+            force_path_search: false,
+            show_path_only: false,
+            type_only: false,
+            names: Vec::new(),
+        };
+        let mut args = builtins::BuiltinArgs::new(args);
+        let names = args.parse_flags(|flag| match flag {
+            'a' => {
+                command.all_locations = true;
+                Ok(true)
+            }
+            'f' => {
+                command.suppress_func_lookup = true;
+                Ok(true)
+            }
+            'P' => {
+                command.force_path_search = true;
+                Ok(true)
+            }
+            'p' => {
+                command.show_path_only = true;
+                Ok(true)
+            }
+            't' => {
+                command.type_only = true;
+                Ok(true)
+            }
+            _ => Err(format!("type: -{flag}: invalid option")),
+        })?;
+        command.names = names;
+        Ok(command)
+    }
 
     async fn execute(
         &self,

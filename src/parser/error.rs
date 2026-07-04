@@ -7,6 +7,15 @@ pub enum ParseError {
     #[error("syntax error at line {} col {}", .0.line, .0.column)]
     ParsingNear(crate::parser::SourcePosition),
 
+    /// A parsing error occurred near the given position, with PEG expected-token details.
+    #[error("syntax error at line {} col {}: expected {}", .position.line, .position.column, .expected)]
+    ParsingNearWithExpected {
+        /// The source position near which parsing failed.
+        position: crate::parser::SourcePosition,
+        /// The PEG expected-token set reported at that position.
+        expected: peg::error::ExpectedSet,
+    },
+
     /// A parsing error occurred at the end of the input.
     #[error("syntax error at end of input")]
     ParsingAtEndOfInput,
@@ -82,7 +91,16 @@ pub(crate) fn convert_peg_parse_error(
 
     if approx_token_index < tokens.len() {
         let token = &tokens[approx_token_index];
-        ParseError::ParsingNear((*token.location().start).clone())
+        let position = (*token.location().start).clone();
+
+        if err.expected.tokens().next().is_some() {
+            ParseError::ParsingNearWithExpected {
+                position,
+                expected: err.expected.clone(),
+            }
+        } else {
+            ParseError::ParsingNear(position)
+        }
     } else {
         ParseError::ParsingAtEndOfInput
     }

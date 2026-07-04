@@ -92,50 +92,20 @@ fn parse_wait_args(
     args: &mut builtins::BuiltinArgs,
     command: &mut WaitCommand,
 ) -> Result<Vec<String>, String> {
-    let mut positionals = Vec::new();
-    while let Some(arg) = args.next_arg() {
-        if arg == "--" {
-            positionals.extend(collect_remaining(args));
-            break;
+    args.parse_short_options(|args, flag, flags, rest_start| match flag {
+        'f' => {
+            command.wait_for_terminate = true;
+            Ok(builtins::ShortOptionDisposition::Continue)
         }
-
-        let Some(flags) = arg.strip_prefix('-') else {
-            positionals.push(arg);
-            positionals.extend(collect_remaining(args));
-            break;
-        };
-
-        if flags.is_empty() {
-            positionals.push(arg);
-            positionals.extend(collect_remaining(args));
-            break;
+        'n' => {
+            command.wait_for_first_or_next = true;
+            Ok(builtins::ShortOptionDisposition::Continue)
         }
-
-        for (idx, flag) in flags.char_indices() {
-            let rest_start = idx + flag.len_utf8();
-            match flag {
-                'f' => command.wait_for_terminate = true,
-                'n' => command.wait_for_first_or_next = true,
-                'p' => {
-                    let value = if rest_start < flags.len() {
-                        flags[rest_start..].to_owned()
-                    } else {
-                        args.next_value("wait: -p")?
-                    };
-                    command.variable_to_receive_id = Some(value);
-                    break;
-                }
-                _ => return Err(format!("wait: -{flag}: invalid option")),
-            }
+        'p' => {
+            command.variable_to_receive_id =
+                Some(args.option_value(flags, rest_start, "wait: -p")?);
+            Ok(builtins::ShortOptionDisposition::StopParsingArgument)
         }
-    }
-    Ok(positionals)
-}
-
-fn collect_remaining(args: &mut builtins::BuiltinArgs) -> Vec<String> {
-    let mut rest = Vec::new();
-    while let Some(arg) = args.next_arg() {
-        rest.push(arg);
-    }
-    rest
+        _ => Err(format!("wait: -{flag}: invalid option")),
+    })
 }

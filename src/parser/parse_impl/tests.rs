@@ -92,4 +92,21 @@ mod harness_tests {
         let result = parse_with_config("echo hello", &config);
         assert!(result.is_ok());
     }
+
+    #[test]
+    fn test_parse_error_preserves_expected_tokens() {
+        let config = ParserConfig {
+            name: "peg",
+            parser_impl: ParserImpl::Peg,
+        };
+        let err = parse_with_config("echo hello && ;", &config).unwrap_err();
+
+        let ParseError::ParsingNearWithExpected { position, expected } = &err else {
+            panic!("expected PEG expected-token details, got {err:?}");
+        };
+
+        assert_eq!(position.line, 1);
+        assert_eq!(position.column, 15);
+        assert!(expected.tokens().next().is_some());
+    }
 }

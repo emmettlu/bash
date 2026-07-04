@@ -104,93 +104,69 @@ fn parse_bind_options(
     args: &mut builtins::BuiltinArgs,
     command: &mut BindCommand,
 ) -> Result<Vec<String>, String> {
-    let mut positionals = Vec::new();
-    while let Some(arg) = args.next_arg() {
-        if arg == "--" {
-            positionals.extend(collect_remaining(args));
-            break;
+    args.parse_short_options(|args, flag, flags, rest_start| match flag {
+        'm' => {
+            let value = args.option_value(flags, rest_start, "bind: -m")?;
+            command.keymap = Some(value.parse()?);
+            Ok(builtins::ShortOptionDisposition::StopParsingArgument)
         }
-
-        let Some(flags) = arg.strip_prefix('-') else {
-            positionals.push(arg);
-            positionals.extend(collect_remaining(args));
-            break;
-        };
-
-        if flags.is_empty() {
-            positionals.push(arg);
-            positionals.extend(collect_remaining(args));
-            break;
+        'q' => {
+            command.query_func_bindings = Some(args.option_value(flags, rest_start, "bind: -q")?);
+            Ok(builtins::ShortOptionDisposition::StopParsingArgument)
         }
-
-        for (idx, flag) in flags.char_indices() {
-            let rest_start = idx + flag.len_utf8();
-            match flag {
-                'm' => {
-                    let value = option_value(args, flags, rest_start, "bind: -m")?;
-                    command.keymap = Some(value.parse()?);
-                    break;
-                }
-                'q' => {
-                    command.query_func_bindings =
-                        Some(option_value(args, flags, rest_start, "bind: -q")?);
-                    break;
-                }
-                'u' => {
-                    command.remove_func_bindings =
-                        Some(option_value(args, flags, rest_start, "bind: -u")?);
-                    break;
-                }
-                'r' => {
-                    command.remove_key_seq_binding =
-                        Some(option_value(args, flags, rest_start, "bind: -r")?);
-                    break;
-                }
-                'f' => {
-                    command.bindings_file =
-                        Some(option_value(args, flags, rest_start, "bind: -f")?);
-                    break;
-                }
-                'x' => {
-                    command
-                        .key_seq_bindings
-                        .push(option_value(args, flags, rest_start, "bind: -x")?);
-                    break;
-                }
-                'l' => command.list_funcs = true,
-                'P' => command.list_funcs_and_bindings = true,
-                'p' => command.list_funcs_and_bindings_reusable = true,
-                'S' => command.list_key_seqs_that_invoke_macros = true,
-                's' => command.list_key_seqs_that_invoke_macros_reusable = true,
-                'V' => command.list_vars = true,
-                'v' => command.list_vars_reusable = true,
-                'X' => command.list_key_seq_bindings = true,
-                _ => return Err(format!("bind: -{flag}: invalid option")),
-            }
+        'u' => {
+            command.remove_func_bindings = Some(args.option_value(flags, rest_start, "bind: -u")?);
+            Ok(builtins::ShortOptionDisposition::StopParsingArgument)
         }
-    }
-    Ok(positionals)
-}
-
-fn option_value(
-    args: &mut builtins::BuiltinArgs,
-    flags: &str,
-    rest_start: usize,
-    option: &str,
-) -> Result<String, String> {
-    if rest_start < flags.len() {
-        Ok(flags[rest_start..].to_owned())
-    } else {
-        args.next_value(option)
-    }
-}
-
-fn collect_remaining(args: &mut builtins::BuiltinArgs) -> Vec<String> {
-    let mut rest = Vec::new();
-    while let Some(arg) = args.next_arg() {
-        rest.push(arg);
-    }
-    rest
+        'r' => {
+            command.remove_key_seq_binding =
+                Some(args.option_value(flags, rest_start, "bind: -r")?);
+            Ok(builtins::ShortOptionDisposition::StopParsingArgument)
+        }
+        'f' => {
+            command.bindings_file = Some(args.option_value(flags, rest_start, "bind: -f")?);
+            Ok(builtins::ShortOptionDisposition::StopParsingArgument)
+        }
+        'x' => {
+            command
+                .key_seq_bindings
+                .push(args.option_value(flags, rest_start, "bind: -x")?);
+            Ok(builtins::ShortOptionDisposition::StopParsingArgument)
+        }
+        'l' => {
+            command.list_funcs = true;
+            Ok(builtins::ShortOptionDisposition::Continue)
+        }
+        'P' => {
+            command.list_funcs_and_bindings = true;
+            Ok(builtins::ShortOptionDisposition::Continue)
+        }
+        'p' => {
+            command.list_funcs_and_bindings_reusable = true;
+            Ok(builtins::ShortOptionDisposition::Continue)
+        }
+        'S' => {
+            command.list_key_seqs_that_invoke_macros = true;
+            Ok(builtins::ShortOptionDisposition::Continue)
+        }
+        's' => {
+            command.list_key_seqs_that_invoke_macros_reusable = true;
+            Ok(builtins::ShortOptionDisposition::Continue)
+        }
+        'V' => {
+            command.list_vars = true;
+            Ok(builtins::ShortOptionDisposition::Continue)
+        }
+        'v' => {
+            command.list_vars_reusable = true;
+            Ok(builtins::ShortOptionDisposition::Continue)
+        }
+        'X' => {
+            command.list_key_seq_bindings = true;
+            Ok(builtins::ShortOptionDisposition::Continue)
+        }
+        _ => Err(format!("bind: -{flag}: invalid option")),
+    })
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -244,15 +220,53 @@ impl builtins::Command for BindCommand {
             log::debug!(target: trace_categories::INPUT,
                  "bind: key bindings not supported in this config");
 
-            // Silently succeed when key bindings are unavailable (e.g., in
-            // non-interactive mode or with an input backend that doesn't
-            // yet support them).
-            Ok(ExecutionResult::success())
+            self.execute_without_key_bindings(&context)
         }
     }
 }
 
 impl BindCommand {
+    fn execute_without_key_bindings(
+        &self,
+        context: &crate::engine::ExecutionContext<'_>,
+    ) -> Result<ExecutionResult, BindError> {
+        if self.requires_key_bindings() {
+            return Err(BindError::Unimplemented(
+                "bind requires key bindings backend",
+            ));
+        }
+
+        if self.list_funcs {
+            for func in interfaces::InputFunction::iter() {
+                writeln!(context.stdout(), "{func}")?;
+            }
+        }
+
+        if self.list_vars {
+            display_vars(context, false)?;
+        }
+
+        if self.list_vars_reusable {
+            display_vars(context, true)?;
+        }
+
+        Ok(ExecutionResult::success())
+    }
+
+    fn requires_key_bindings(&self) -> bool {
+        self.list_funcs_and_bindings
+            || self.list_funcs_and_bindings_reusable
+            || self.list_key_seqs_that_invoke_macros
+            || self.list_key_seqs_that_invoke_macros_reusable
+            || self.query_func_bindings.is_some()
+            || self.remove_func_bindings.is_some()
+            || self.remove_key_seq_binding.is_some()
+            || self.bindings_file.is_some()
+            || !self.key_seq_bindings.is_empty()
+            || self.list_key_seq_bindings
+            || self.key_sequence.is_some()
+    }
+
     #[allow(clippy::too_many_lines)]
     async fn execute_impl(
         &self,
@@ -284,35 +298,11 @@ impl BindCommand {
         }
 
         if self.list_vars {
-            let options = &context.shell.completion_config().fallback_options;
-
-            // For now we'll just display a few items and show defaults.
-            writeln!(
-                context.stdout(),
-                "mark-directories is set to `{}'",
-                to_onoff(options.mark_directories)
-            )?;
-            writeln!(
-                context.stdout(),
-                "mark-symlinked-directories is set to `{}'",
-                to_onoff(options.mark_symlinked_directories)
-            )?;
+            display_vars(context, false)?;
         }
 
         if self.list_vars_reusable {
-            let options = &context.shell.completion_config().fallback_options;
-
-            // For now we'll just display a few items and show defaults.
-            writeln!(
-                context.stdout(),
-                "set mark-directories {}",
-                to_onoff(options.mark_directories)
-            )?;
-            writeln!(
-                context.stdout(),
-                "set mark-symlinked-directories {}",
-                to_onoff(options.mark_symlinked_directories)
-            )?;
+            display_vars(context, true)?;
         }
 
         if let Some(func_str) = &self.query_func_bindings {
@@ -551,6 +541,39 @@ fn parse_readline_function(func_name: &str) -> Result<interfaces::InputFunction,
 
 const fn to_onoff(value: bool) -> &'static str {
     if value { "on" } else { "off" }
+}
+
+fn display_vars(
+    context: &crate::engine::ExecutionContext<'_>,
+    reusable: bool,
+) -> Result<(), BindError> {
+    let options = &context.shell.completion_config().fallback_options;
+
+    if reusable {
+        writeln!(
+            context.stdout(),
+            "set mark-directories {}",
+            to_onoff(options.mark_directories)
+        )?;
+        writeln!(
+            context.stdout(),
+            "set mark-symlinked-directories {}",
+            to_onoff(options.mark_symlinked_directories)
+        )?;
+    } else {
+        writeln!(
+            context.stdout(),
+            "mark-directories is set to `{}'",
+            to_onoff(options.mark_directories)
+        )?;
+        writeln!(
+            context.stdout(),
+            "mark-symlinked-directories is set to `{}'",
+            to_onoff(options.mark_symlinked_directories)
+        )?;
+    }
+
+    Ok(())
 }
 
 fn display_funcs_and_bindings(

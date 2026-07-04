@@ -172,111 +172,103 @@ fn parse_complete_options(
     common: &mut CommonCompleteCommandArgs,
     mut on_extra_flag: impl FnMut(char) -> Result<bool, String>,
 ) -> Result<Vec<String>, String> {
-    let mut positionals = Vec::new();
-    while let Some(arg) = args.next_arg() {
-        if arg == "--" {
-            positionals.extend(collect_remaining(args));
-            break;
+    args.parse_short_options(|args, flag, flags, rest_start| {
+        if on_extra_flag(flag)? {
+            return Ok(builtins::ShortOptionDisposition::Continue);
         }
 
-        let Some(flags) = arg.strip_prefix('-') else {
-            positionals.push(arg);
-            positionals.extend(collect_remaining(args));
-            break;
-        };
-
-        if flags.is_empty() {
-            positionals.push(arg);
-            positionals.extend(collect_remaining(args));
-            break;
-        }
-
-        for (idx, flag) in flags.char_indices() {
-            let rest_start = idx + flag.len_utf8();
-            if on_extra_flag(flag)? {
-                continue;
+        match flag {
+            'o' => {
+                let value = args.option_value(flags, rest_start, "complete: -o")?;
+                common.options.push(value.parse::<CompleteOption>()?);
+                Ok(builtins::ShortOptionDisposition::StopParsingArgument)
             }
-
-            match flag {
-                'o' => {
-                    let value = option_value(args, flags, rest_start, "complete: -o")?;
-                    common.options.push(value.parse::<CompleteOption>()?);
-                    break;
-                }
-                'A' => {
-                    let value = option_value(args, flags, rest_start, "complete: -A")?;
-                    common.actions.push(value.parse::<CompleteAction>()?);
-                    break;
-                }
-                'G' => {
-                    common.glob_pattern =
-                        Some(option_value(args, flags, rest_start, "complete: -G")?);
-                    break;
-                }
-                'W' => {
-                    common.word_list = Some(option_value(args, flags, rest_start, "complete: -W")?);
-                    break;
-                }
-                'F' => {
-                    common.function_name =
-                        Some(option_value(args, flags, rest_start, "complete: -F")?);
-                    break;
-                }
-                'C' => {
-                    common.command = Some(option_value(args, flags, rest_start, "complete: -C")?);
-                    break;
-                }
-                'X' => {
-                    common.filter_pattern =
-                        Some(option_value(args, flags, rest_start, "complete: -X")?);
-                    break;
-                }
-                'P' => {
-                    common.prefix = Some(option_value(args, flags, rest_start, "complete: -P")?);
-                    break;
-                }
-                'S' => {
-                    common.suffix = Some(option_value(args, flags, rest_start, "complete: -S")?);
-                    break;
-                }
-                'a' => common.action_alias = true,
-                'b' => common.action_builtin = true,
-                'c' => common.action_command = true,
-                'd' => common.action_directory = true,
-                'e' => common.action_exported = true,
-                'f' => common.action_file = true,
-                'g' => common.action_group = true,
-                'j' => common.action_job = true,
-                'k' => common.action_keyword = true,
-                's' => common.action_service = true,
-                'u' => common.action_user = true,
-                'v' => common.action_variable = true,
-                _ => return Err(format!("complete: -{flag}: invalid option")),
+            'A' => {
+                let value = args.option_value(flags, rest_start, "complete: -A")?;
+                common.actions.push(value.parse::<CompleteAction>()?);
+                Ok(builtins::ShortOptionDisposition::StopParsingArgument)
             }
+            'G' => {
+                common.glob_pattern = Some(args.option_value(flags, rest_start, "complete: -G")?);
+                Ok(builtins::ShortOptionDisposition::StopParsingArgument)
+            }
+            'W' => {
+                common.word_list = Some(args.option_value(flags, rest_start, "complete: -W")?);
+                Ok(builtins::ShortOptionDisposition::StopParsingArgument)
+            }
+            'F' => {
+                common.function_name =
+                    Some(args.option_value(flags, rest_start, "complete: -F")?);
+                Ok(builtins::ShortOptionDisposition::StopParsingArgument)
+            }
+            'C' => {
+                common.command = Some(args.option_value(flags, rest_start, "complete: -C")?);
+                Ok(builtins::ShortOptionDisposition::StopParsingArgument)
+            }
+            'X' => {
+                common.filter_pattern =
+                    Some(args.option_value(flags, rest_start, "complete: -X")?);
+                Ok(builtins::ShortOptionDisposition::StopParsingArgument)
+            }
+            'P' => {
+                common.prefix = Some(args.option_value(flags, rest_start, "complete: -P")?);
+                Ok(builtins::ShortOptionDisposition::StopParsingArgument)
+            }
+            'S' => {
+                common.suffix = Some(args.option_value(flags, rest_start, "complete: -S")?);
+                Ok(builtins::ShortOptionDisposition::StopParsingArgument)
+            }
+            'a' => {
+                common.action_alias = true;
+                Ok(builtins::ShortOptionDisposition::Continue)
+            }
+            'b' => {
+                common.action_builtin = true;
+                Ok(builtins::ShortOptionDisposition::Continue)
+            }
+            'c' => {
+                common.action_command = true;
+                Ok(builtins::ShortOptionDisposition::Continue)
+            }
+            'd' => {
+                common.action_directory = true;
+                Ok(builtins::ShortOptionDisposition::Continue)
+            }
+            'e' => {
+                common.action_exported = true;
+                Ok(builtins::ShortOptionDisposition::Continue)
+            }
+            'f' => {
+                common.action_file = true;
+                Ok(builtins::ShortOptionDisposition::Continue)
+            }
+            'g' => {
+                common.action_group = true;
+                Ok(builtins::ShortOptionDisposition::Continue)
+            }
+            'j' => {
+                common.action_job = true;
+                Ok(builtins::ShortOptionDisposition::Continue)
+            }
+            'k' => {
+                common.action_keyword = true;
+                Ok(builtins::ShortOptionDisposition::Continue)
+            }
+            's' => {
+                common.action_service = true;
+                Ok(builtins::ShortOptionDisposition::Continue)
+            }
+            'u' => {
+                common.action_user = true;
+                Ok(builtins::ShortOptionDisposition::Continue)
+            }
+            'v' => {
+                common.action_variable = true;
+                Ok(builtins::ShortOptionDisposition::Continue)
+            }
+            _ => Err(format!("complete: -{flag}: invalid option")),
         }
-    }
-    Ok(positionals)
-}
-
-fn option_value(
-    args: &mut builtins::BuiltinArgs,
-    flags: &str,
-    rest_start: usize,
-    option: &str,
-) -> Result<String, String> {
-    if rest_start < flags.len() {
-        Ok(flags[rest_start..].to_owned())
-    } else {
-        args.next_value(option)
-    }
-}
-
-fn collect_remaining(args: &mut builtins::BuiltinArgs) -> Vec<String> {
-    let mut rest = Vec::new();
-    while let Some(arg) = args.next_arg() {
-        rest.push(arg);
-    }
-    rest
+    })
 }
 
 /// Configure programmable command completion.
@@ -717,15 +709,8 @@ where
             }
             parse_compopt_minus_flags(&mut args, &mut command, flags)?;
         } else if let Some(flags) = arg.strip_prefix('+') {
-            if flags == "o" {
-                let value = args.next_value("compopt: +o")?;
-                command
-                    .disabled_options
-                    .push(value.parse::<CompleteOption>()?);
-            } else if let Some(value) = flags.strip_prefix('o') {
-                if value.is_empty() {
-                    return Err("compopt: +o: option requires an argument".into());
-                }
+            if flags.starts_with('o') {
+                let value = args.option_value(flags, 'o'.len_utf8(), "compopt: +o")?;
                 command
                     .disabled_options
                     .push(value.parse::<CompleteOption>()?);
@@ -757,7 +742,7 @@ fn parse_compopt_minus_flags(
             'E' => command.update_empty = true,
             'I' => command.update_initial_word = true,
             'o' => {
-                let value = option_value(args, flags, rest_start, "compopt: -o")?;
+                let value = args.option_value(flags, rest_start, "compopt: -o")?;
                 command
                     .enabled_options
                     .push(value.parse::<CompleteOption>()?);
@@ -837,6 +822,12 @@ impl builtins::Command for CompOptCommand {
                 .as_mut()
             {
                 Self::set_options(in_flight_options, &options);
+            } else {
+                writeln!(
+                    context.stderr(),
+                    "compopt: not currently executing completion function"
+                )?;
+                return Ok(ExecutionResult::general_error());
             }
         }
 

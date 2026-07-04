@@ -30,8 +30,14 @@ impl From<&InteractiveExecutionResult> for i32 {
 /// Options for interactive shells.
 #[derive(Clone)]
 pub struct InteractiveOptions {
-    /// Whether terminal shell integration is enabled.
+    /// 这个输入循环是否代表真正的交互 session。
+    pub interactive_session: bool,
+    /// 是否启用终端 shell 集成。
     pub terminal_shell_integration: bool,
+    /// 是否在 session 期间持有终端前台控制权。
+    pub terminal_control: bool,
+    /// 是否显示提示符。
+    pub display_prompt: bool,
     /// Whether or not to run `PROMPT_COMMAND` before each prompt.
     pub run_prompt_command: bool,
     /// Whether or not to run zsh-style exec/cmd functions (e.g., `preexec_functions`,
@@ -42,8 +48,25 @@ pub struct InteractiveOptions {
 impl Default for InteractiveOptions {
     fn default() -> Self {
         Self {
+            interactive_session: true,
             terminal_shell_integration: false,
+            terminal_control: true,
+            display_prompt: true,
             run_prompt_command: true,
+            run_cmd_exec_funcs: false,
+        }
+    }
+}
+
+impl InteractiveOptions {
+    /// 返回用于 `-s` 标准输入命令循环的选项。
+    pub(crate) fn stdin_input_loop() -> Self {
+        Self {
+            interactive_session: false,
+            terminal_shell_integration: false,
+            terminal_control: false,
+            display_prompt: false,
+            run_prompt_command: false,
             run_cmd_exec_funcs: false,
         }
     }
@@ -55,6 +78,8 @@ pub struct InteractiveShell<'a, IB: InputBackend> {
     shell: crate::interactive::ShellRef,
     /// The input backend to use.
     input: &'a mut IB,
+    /// 终端控制 guard, 当这个循环持有 controlling terminal 时存在。
+    _terminal_control: Option<crate::engine::terminal::TerminalControl>,
     /// Terminal integration utility, if any.
     terminal_integration: Option<crate::interactive::term_integration::TerminalIntegration>,
     /// Options.
@@ -77,12 +102,18 @@ impl<'a, IB: InputBackend> InteractiveShell<'a, IB> {
         let stdin_is_terminal = std::io::stdin().is_terminal();
 
         // Acquire terminal control if stdin is a terminal.
-        if stdin_is_terminal {
-            crate::engine::terminal::TerminalControl::acquire()?;
-        }
+        let terminal_control =
+            if options.interactive_session && options.terminal_control && stdin_is_terminal {
+                Some(crate::engine::terminal::TerminalControl::acquire()?)
+            } else {
+                None
+            };
 
         // Set up terminal integration if enabled *and* if stdin is a terminal.
-        let terminal_integration = if options.terminal_shell_integration && stdin_is_terminal {
+        let terminal_integration = if options.interactive_session
+            && options.terminal_shell_integration
+            && stdin_is_terminal
+        {
             let terminfo = crate::interactive::term_detection::get_terminal_info(&HostEnvironment);
             let terminal_integration =
                 crate::interactive::term_integration::TerminalIntegration::new(terminfo);
@@ -98,6 +129,7 @@ impl<'a, IB: InputBackend> InteractiveShell<'a, IB> {
         Ok(Self {
             shell: shell.clone(),
             input,
+            _terminal_control: terminal_control,
             terminal_integration,
             options: options.clone(),
         })
@@ -109,9 +141,11 @@ impl<'a, IB: InputBackend> InteractiveShell<'a, IB> {
     pub async fn run_interactively(&mut self) -> Result<(), ShellError> {
         let mut shell = self.shell.lock().await;
 
-        let mut announce_exit = shell.options().interactive;
+        let mut announce_exit = self.options.interactive_session && shell.options().interactive;
 
-        shell.start_interactive_session()?;
+        if self.options.interactive_session {
+            shell.start_interactive_session()?;
+        }
 
         drop(shell);
 
@@ -153,16 +187,18 @@ impl<'a, IB: InputBackend> InteractiveShell<'a, IB> {
 
         let mut shell = self.shell.lock().await;
 
-        shell.end_interactive_session()?;
+        if self.options.interactive_session {
+            shell.end_interactive_session()?;
 
-        if announce_exit {
-            writeln!(shell.stderr(), "exit")?;
-        }
+            if announce_exit {
+                writeln!(shell.stderr(), "exit")?;
+            }
 
-        if let Err(e) = shell.save_history() {
-            // N.B. This seems like the sort of thing that's worth being noisy about,
-            // but bash doesn't do that -- and probably for a reason.
-            log::debug!("couldn't save history: {e}");
+            if let Err(e) = shell.save_history() {
+                // N.B. This seems like the sort of thing that's worth being noisy about,
+                // but bash doesn't do that -- and probably for a reason.
+                log::debug!("couldn't save history: {e}");
+            }
         }
 
         // Give the shell an opportunity to perform any on-exit operations.
@@ -170,6 +206,41 @@ impl<'a, IB: InputBackend> InteractiveShell<'a, IB> {
 
         drop(shell);
 
+        Ok(())
+    }
+
+    /// 运行非交互 stdin 输入循环, 直到 EOF 或 shell 退出。
+    pub async fn run_stdin_input_loop(&mut self) -> Result<(), ShellError> {
+        loop {
+            let result = self.run_stdin_input_loop_once().await?;
+            match result {
+                InteractiveExecutionResult::Executed(crate::engine::ExecutionResult {
+                    next_control_flow: crate::engine::results::ExecutionControlFlow::ExitShell,
+                    ..
+                })
+                | InteractiveExecutionResult::Eof => break,
+                InteractiveExecutionResult::Executed(crate::engine::ExecutionResult {
+                    next_control_flow:
+                        crate::engine::results::ExecutionControlFlow::ReturnFromFunctionOrScript,
+                    ..
+                }) => {
+                    log::error!("return from non-function/script");
+                }
+                InteractiveExecutionResult::Executed(_) => {}
+                InteractiveExecutionResult::Failed(err) => {
+                    let shell = self.shell.lock().await;
+                    let mut stderr = shell.stderr();
+                    let _ = shell.display_error(&mut stderr, &err);
+                    drop(shell);
+                }
+            }
+
+            if self.shell.lock().await.options().exit_after_one_command {
+                break;
+            }
+        }
+
+        self.shell.lock().await.on_exit().await?;
         Ok(())
     }
 
@@ -181,7 +252,11 @@ impl<'a, IB: InputBackend> InteractiveShell<'a, IB> {
         Self::run_pre_prompt_actions(&mut shell, &self.options).await?;
 
         // Compose the prompt.
-        let prompt = Self::compose_prompt(&mut shell, self.terminal_integration.as_ref()).await?;
+        let prompt = if self.options.display_prompt {
+            Self::compose_prompt(&mut shell, self.terminal_integration.as_ref()).await?
+        } else {
+            Self::empty_prompt()
+        };
 
         drop(shell);
 
@@ -208,6 +283,35 @@ impl<'a, IB: InputBackend> InteractiveShell<'a, IB> {
                     .set_last_exit_status(result.exit_code);
                 Ok(InteractiveExecutionResult::Executed(result))
             }
+        }
+    }
+
+    async fn run_stdin_input_loop_once(
+        &mut self,
+    ) -> Result<InteractiveExecutionResult, ShellError> {
+        let prompt = Self::empty_prompt();
+
+        match self.input.read_line(&self.shell, prompt)? {
+            ReadResult::Input(read_result) | ReadResult::BoundCommand(read_result) => {
+                self.execute_line(read_result, false /* user input */).await
+            }
+            ReadResult::Eof => Ok(InteractiveExecutionResult::Eof),
+            ReadResult::Interrupted => {
+                let result = crate::engine::ExecutionResult::interrupted();
+                self.shell
+                    .lock()
+                    .await
+                    .set_last_exit_status(result.exit_code);
+                Ok(InteractiveExecutionResult::Executed(result))
+            }
+        }
+    }
+
+    fn empty_prompt() -> InteractivePrompt {
+        InteractivePrompt {
+            prompt: String::new(),
+            alt_side_prompt: String::new(),
+            continuation_prompt: String::new(),
         }
     }
 

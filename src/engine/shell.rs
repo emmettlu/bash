@@ -177,6 +177,18 @@ impl Clone for Shell {
     }
 }
 
+impl Shell {
+    /// 创建一个用于子 shell 语义的 shell 副本。
+    ///
+    /// 这不是普通值复制: 子 shell 会继承大部分运行状态, 但会重置作业表,
+    /// 清理正在处理的 trap 状态, 并递增 clone depth。调用点应优先使用此方法,
+    /// 避免把 `Clone` 误认为无语义的简单复制。
+    #[must_use]
+    pub(crate) fn fork_subshell(&self) -> Self {
+        self.clone()
+    }
+}
+
 impl AsRef<Self> for Shell {
     fn as_ref(&self) -> &Self {
         self

@@ -6,7 +6,6 @@ use std::process::Stdio;
 
 use crate::engine::ShellFd;
 use crate::engine::error;
-use crate::engine::ioutils;
 use crate::engine::sys;
 
 /// A trait representing a stream that can be read from and written to.
@@ -95,11 +94,8 @@ macro_rules! dispatch_write {
 
 impl Clone for OpenFile {
     fn clone(&self) -> Self {
-        // If we fail to clone the open file for any reason, we return a special file
-        // that discards all I/O. This allows us to avoid fatally erroring out.
-        self.try_clone().unwrap_or_else(|_err| {
-            ioutils::FailingReaderWriter::new("failed to duplicate open file").into()
-        })
+        self.try_clone()
+            .expect("failed to duplicate open file during infallible clone")
     }
 }
 
@@ -225,6 +221,7 @@ impl std::io::Write for OpenFile {
 }
 
 /// Tristate representing the an `OpenFile` entry in an `OpenFiles` structure.
+#[derive(Clone, Copy)]
 pub enum OpenFileEntry<'a> {
     /// File descriptor is present and has a valid associated `OpenFile`.
     Open(&'a OpenFile),
@@ -236,8 +233,7 @@ pub enum OpenFileEntry<'a> {
 }
 
 /// Represents the open files in a shell context.
-#[derive(Clone, Default)]
-
+#[derive(Default)]
 pub struct OpenFiles {
     /// Maps shell file descriptors to open files.
     files: HashMap<ShellFd, Option<OpenFile>>,
@@ -298,6 +294,13 @@ impl<'a> FdOverlay<'a> {
     }
 }
 
+impl Clone for OpenFiles {
+    fn clone(&self) -> Self {
+        self.try_clone_open_files()
+            .expect("failed to duplicate open files during infallible clone")
+    }
+}
+
 impl OpenFiles {
     /// File descriptor used for standard input.
     pub const STDIN_FD: ShellFd = 0;
@@ -326,6 +329,16 @@ impl OpenFiles {
     /// 创建一个以当前集合为优先层, 以 `fallback` 为回退层的 fd 视图.
     pub(crate) const fn overlay<'a>(&'a self, fallback: &'a OpenFiles) -> FdOverlay<'a> {
         FdOverlay::new(self, fallback)
+    }
+
+    /// 尝试复制所有打开文件条目, 保留显式关闭的 fd.
+    pub fn try_clone_open_files(&self) -> Result<Self, std::io::Error> {
+        let mut files = HashMap::with_capacity(self.files.len());
+        for (fd, file) in &self.files {
+            let cloned_file = file.as_ref().map(OpenFile::try_clone).transpose()?;
+            files.insert(*fd, cloned_file);
+        }
+        Ok(Self { files })
     }
 
     /// Updates the open files from the provided iterator of (fd number, `OpenFile`) pairs.

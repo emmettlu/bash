@@ -51,76 +51,56 @@ impl builtins::Command for MapFileCommand {
             array_var_name: String::from("MAPFILE"),
         };
         let mut args = builtins::BuiltinArgs::new(args);
-        let mut array_names = Vec::new();
-
-        while let Some(arg) = args.next_arg() {
-            if arg == "--" {
-                array_names.extend(args.rest());
-                break;
+        let array_names = args.parse_short_options(|args, flag, flags, rest_start| match flag {
+            't' => {
+                command.remove_delimiter = true;
+                Ok(builtins::ShortOptionDisposition::Continue)
             }
-
-            let Some(flags) = arg.strip_prefix('-') else {
-                array_names.push(arg);
-                array_names.extend(args.rest());
-                break;
-            };
-
-            if flags.is_empty() {
-                array_names.push(arg);
-                array_names.extend(args.rest());
-                break;
+            'd' => {
+                command.delimiter = Some(args.option_value(flags, rest_start, "-d")?);
+                Ok(builtins::ShortOptionDisposition::StopParsingArgument)
             }
-
-            for (idx, flag) in flags.char_indices() {
-                match flag {
-                    't' => command.remove_delimiter = true,
-                    'd' => {
-                        command.delimiter = Some(option_value(flags, idx, flag, &mut args, "-d")?);
-                        break;
-                    }
-                    'n' => {
-                        let value = option_value(flags, idx, flag, &mut args, "-n")?;
-                        command.max_count = parse_i64_option("-n", &value)?;
-                        break;
-                    }
-                    'O' => {
-                        let value = option_value(flags, idx, flag, &mut args, "-O")?;
-                        command.origin = Some(parse_i64_option("-O", &value)?);
-                        break;
-                    }
-                    's' => {
-                        let value = option_value(flags, idx, flag, &mut args, "-s")?;
-                        let skip_count = parse_i64_option("-s", &value)?;
-                        if skip_count < 0 {
-                            return Err(format!("-s: invalid count: {value}"));
-                        }
-                        command.skip_count = skip_count;
-                        break;
-                    }
-                    'u' => {
-                        let value = option_value(flags, idx, flag, &mut args, "-u")?;
-                        command.fd = value
-                            .parse()
-                            .map_err(|_| format!("-u: invalid file descriptor: {value}"))?;
-                        break;
-                    }
-                    'C' => {
-                        command.callback = Some(option_value(flags, idx, flag, &mut args, "-C")?);
-                        break;
-                    }
-                    'c' => {
-                        let value = option_value(flags, idx, flag, &mut args, "-c")?;
-                        let callback_group_size = parse_i64_option("-c", &value)?;
-                        if callback_group_size < 1 {
-                            return Err(format!("-c: invalid count: {value}"));
-                        }
-                        command.callback_group_size = callback_group_size;
-                        break;
-                    }
-                    _ => return Err(format!("-{flag}: invalid option")),
+            'n' => {
+                let value = args.option_value(flags, rest_start, "-n")?;
+                command.max_count = parse_i64_option("-n", &value)?;
+                Ok(builtins::ShortOptionDisposition::StopParsingArgument)
+            }
+            'O' => {
+                let value = args.option_value(flags, rest_start, "-O")?;
+                command.origin = Some(parse_i64_option("-O", &value)?);
+                Ok(builtins::ShortOptionDisposition::StopParsingArgument)
+            }
+            's' => {
+                let value = args.option_value(flags, rest_start, "-s")?;
+                let skip_count = parse_i64_option("-s", &value)?;
+                if skip_count < 0 {
+                    return Err(format!("-s: invalid count: {value}"));
                 }
+                command.skip_count = skip_count;
+                Ok(builtins::ShortOptionDisposition::StopParsingArgument)
             }
-        }
+            'u' => {
+                let value = args.option_value(flags, rest_start, "-u")?;
+                command.fd = value
+                    .parse()
+                    .map_err(|_| format!("-u: invalid file descriptor: {value}"))?;
+                Ok(builtins::ShortOptionDisposition::StopParsingArgument)
+            }
+            'C' => {
+                command.callback = Some(args.option_value(flags, rest_start, "-C")?);
+                Ok(builtins::ShortOptionDisposition::StopParsingArgument)
+            }
+            'c' => {
+                let value = args.option_value(flags, rest_start, "-c")?;
+                let callback_group_size = parse_i64_option("-c", &value)?;
+                if callback_group_size < 1 {
+                    return Err(format!("-c: invalid count: {value}"));
+                }
+                command.callback_group_size = callback_group_size;
+                Ok(builtins::ShortOptionDisposition::StopParsingArgument)
+            }
+            _ => Err(format!("-{flag}: invalid option")),
+        })?;
 
         match array_names.as_slice() {
             [] => {}
@@ -202,21 +182,6 @@ impl builtins::Command for MapFileCommand {
         }
 
         Ok(ExecutionResult::success())
-    }
-}
-
-fn option_value(
-    flags: &str,
-    idx: usize,
-    flag: char,
-    args: &mut builtins::BuiltinArgs,
-    option: &str,
-) -> Result<String, String> {
-    let value_start = idx + flag.len_utf8();
-    if value_start < flags.len() {
-        Ok(flags[value_start..].to_owned())
-    } else {
-        args.next_value(option)
     }
 }
 

@@ -120,6 +120,19 @@ impl ExecutionParameters {
         self.fd_overlay(shell).try_fd(fd).cloned()
     }
 
+    /// 尝试复制指定编号的文件描述符.
+    pub fn try_clone_fd(
+        &self,
+        shell: &Shell,
+        fd: ShellFd,
+    ) -> Result<Option<openfiles::OpenFile>, error::Error> {
+        self.fd_overlay(shell)
+            .try_fd(fd)
+            .map(OpenFile::try_clone)
+            .transpose()
+            .map_err(Into::into)
+    }
+
     /// Sets the given file descriptor to the provided open file.
     ///
     /// # Arguments
@@ -135,21 +148,28 @@ impl ExecutionParameters {
     /// # Arguments
     ///
     /// * `shell` - The shell context.
-    pub fn iter_fds(&self, shell: &Shell) -> impl Iterator<Item = (ShellFd, openfiles::OpenFile)> {
-        let overlay = self.fd_overlay(shell);
-
-        #[allow(clippy::needless_collect)]
-        let all_fds: Vec<_> = overlay
+    pub fn iter_fds(
+        &self,
+        shell: &Shell,
+    ) -> Result<Vec<(ShellFd, openfiles::OpenFile)>, error::Error> {
+        self.fd_overlay(shell)
             .iter_fds()
-            .map(|(fd, file)| (fd, file.clone()))
-            .collect();
+            .map(|(fd, file)| Ok((fd, file.try_clone()?)))
+            .collect()
+    }
 
-        all_fds.into_iter()
+    /// 尝试复制执行参数及其 fd 叠加状态.
+    pub fn try_clone(&self) -> Result<Self, error::Error> {
+        Ok(Self {
+            open_files: self.open_files.try_clone_open_files()?,
+            process_group_policy: self.process_group_policy,
+            suppress_errexit: self.suppress_errexit,
+        })
     }
 }
 
-#[derive(Clone, Debug, Default)]
 /// Policy for how to manage spawned external processes.
+#[derive(Clone, Copy, Debug, Default)]
 pub enum ProcessGroupPolicy {
     /// Place the process in a new process group.
     #[default]
@@ -223,7 +243,7 @@ impl Execute for ast::CompoundList {
                 let run_async = matches!(sep, ast::SeparatorOperator::Async);
 
                 if run_async {
-                    let job = spawn_async_ao_list_in_task(ao_list, shell, params);
+                    let job = spawn_async_ao_list_in_task(ao_list, shell, params)?;
                     let job_formatted = job.to_pid_style_string();
 
                     if shell.options().interactive && !shell.is_subshell() {
@@ -252,10 +272,10 @@ fn spawn_async_ao_list_in_task<'a>(
     ao_list: &ast::AndOrList,
     shell: &'a mut Shell,
     params: &ExecutionParameters,
-) -> &'a jobs::Job {
+) -> Result<&'a jobs::Job, error::Error> {
     // Clone the inputs.
-    let mut cloned_shell = shell.clone();
-    let mut cloned_params = params.clone();
+    let mut cloned_shell = shell.fork_subshell();
+    let mut cloned_params = params.try_clone()?;
     let cloned_ao_list = ao_list.clone();
 
     // Mark the child shell as not interactive; we don't want it messing with the terminal too much.
@@ -272,11 +292,11 @@ fn spawn_async_ao_list_in_task<'a>(
             .await
     });
 
-    shell.jobs_mut().add_as_current(jobs::Job::new(
+    Ok(shell.jobs_mut().add_as_current(jobs::Job::new(
         [jobs::JobTask::Internal(join_handle)],
         ao_list.to_string(),
         jobs::JobState::Running,
-    ))
+    )))
 }
 
 impl Execute for ast::AndOrList {
@@ -289,7 +309,7 @@ impl Execute for ast::AndOrList {
             let has_operators = !self.additional.is_empty();
 
             // For the first command, suppress errexit if there are more commands after it
-            let mut first_params = params.clone();
+            let mut first_params = params.try_clone()?;
             if has_operators {
                 first_params.suppress_errexit = true;
             }
@@ -321,7 +341,7 @@ impl Execute for ast::AndOrList {
 
                 // For the last command in the chain, use original params (errexit not suppressed)
                 // For earlier commands, suppress errexit
-                let mut params = params.clone();
+                let mut params = params.try_clone()?;
 
                 let is_last = index == self.additional.len() - 1;
                 if !is_last {
@@ -350,7 +370,7 @@ impl Execute for ast::Pipeline {
                 .then(timing::start_timing)
                 .transpose()?;
 
-            let mut params = params.clone();
+            let mut params = params.try_clone()?;
 
             // If this pipeline is negated, suppress errexit for commands within it
             if self.bang {
@@ -395,7 +415,8 @@ impl Execute for ast::Pipeline {
 
             // If requested, report timing.
             if let (Some(timed), Some(stopwatch)) = (&self.timed, &stopwatch)
-                && let Some(mut stderr) = params.try_fd(shell, openfiles::OpenFiles::STDERR_FD)
+                && let Some(mut stderr) =
+                    params.try_clone_fd(shell, openfiles::OpenFiles::STDERR_FD)?
             {
                 let timing = stopwatch.stop()?;
                 if timed.is_posix_output() {
@@ -461,7 +482,7 @@ async fn spawn_pipeline_processes(
                 && !shell.options().enable_job_control);
 
         // Set up parameters appropriate for this command.
-        let mut cmd_params = params.clone();
+        let mut cmd_params = params.try_clone()?;
 
         // Install pipes.
         if let Some(Some(reader)) = pipe_readers.pop() {
@@ -478,7 +499,7 @@ async fn spawn_pipeline_processes(
             }
 
             PipelineExecutionContext {
-                shell: commands::ShellForCommand::subshell(Box::new(shell.clone()), shell),
+                shell: commands::ShellForCommand::subshell(Box::new(shell.fork_subshell()), shell),
                 process_group_id,
             }
         } else {
@@ -672,7 +693,7 @@ impl Execute for ast::CompoundCommand {
                 Self::Subshell(ast::SubshellCommand { list, .. }) => {
                     // Clone off a new subshell, and run the body of the subshell there.
                     // TODO(source-info): Do we need to reset the line number?
-                    let mut subshell = shell.clone();
+                    let mut subshell = shell.fork_subshell();
 
                     // Handle errors within the subshell context to prevent fatal errors
                     // from propagating to the parent shell.
@@ -740,11 +761,11 @@ impl Execute for ast::CoprocessCommand {
             let stdin_fd = shell.open_files_mut().add(stdin_writer.into())?;
 
             // Crete a subshell that the coprocess will own and run in.
-            let mut child_shell = shell.clone();
+            let mut child_shell = shell.fork_subshell();
             child_shell.options_mut().interactive = false;
 
             // Setup redirection for the coprocess's shell's stdin/stdout.
-            let mut child_params = params.clone();
+            let mut child_params = params.try_clone()?;
             child_params
                 .open_files
                 .set_fd(OpenFiles::STDIN_FD, stdin_reader.into());
@@ -943,7 +964,7 @@ impl Execute for ast::IfClauseCommand {
     ) -> BoxFuture<'a, Result<ExecutionResult, error::Error>> {
         Box::pin(async move {
             // Execute condition with errexit suppressed
-            let mut condition_params = params.clone();
+            let mut condition_params = params.try_clone()?;
             condition_params.suppress_errexit = true;
             let condition = self.condition.execute(shell, &condition_params).await?;
 
@@ -1006,7 +1027,7 @@ impl Execute for (WhileOrUntil, &ast::WhileOrUntilClauseCommand) {
             let mut result = ExecutionResult::success();
 
             // Execute loop condition with errexit suppressed
-            let mut condition_params = params.clone();
+            let mut condition_params = params.try_clone()?;
             condition_params.suppress_errexit = true;
 
             loop {
@@ -1728,9 +1749,7 @@ pub(crate) async fn setup_redirect(
 
                     let fd_num = specified_fd_num.unwrap_or(default_fd_if_unspecified);
 
-                    if let Some(f) = params.try_fd(shell, *fd) {
-                        let target_file = f.try_clone()?;
-
+                    if let Some(target_file) = params.try_clone_fd(shell, *fd)? {
                         params.open_files.set_fd(fd_num, target_file);
                     } else {
                         return Err(error::ErrorKind::BadFileDescriptor(*fd).into());
@@ -1772,8 +1791,10 @@ pub(crate) async fn setup_redirect(
                             .map_err(|_| error::ErrorKind::InvalidRedirection)?;
 
                         // Duplicate the fd.
-                        let target_file = if let Some(f) = params.try_fd(shell, source_fd_num) {
-                            f.try_clone()?
+                        let target_file = if let Some(file) =
+                            params.try_clone_fd(shell, source_fd_num)?
+                        {
+                            file
                         } else {
                             return Err(error::ErrorKind::BadFileDescriptor(source_fd_num).into());
                         };
@@ -1915,10 +1936,10 @@ fn setup_process_substitution(
 ) -> Result<(ShellFd, OpenFile), error::Error> {
     // TODO(execute): Don't execute synchronously!
     // Execute in a subshell.
-    let mut subshell = shell.clone();
+    let mut subshell = shell.fork_subshell();
 
     // Set up execution parameters for the child execution.
-    let mut child_params = params.clone();
+    let mut child_params = params.try_clone()?;
     child_params.process_group_policy = ProcessGroupPolicy::SameProcessGroup;
 
     // Set up pipe so we can connect to the command.

@@ -33,7 +33,7 @@ impl builtins::Command for EnableCommand {
     where
         I: IntoIterator<Item = String>,
     {
-        let args = builtins::BuiltinArgs::new(args).rest();
+        let mut args = builtins::BuiltinArgs::new(args);
         let mut command = Self {
             print_list: false,
             disable: false,
@@ -43,48 +43,32 @@ impl builtins::Command for EnableCommand {
             names: Vec::new(),
         };
 
-        let mut index = 0;
-        let mut stop_options = false;
-        while index < args.len() {
-            let arg = &args[index];
-            if stop_options || arg == "-" || !arg.starts_with('-') {
-                command.names.push(arg.clone());
-                index += 1;
-                continue;
-            }
-            if arg == "--" {
-                stop_options = true;
-                index += 1;
-                continue;
-            }
-
-            let flags = &arg[1..];
-            for (offset, flag) in flags.char_indices() {
-                match flag {
-                    'a' => command.print_list = true,
-                    'n' => command.disable = true,
-                    'p' => (),
-                    's' => command.special_only = true,
-                    'd' => command.remove_loaded_builtin = true,
-                    'f' => {
-                        let value_start = offset + flag.len_utf8();
-                        if value_start < flags.len() {
-                            command.shared_object_path = Some(flags[value_start..].to_owned());
-                        } else {
-                            index += 1;
-                            let value = args.get(index).ok_or_else(|| {
-                                "enable: -f: option requires an argument".to_owned()
-                            })?;
-                            command.shared_object_path = Some(value.clone());
-                        }
-                        break;
-                    }
-                    _ => return Err(format!("enable: -{flag}: invalid option")),
+        command.names =
+            args.parse_short_options_permuted(|args, flag, flags, rest_start| match flag {
+                'a' => {
+                    command.print_list = true;
+                    Ok(builtins::ShortOptionDisposition::Continue)
                 }
-            }
-
-            index += 1;
-        }
+                'n' => {
+                    command.disable = true;
+                    Ok(builtins::ShortOptionDisposition::Continue)
+                }
+                'p' => Ok(builtins::ShortOptionDisposition::Continue),
+                's' => {
+                    command.special_only = true;
+                    Ok(builtins::ShortOptionDisposition::Continue)
+                }
+                'd' => {
+                    command.remove_loaded_builtin = true;
+                    Ok(builtins::ShortOptionDisposition::Continue)
+                }
+                'f' => {
+                    command.shared_object_path =
+                        Some(args.option_value(flags, rest_start, "enable: -f")?);
+                    Ok(builtins::ShortOptionDisposition::StopParsingArgument)
+                }
+                _ => Err(format!("enable: -{flag}: invalid option")),
+            })?;
 
         Ok(command)
     }

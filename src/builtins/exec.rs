@@ -84,8 +84,7 @@ impl builtins::Command for ExecCommand {
             // When no arguments are present, then there's nothing for us to execute -- but we need
             // to ensure that any redirections setup for this builtin get applied to the calling
             // shell instance.
-            #[allow(clippy::needless_collect)]
-            let fds: Vec<_> = context.iter_fds().collect();
+            let fds = context.iter_fds()?;
 
             context.shell.replace_open_files(fds.into_iter());
             return Ok(ExecutionResult::success());

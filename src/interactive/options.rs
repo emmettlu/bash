@@ -2,14 +2,20 @@
 #[derive(Default, bon::Builder)]
 pub struct UIOptions {
     /// Whether to disable bracketed paste mode.
+    #[allow(
+        dead_code,
+        reason = "配置兼容保留, 当前输入后端尚未接入 bracketed paste"
+    )]
     #[builder(default)]
-    pub disable_bracketed_paste: bool,
+    pub(crate) disable_bracketed_paste: bool,
     /// Whether to disable color.
+    #[allow(dead_code, reason = "配置兼容保留, 当前输入后端尚未接入彩色 UI")]
     #[builder(default)]
-    pub disable_color: bool,
+    pub(crate) disable_color: bool,
     /// Whether to disable syntax highlighting.
+    #[allow(dead_code, reason = "配置兼容保留, 当前输入后端尚未接入语法高亮")]
     #[builder(default)]
-    pub disable_highlighting: bool,
+    pub(crate) disable_highlighting: bool,
     /// Whether to enable terminal integration.
     #[builder(default)]
     pub terminal_shell_integration: bool,

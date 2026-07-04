@@ -233,8 +233,13 @@ impl ExecutionContext<'_> {
         self.params.try_fd(self.shell, fd)
     }
 
+    /// 尝试复制指定编号的文件描述符.
+    pub fn try_clone_fd(&self, fd: ShellFd) -> Result<Option<openfiles::OpenFile>, error::Error> {
+        self.params.try_clone_fd(self.shell, fd)
+    }
+
     /// Iterates over all open file descriptors.
-    pub fn iter_fds(&self) -> impl Iterator<Item = (ShellFd, openfiles::OpenFile)> {
+    pub fn iter_fds(&self) -> Result<Vec<(ShellFd, openfiles::OpenFile)>, error::Error> {
         self.params.iter_fds(self.shell)
     }
 }
@@ -431,7 +436,7 @@ pub fn compose_std_command<S: AsRef<OsStr>>(
     }
 
     // Redirect stdin, if applicable.
-    match context.try_fd(OpenFiles::STDIN_FD) {
+    match context.try_clone_fd(OpenFiles::STDIN_FD)? {
         Some(OpenFile::Stdin(_)) | None => (),
         Some(stdin_file) => {
             let as_stdio: Stdio = stdin_file.into();
@@ -440,7 +445,7 @@ pub fn compose_std_command<S: AsRef<OsStr>>(
     }
 
     // Redirect stdout, if applicable.
-    match context.try_fd(OpenFiles::STDOUT_FD) {
+    match context.try_clone_fd(OpenFiles::STDOUT_FD)? {
         Some(OpenFile::Stdout(_)) | None => (),
         Some(stdout_file) => {
             let as_stdio: Stdio = stdout_file.into();
@@ -449,7 +454,7 @@ pub fn compose_std_command<S: AsRef<OsStr>>(
     }
 
     // Redirect stderr, if applicable.
-    match context.try_fd(OpenFiles::STDERR_FD) {
+    match context.try_clone_fd(OpenFiles::STDERR_FD)? {
         Some(OpenFile::Stderr(_)) | None => {}
         Some(stderr_file) => {
             let as_stdio: Stdio = stderr_file.into();
@@ -458,7 +463,7 @@ pub fn compose_std_command<S: AsRef<OsStr>>(
     }
 
     // Inject any other fds.
-    let other_files = context.iter_fds().filter(|(fd, _)| {
+    let other_files = context.iter_fds()?.into_iter().filter(|(fd, _)| {
         *fd != OpenFiles::STDIN_FD && *fd != OpenFiles::STDOUT_FD && *fd != OpenFiles::STDERR_FD
     });
     cmd.inject_fds(other_files)?;
@@ -820,8 +825,10 @@ pub(crate) fn execute_external_command(
 
     // Before we lose ownership of the open files, figure out if stdin will be a terminal.
     let child_stdin_is_terminal = context
+        .params
+        .fd_overlay(context.shell)
         .try_fd(openfiles::OpenFiles::STDIN_FD)
-        .is_some_and(|f| f.is_terminal());
+        .is_some_and(OpenFile::is_terminal);
 
     // Figure out if we should be setting up a new process group.
     let new_pg = matches!(
@@ -950,7 +957,7 @@ pub(crate) async fn invoke_shell_function(
     let positional_args = args.iter().map(|a| a.to_string());
 
     // Pass through open files.
-    let params = context.params.clone();
+    let params = context.params.try_clone()?;
 
     // Note that we're going deeper. Once we do this, we need to make sure we don't bail early
     // before "exiting" the function.
@@ -994,7 +1001,7 @@ pub(crate) async fn invoke_command_in_subshell_and_get_output(
     s: String,
 ) -> Result<String, error::Error> {
     // Instantiate a subshell to run the command in.
-    let mut subshell = shell.clone();
+    let mut subshell = shell.fork_subshell();
 
     // Command substitutions don't inherit errexit by default. Only inherit it when
     // command_subst_inherits_errexit is enabled, otherwise disable errexit in the subshell.
@@ -1003,7 +1010,7 @@ pub(crate) async fn invoke_command_in_subshell_and_get_output(
     }
 
     // Get our own set of parameters we can customize and use.
-    let mut params = params.clone();
+    let mut params = params.try_clone()?;
     params.process_group_policy = ProcessGroupPolicy::SameProcessGroup;
 
     // Set up pipe so we can read the output.

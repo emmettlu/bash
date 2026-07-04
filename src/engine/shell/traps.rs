@@ -100,7 +100,7 @@ impl crate::engine::Shell {
             }
             // EXIT and system signals are always inherited — i.e. their visibility is
             // not gated by errtrace/functrace options. (The actual trap *state* for
-            // subshells is managed separately via `Shell::clone`.)
+            // subshells is managed separately via `Shell::fork_subshell`.)
             TrapSignal::Exit | TrapSignal::Signal(_) => true,
         }
     }

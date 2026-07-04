@@ -86,80 +86,67 @@ impl builtins::Command for ReadCommand {
         };
         let mut args = builtins::BuiltinArgs::new(args);
 
-        while let Some(arg) = args.next_arg() {
-            if arg == "--" {
-                command.variable_names.extend(args.rest());
-                break;
-            }
-
-            let Some(flags) = arg.strip_prefix('-') else {
-                command.variable_names.push(arg);
-                command.variable_names.extend(args.rest());
-                break;
-            };
-
-            if flags.is_empty() {
-                command.variable_names.push(arg);
-                command.variable_names.extend(args.rest());
-                break;
-            }
-
-            for (idx, flag) in flags.char_indices() {
-                match flag {
-                    'e' => command.use_readline = true,
-                    'r' => command.raw_mode = true,
-                    's' => command.silent = true,
-                    'a' => {
-                        command.array_variable =
-                            Some(option_value(flags, idx, flag, &mut args, "-a")?);
-                        break;
-                    }
-                    'd' => {
-                        command.delimiter = Some(option_value(flags, idx, flag, &mut args, "-d")?);
-                        break;
-                    }
-                    'i' => {
-                        command.initial_text =
-                            Some(option_value(flags, idx, flag, &mut args, "-i")?);
-                        break;
-                    }
-                    'n' => {
-                        let value = option_value(flags, idx, flag, &mut args, "-n")?;
-                        command.return_after_n_chars = Some(parse_usize_option("-n", &value)?);
-                        break;
-                    }
-                    'N' => {
-                        let value = option_value(flags, idx, flag, &mut args, "-N")?;
-                        command.return_after_n_chars_no_delimiter =
-                            Some(parse_usize_option("-N", &value)?);
-                        break;
-                    }
-                    'p' => {
-                        command.prompt = Some(option_value(flags, idx, flag, &mut args, "-p")?);
-                        break;
-                    }
-                    't' => {
-                        let value = option_value(flags, idx, flag, &mut args, "-t")?;
-                        command.timeout_in_seconds = Some(
-                            value
-                                .parse()
-                                .map_err(|_| format!("-t: invalid timeout: {value}"))?,
-                        );
-                        break;
-                    }
-                    'u' => {
-                        let value = option_value(flags, idx, flag, &mut args, "-u")?;
-                        command.fd_num_to_read = Some(
-                            value
-                                .parse()
-                                .map_err(|_| format!("-u: invalid file descriptor: {value}"))?,
-                        );
-                        break;
-                    }
-                    _ => return Err(format!("-{flag}: invalid option")),
+        command.variable_names =
+            args.parse_short_options(|args, flag, flags, rest_start| match flag {
+                'e' => {
+                    command.use_readline = true;
+                    Ok(builtins::ShortOptionDisposition::Continue)
                 }
-            }
-        }
+                'r' => {
+                    command.raw_mode = true;
+                    Ok(builtins::ShortOptionDisposition::Continue)
+                }
+                's' => {
+                    command.silent = true;
+                    Ok(builtins::ShortOptionDisposition::Continue)
+                }
+                'a' => {
+                    command.array_variable = Some(args.option_value(flags, rest_start, "-a")?);
+                    Ok(builtins::ShortOptionDisposition::StopParsingArgument)
+                }
+                'd' => {
+                    command.delimiter = Some(args.option_value(flags, rest_start, "-d")?);
+                    Ok(builtins::ShortOptionDisposition::StopParsingArgument)
+                }
+                'i' => {
+                    command.initial_text = Some(args.option_value(flags, rest_start, "-i")?);
+                    Ok(builtins::ShortOptionDisposition::StopParsingArgument)
+                }
+                'n' => {
+                    let value = args.option_value(flags, rest_start, "-n")?;
+                    command.return_after_n_chars = Some(parse_usize_option("-n", &value)?);
+                    Ok(builtins::ShortOptionDisposition::StopParsingArgument)
+                }
+                'N' => {
+                    let value = args.option_value(flags, rest_start, "-N")?;
+                    command.return_after_n_chars_no_delimiter =
+                        Some(parse_usize_option("-N", &value)?);
+                    Ok(builtins::ShortOptionDisposition::StopParsingArgument)
+                }
+                'p' => {
+                    command.prompt = Some(args.option_value(flags, rest_start, "-p")?);
+                    Ok(builtins::ShortOptionDisposition::StopParsingArgument)
+                }
+                't' => {
+                    let value = args.option_value(flags, rest_start, "-t")?;
+                    command.timeout_in_seconds = Some(
+                        value
+                            .parse()
+                            .map_err(|_| format!("-t: invalid timeout: {value}"))?,
+                    );
+                    Ok(builtins::ShortOptionDisposition::StopParsingArgument)
+                }
+                'u' => {
+                    let value = args.option_value(flags, rest_start, "-u")?;
+                    command.fd_num_to_read = Some(
+                        value
+                            .parse()
+                            .map_err(|_| format!("-u: invalid file descriptor: {value}"))?,
+                    );
+                    Ok(builtins::ShortOptionDisposition::StopParsingArgument)
+                }
+                _ => Err(format!("-{flag}: invalid option")),
+            })?;
 
         Ok(command)
     }
@@ -236,21 +223,6 @@ impl builtins::Command for ReadCommand {
         )?;
 
         Ok(result)
-    }
-}
-
-fn option_value(
-    flags: &str,
-    idx: usize,
-    flag: char,
-    args: &mut builtins::BuiltinArgs,
-    option: &str,
-) -> Result<String, String> {
-    let value_start = idx + flag.len_utf8();
-    if value_start < flags.len() {
-        Ok(flags[value_start..].to_owned())
-    } else {
-        args.next_value(option)
     }
 }
 

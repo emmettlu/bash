@@ -164,6 +164,22 @@ pub struct Config {
     pub fallback_options: FallbackOptions,
 }
 
+struct CompletionOptionsSession {
+    previous_options: Option<GenerationOptions>,
+}
+
+impl CompletionOptionsSession {
+    fn start(config: &mut Config, options: GenerationOptions) -> Self {
+        Self {
+            previous_options: config.current_completion_options.replace(options),
+        }
+    }
+
+    fn finish(self, config: &mut Config) {
+        config.current_completion_options = self.previous_options;
+    }
+}
+
 /// Options for fallback completions.
 #[derive(Clone, Debug)]
 pub struct FallbackOptions {
@@ -303,17 +319,26 @@ impl Spec {
     ///
     /// * `shell` - The shell instance to use for completion generation.
     /// * `context` - The context in which completion is being generated.
-    #[expect(clippy::too_many_lines)]
     pub async fn get_completions(
         &self,
         shell: &mut Shell,
         context: &Context<'_>,
     ) -> Result<Answer, crate::engine::error::Error> {
-        // Store the current options in the shell; this is needed since the compopt
-        // built-in has the ability of modifying the options for an in-flight
-        // completion process.
-        shell.completion_config_mut().current_completion_options = Some(self.options.clone());
+        let session =
+            CompletionOptionsSession::start(shell.completion_config_mut(), self.options.clone());
+        let result = self
+            .get_completions_with_current_options(shell, context)
+            .await;
+        session.finish(shell.completion_config_mut());
+        result
+    }
 
+    #[expect(clippy::too_many_lines)]
+    async fn get_completions_with_current_options(
+        &self,
+        shell: &mut Shell,
+        context: &Context<'_>,
+    ) -> Result<Answer, crate::engine::error::Error> {
         // Generate completions based on any provided actions (and on words).
         let mut candidates = self.generate_action_completions(shell, context).await?;
         if let Some(word_list) = &self.word_list {
@@ -408,11 +433,11 @@ impl Spec {
         // Now apply options
         //
 
-        let options = if let Some(options) = &shell.completion_config().current_completion_options {
-            options
-        } else {
-            &self.options
-        };
+        let options = shell
+            .completion_config()
+            .current_completion_options
+            .clone()
+            .unwrap_or_else(|| self.options.clone());
 
         let mut processing_options = ProcessingOptions {
             treat_as_filenames: options.file_names,
@@ -457,7 +482,7 @@ impl Spec {
         }
 
         // Sort, unless blocked by options.
-        if !self.options.no_sort {
+        if !options.no_sort {
             candidates.sort();
         }
 
@@ -671,7 +696,7 @@ impl Spec {
         context: &Context<'_>,
     ) -> Result<Vec<String>, error::Error> {
         // Move to a subshell so we can start filling out variables.
-        let mut shell = shell.clone();
+        let mut shell = shell.fork_subshell();
 
         let vars_and_values: Vec<(&str, ShellValueLiteral)> = vec![
             ("COMP_LINE", context.input_line.into()),
@@ -1199,7 +1224,7 @@ async fn get_file_completions(
     must_be_dir: bool,
 ) -> Vec<String> {
     // Basic-expand the token-to-be-completed; it won't have been expanded to this point.
-    let mut throwaway_shell = shell.clone();
+    let mut throwaway_shell = shell.fork_subshell();
     let params = throwaway_shell.default_exec_params();
     let options = expansion::ExpanderOptions {
         execute_command_substitutions: false,
@@ -1518,6 +1543,39 @@ fn replace_unescaped_ampersands<'a>(pattern: &'a str, replacement: &str) -> Cow<
 mod tests {
     use super::*;
     use pretty_assertions::assert_matches;
+
+    #[test]
+    fn completion_options_session_restores_previous_options() {
+        let mut config = Config {
+            current_completion_options: Some(GenerationOptions {
+                no_sort: true,
+                ..GenerationOptions::default()
+            }),
+            ..Config::default()
+        };
+
+        let session = CompletionOptionsSession::start(
+            &mut config,
+            GenerationOptions {
+                no_space: true,
+                ..GenerationOptions::default()
+            },
+        );
+
+        assert_eq!(
+            config
+                .current_completion_options
+                .as_ref()
+                .map(|o| o.no_space),
+            Some(true)
+        );
+
+        session.finish(&mut config);
+
+        let restored = config.current_completion_options.as_ref();
+        assert_eq!(restored.map(|o| o.no_sort), Some(true));
+        assert_eq!(restored.map(|o| o.no_space), Some(false));
+    }
 
     #[test]
     #[allow(clippy::too_many_lines)]

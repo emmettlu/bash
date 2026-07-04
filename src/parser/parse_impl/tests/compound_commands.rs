@@ -2,6 +2,7 @@
 
 use super::{ParseResult, test_with_snapshot};
 use crate::assert_snapshot_redacted;
+use crate::parser::ast::{Command, CompoundCommand};
 use anyhow::Result;
 
 // Arithmetic commands
@@ -223,6 +224,22 @@ fn parse_if_simple() -> Result<()> {
         input,
         result: &result
     });
+    Ok(())
+}
+
+#[test]
+fn parse_if_location_spans_to_fi() -> Result<()> {
+    let input = "if true; then echo yes; fi";
+    let result = test_with_snapshot(input)?;
+    let command = &result.complete_commands[0].0[0].0.first.seq[0];
+
+    let Command::Compound(CompoundCommand::IfClause(if_clause), _) = command else {
+        panic!("expected if clause command");
+    };
+
+    assert_eq!(if_clause.loc.start.index, 0);
+    assert_eq!(if_clause.loc.end.index, input.len());
+
     Ok(())
 }
 

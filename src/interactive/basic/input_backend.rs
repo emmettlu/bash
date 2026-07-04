@@ -35,11 +35,12 @@ impl BasicInputBackend {
         reader: &R,
         prompt: &InteractivePrompt,
     ) -> Result<ReadResult, ShellError> {
-        let mut prompt_to_use = self.should_display_prompt().then_some(&prompt);
+        let should_display_prompt = self.should_display_prompt();
+        let mut prompt_to_use = should_display_prompt.then_some(prompt.prompt.as_str());
         let mut result = String::new();
 
         loop {
-            match reader.read_line(prompt_to_use.map(|p| p.prompt.as_str()), |line, cursor| {
+            match reader.read_line(prompt_to_use, |line, cursor| {
                 let mut shell =
                     compio::runtime::Runtime::with_current(|rt| rt.block_on(shell_ref.lock()));
 
@@ -55,7 +56,8 @@ impl BasicInputBackend {
                         break;
                     }
 
-                    prompt_to_use = None;
+                    prompt_to_use =
+                        should_display_prompt.then_some(prompt.continuation_prompt.as_str());
                 }
                 ReadResult::BoundCommand(s) => {
                     result.push_str(s.as_str());

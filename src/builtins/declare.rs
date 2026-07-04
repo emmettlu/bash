@@ -296,10 +296,7 @@ impl DeclareCommand {
 
         // Special-case: `local -`
         if name == "-" && matches!(verb, DeclareVerb::Local) {
-            // TODO(local): `local -` allows shadowing the current `set` options (i.e., $-), with
-            // subsequent updates getting discarded when the current local scope is popped.
-            log::warn!("not yet implemented: local -");
-            return Ok(true);
+            return error::unimp("local -");
         }
 
         // Make sure it's a valid name.

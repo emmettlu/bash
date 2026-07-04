@@ -40,6 +40,8 @@ pub(crate) struct ShellRunPlan {
     pub mode: ShellRunMode,
     /// shell 本身是否按交互 shell 初始化。
     pub interactive_shell: bool,
+    /// 是否启动真正的交互 session, 包含 prompt, history 和 PROMPT_COMMAND。
+    pub interactive_session: bool,
     /// 未显式指定 input backend 时使用的默认 backend。
     pub default_input_backend: InputBackendType,
 }
@@ -74,9 +76,12 @@ impl ShellRunPlan {
             InputBackendType::Minimal
         };
 
+        let interactive_session = matches!(mode, ShellRunMode::Interactive);
+
         Self {
             mode,
             interactive_shell: args.is_interactive(),
+            interactive_session,
             default_input_backend,
         }
     }
@@ -87,6 +92,7 @@ impl std::fmt::Debug for ShellRunPlan {
         f.debug_struct("ShellRunPlan")
             .field("mode", &self.mode)
             .field("interactive_shell", &self.interactive_shell)
+            .field("interactive_session", &self.interactive_session)
             .field(
                 "default_input_backend",
                 &InputBackendTypeDebug(self.default_input_backend),
@@ -136,13 +142,13 @@ pub(crate) async fn run_in_shell(
         // args) passed on the command line via positional arguments, then we copy over the
         // parameters but do *not* execute it.
         ShellRunMode::Stdin => {
-            let interactive_options = ui_options.into();
+            let interactive_options = crate::interactive::InteractiveOptions::stdin_input_loop();
             crate::interactive::InteractiveShell::new(
                 shell_ref,
                 input_backend,
                 &interactive_options,
             )?
-            .run_interactively()
+            .run_stdin_input_loop()
             .await?;
         }
 
@@ -381,6 +387,7 @@ mod tests {
 
         assert_matches!(&plan.mode, ShellRunMode::CommandString(command) if command == "echo hi");
         assert_eq!(plan.interactive_shell, parsed_args.is_interactive());
+        assert!(!plan.interactive_session);
         assert_minimal_backend(plan.default_input_backend);
         Ok(())
     }
@@ -392,6 +399,7 @@ mod tests {
 
         assert_matches!(&plan.mode, ShellRunMode::Stdin);
         assert_eq!(plan.interactive_shell, parsed_args.is_interactive());
+        assert!(!plan.interactive_session);
         assert_basic_backend(plan.default_input_backend);
         Ok(())
     }
@@ -410,6 +418,7 @@ mod tests {
             mode => panic!("unexpected shell run mode: {mode:?}"),
         }
         assert_eq!(plan.interactive_shell, parsed_args.is_interactive());
+        assert!(!plan.interactive_session);
         assert_minimal_backend(plan.default_input_backend);
         Ok(())
     }
@@ -425,6 +434,7 @@ mod tests {
             terminal_plan.interactive_shell,
             parsed_args.is_interactive()
         );
+        assert!(terminal_plan.interactive_session);
         assert_basic_backend(terminal_plan.default_input_backend);
 
         assert_matches!(&non_terminal_plan.mode, ShellRunMode::Interactive);
@@ -432,6 +442,7 @@ mod tests {
             non_terminal_plan.interactive_shell,
             parsed_args.is_interactive()
         );
+        assert!(non_terminal_plan.interactive_session);
         assert_minimal_backend(non_terminal_plan.default_input_backend);
         Ok(())
     }

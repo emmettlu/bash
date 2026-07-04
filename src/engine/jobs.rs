@@ -16,10 +16,26 @@ pub(crate) type JobJoinHandle = compio::runtime::JoinHandle<Result<ExecutionResu
 pub(crate) type JobResult = (Job, Result<ExecutionResult, error::Error>);
 
 /// Manages the jobs that are currently managed by the shell.
-#[derive(Default)]
 pub struct JobManager {
     /// The jobs that are currently managed by the shell.
     pub jobs: Vec<Job>,
+    /// 下一个要分配的 shell 内部 job ID.
+    next_job_id: usize,
+    /// 当前 job 的 ID.
+    current_job_id: Option<usize>,
+    /// previous job 的 ID.
+    previous_job_id: Option<usize>,
+}
+
+impl Default for JobManager {
+    fn default() -> Self {
+        Self {
+            jobs: Vec::new(),
+            next_job_id: 1,
+            current_job_id: None,
+            previous_job_id: None,
+        }
+    }
 }
 
 /// Represents a task that is part of a job.
@@ -84,17 +100,18 @@ impl JobManager {
         reason = "push() guarantees the vector length is >= 1"
     )]
     pub fn add_as_current(&mut self, mut job: Job) -> &Job {
-        for j in &mut self.jobs {
-            if matches!(j.annotation, JobAnnotation::Current) {
-                j.annotation = JobAnnotation::Previous;
-                break;
-            }
-        }
+        let id = self.next_job_id;
+        self.next_job_id = self
+            .next_job_id
+            .checked_add(1)
+            .expect("job id overflow while assigning new job");
 
-        let id = self.jobs.len() + 1;
+        self.previous_job_id = self.current_job_id.filter(|id| self.job_exists(*id));
+        self.current_job_id = Some(id);
+
         job.id = id;
-        job.annotation = JobAnnotation::Current;
         self.jobs.push(job);
+        self.refresh_annotations();
 
         #[allow(clippy::unwrap_used, reason = "we just pushed an element")]
         self.jobs.last().unwrap()
@@ -102,30 +119,26 @@ impl JobManager {
 
     /// Returns the current job, if there is one.
     pub fn current_job(&self) -> Option<&Job> {
-        self.jobs
-            .iter()
-            .find(|j| matches!(j.annotation, JobAnnotation::Current))
+        let id = self.current_job_id?;
+        self.jobs.iter().find(|j| j.id == id)
     }
 
     /// Returns a mutable reference to the current job, if there is one.
     pub fn current_job_mut(&mut self) -> Option<&mut Job> {
-        self.jobs
-            .iter_mut()
-            .find(|j| matches!(j.annotation, JobAnnotation::Current))
+        let id = self.current_job_id?;
+        self.jobs.iter_mut().find(|j| j.id == id)
     }
 
     /// Returns the previous job, if there is one.
     pub fn prev_job(&self) -> Option<&Job> {
-        self.jobs
-            .iter()
-            .find(|j| matches!(j.annotation, JobAnnotation::Previous))
+        let id = self.previous_job_id?;
+        self.jobs.iter().find(|j| j.id == id)
     }
 
     /// Returns a mutable reference to the previous job, if there is one.
     pub fn prev_job_mut(&mut self) -> Option<&mut Job> {
-        self.jobs
-            .iter_mut()
-            .find(|j| matches!(j.annotation, JobAnnotation::Previous))
+        let id = self.previous_job_id?;
+        self.jobs.iter_mut().find(|j| j.id == id)
     }
 
     /// Tries to resolve the given job specification to a job.
@@ -166,12 +179,12 @@ impl JobManager {
         let mut i = 0;
         while i != self.jobs.len() {
             if let Some(result) = self.jobs[i].poll_done()? {
-                let job = self.jobs.remove(i);
+                let job = self.remove_job_at(i);
                 results.push((job, result));
             } else if matches!(self.jobs[i].state, JobState::Done) {
                 // TODO(jobs): This is a workaround to remove jobs that are done but for which we
                 // don't know what happened.
-                results.push((self.jobs.remove(i), Ok(ExecutionResult::success())));
+                results.push((self.remove_job_at(i), Ok(ExecutionResult::success())));
             } else {
                 i += 1;
             }
@@ -186,13 +199,66 @@ impl JobManager {
         let mut i = 0;
         while i != self.jobs.len() {
             if self.jobs[i].tasks.is_empty() {
-                completed_jobs.push(self.jobs.remove(i));
+                completed_jobs.push(self.remove_job_at(i));
             } else {
                 i += 1;
             }
         }
 
         completed_jobs
+    }
+
+    fn remove_job_at(&mut self, index: usize) -> Job {
+        let job = self.jobs.remove(index);
+        if self.current_job_id == Some(job.id) {
+            self.current_job_id = None;
+        }
+        if self.previous_job_id == Some(job.id) {
+            self.previous_job_id = None;
+        }
+        self.refresh_annotations();
+        job
+    }
+
+    fn refresh_annotations(&mut self) {
+        if self.jobs.is_empty() {
+            self.current_job_id = None;
+            self.previous_job_id = None;
+            return;
+        }
+
+        if self.current_job_id.is_none_or(|id| !self.job_exists(id)) {
+            self.current_job_id = self.newest_job_id_except(None);
+        }
+
+        if self
+            .previous_job_id
+            .is_none_or(|id| Some(id) == self.current_job_id || !self.job_exists(id))
+        {
+            self.previous_job_id = self.newest_job_id_except(self.current_job_id);
+        }
+
+        for job in &mut self.jobs {
+            job.annotation = if Some(job.id) == self.current_job_id {
+                JobAnnotation::Current
+            } else if Some(job.id) == self.previous_job_id {
+                JobAnnotation::Previous
+            } else {
+                JobAnnotation::None
+            };
+        }
+    }
+
+    fn job_exists(&self, id: usize) -> bool {
+        self.jobs.iter().any(|job| job.id == id)
+    }
+
+    fn newest_job_id_except(&self, excluded: Option<usize>) -> Option<usize> {
+        self.jobs
+            .iter()
+            .filter(|job| Some(job.id) != excluded)
+            .map(|job| job.id)
+            .max()
     }
 }
 

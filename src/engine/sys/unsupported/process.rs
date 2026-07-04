@@ -21,6 +21,11 @@ impl Child {
         self.inner.wait()
     }
 
+    /// 非阻塞检查子进程是否已经退出.
+    pub fn try_wait(&mut self) -> std::io::Result<Option<ExitStatus>> {
+        self.inner.try_wait()
+    }
+
     /// Waits for the child process to exit and collects its output.
     pub fn wait_with_output(self) -> std::io::Result<Output> {
         self.inner.wait_with_output()

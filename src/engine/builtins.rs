@@ -152,6 +152,16 @@ pub fn split_at_double_dash(
     }
 }
 
+/// 内置命令短选项解析后的下一步动作。
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ShortOptionDisposition {
+    /// 继续解析当前参数中的下一个短选项。
+    Continue,
+
+    /// 当前短选项已经消费了剩余字符或下一个参数, 停止解析当前参数。
+    StopParsingArgument,
+}
+
 /// 内置命令参数游标, 用于替代 derive parser 的轻量解析。
 pub struct BuiltinArgs {
     args: Vec<String>,
@@ -185,12 +195,86 @@ impl BuiltinArgs {
             .ok_or_else(|| format!("{option}: option requires an argument"))
     }
 
+    pub fn option_value(
+        &mut self,
+        flags: &str,
+        rest_start: usize,
+        option: &str,
+    ) -> Result<String, String> {
+        if rest_start < flags.len() {
+            Ok(flags[rest_start..].to_owned())
+        } else {
+            self.next_value(option)
+        }
+    }
+
     pub fn rest(mut self) -> Vec<String> {
         self.drain_rest()
     }
 
     fn drain_rest(&mut self) -> Vec<String> {
         self.args.drain(self.index..).collect()
+    }
+
+    pub fn parse_short_options(
+        &mut self,
+        mut on_flag: impl FnMut(&mut Self, char, &str, usize) -> Result<ShortOptionDisposition, String>,
+    ) -> Result<Vec<String>, String> {
+        self.parse_short_options_impl(true, &mut on_flag)
+    }
+
+    pub fn parse_short_options_permuted(
+        &mut self,
+        mut on_flag: impl FnMut(&mut Self, char, &str, usize) -> Result<ShortOptionDisposition, String>,
+    ) -> Result<Vec<String>, String> {
+        self.parse_short_options_impl(false, &mut on_flag)
+    }
+
+    fn parse_short_options_impl(
+        &mut self,
+        stop_at_first_positional: bool,
+        on_flag: &mut impl FnMut(&mut Self, char, &str, usize) -> Result<ShortOptionDisposition, String>,
+    ) -> Result<Vec<String>, String> {
+        let mut positionals = Vec::new();
+        while let Some(arg) = self.next_arg() {
+            if self.stop_options || arg == "--" {
+                if arg == "--" {
+                    self.stop_options = true;
+                } else {
+                    positionals.push(arg);
+                }
+                positionals.extend(self.drain_rest());
+                break;
+            }
+
+            let Some(flags) = arg.strip_prefix('-') else {
+                positionals.push(arg);
+                if stop_at_first_positional {
+                    positionals.extend(self.drain_rest());
+                    break;
+                }
+                continue;
+            };
+
+            if flags.is_empty() {
+                positionals.push(arg);
+                if stop_at_first_positional {
+                    positionals.extend(self.drain_rest());
+                    break;
+                }
+                continue;
+            }
+
+            for (idx, flag) in flags.char_indices() {
+                let rest_start = idx + flag.len_utf8();
+                if on_flag(self, flag, flags, rest_start)?
+                    == ShortOptionDisposition::StopParsingArgument
+                {
+                    break;
+                }
+            }
+        }
+        Ok(positionals)
     }
 
     pub fn parse_flags(
@@ -347,10 +431,18 @@ fn exec_declaration_builtin<T: DeclarationCommand + Send + Sync>(
         let mut options = vec![];
         let mut declarations = vec![];
 
+        let mut after_double_dash = false;
         for (i, arg) in args.into_iter().enumerate() {
             match arg {
+                CommandArg::String(s) if i == 0 => options.push(s),
+                CommandArg::String(s) if !after_double_dash && s == "--" => {
+                    after_double_dash = true;
+                    options.push(s);
+                }
                 CommandArg::String(s)
-                    if i == 0 || (s.len() > 1 && (s.starts_with('-') || s.starts_with('+'))) =>
+                    if !after_double_dash
+                        && s.len() > 1
+                        && (s.starts_with('-') || s.starts_with('+')) =>
                 {
                     options.push(s);
                 }

@@ -10,6 +10,7 @@ use crate::interactive::win_term::{self, KeyCode};
 use crate::interactive::{ReadResult, ShellError};
 
 const BACKSPACE: char = 8u8 as char;
+const MAX_COMPLETION_COLUMNS: usize = 4;
 
 pub(crate) struct TermLineReader {
     _console_mode: ConsoleModeGuard,
@@ -77,8 +78,18 @@ struct ReadLineState<'a> {
 struct CompletionMenu {
     completions: crate::engine::completion::Completions,
     selected: usize,
+    rows: usize,
+    columns: usize,
     rendered_lines: usize,
     cursor_visibility: Option<win_term::CursorVisibilityGuard>,
+}
+
+#[derive(Clone, Copy)]
+enum CompletionDirection {
+    Up,
+    Down,
+    Left,
+    Right,
 }
 
 impl<'a> ReadLineState<'a> {
@@ -149,6 +160,18 @@ impl<'a> ReadLineState<'a> {
                 self.clear_completion_menu()?;
                 self.backspace()?;
             }
+            (_, KeyCode::Up) if self.completion_menu.is_some() => {
+                self.move_completion_selection(CompletionDirection::Up)?;
+            }
+            (_, KeyCode::Down) if self.completion_menu.is_some() => {
+                self.move_completion_selection(CompletionDirection::Down)?;
+            }
+            (_, KeyCode::Left) if self.completion_menu.is_some() => {
+                self.move_completion_selection(CompletionDirection::Left)?;
+            }
+            (_, KeyCode::Right) if self.completion_menu.is_some() => {
+                self.move_completion_selection(CompletionDirection::Right)?;
+            }
             (_, KeyCode::Left) => {
                 self.clear_completion_menu()?;
                 self.move_cursor_left()?;
@@ -157,6 +180,7 @@ impl<'a> ReadLineState<'a> {
                 self.clear_completion_menu()?;
                 self.move_cursor_right()?;
             }
+            (_, KeyCode::Tab) if self.completion_menu.is_some() => {}
             (_, KeyCode::Tab) => {
                 self.handle_tab(&mut completion_handler)?;
             }
@@ -267,14 +291,29 @@ impl<'a> ReadLineState<'a> {
         >,
     ) -> Result<(), ShellError> {
         if self.completion_menu.is_some() {
-            if let Some(menu) = self.completion_menu.as_mut() {
-                menu.selected = (menu.selected + 1) % menu.completions.candidates.len();
-            }
-            return self.render_completion_menu();
+            return Ok(());
         }
 
         let completions = completion_handler(self.line.as_str(), self.cursor)?;
         self.handle_completions(completions)
+    }
+
+    fn move_completion_selection(
+        &mut self,
+        direction: CompletionDirection,
+    ) -> Result<(), ShellError> {
+        let Some(menu) = self.completion_menu.as_mut() else {
+            return Ok(());
+        };
+
+        menu.selected = move_completion_selection_index(
+            menu.selected,
+            menu.completions.candidates.len(),
+            menu.rows,
+            menu.columns,
+            direction,
+        );
+        self.render_completion_menu()
     }
 
     fn handle_completions(
@@ -289,6 +328,8 @@ impl<'a> ReadLineState<'a> {
             self.completion_menu = Some(CompletionMenu {
                 completions,
                 selected: 0,
+                rows: 1,
+                columns: 1,
                 rendered_lines: 0,
                 cursor_visibility: None,
             });
@@ -344,35 +385,52 @@ impl<'a> ReadLineState<'a> {
     }
 
     fn render_completion_menu(&mut self) -> Result<(), ShellError> {
-        const MAX_COLUMNS: usize = 4;
-
-        let Some(menu) = self.completion_menu.as_mut() else {
-            return Ok(());
-        };
-
-        if menu.cursor_visibility.is_none() {
-            menu.cursor_visibility = win_term::hide_cursor().ok();
-        }
-
-        let input_cursor = win_term::get_cursor_position()?;
-        let completions_start_y = input_cursor.y.saturating_add(1);
+        let mut input_cursor = win_term::get_cursor_position()?;
         let (buffer_width, buffer_height) = win_term::screen_buffer_size()?;
         let terminal_width = usize::try_from(buffer_width).unwrap_or(80).max(1);
-        let column_width = completion_column_width(&menu.completions);
-        let columns = usize::min(MAX_COLUMNS, usize::max(1, terminal_width / column_width));
-        let rows = menu.completions.candidates.len().div_ceil(columns);
+
+        let (rows, columns, column_width, rendered_lines) = {
+            let Some(menu) = self.completion_menu.as_mut() else {
+                return Ok(());
+            };
+
+            if menu.cursor_visibility.is_none() {
+                menu.cursor_visibility = win_term::hide_cursor().ok();
+            }
+
+            let column_width = completion_column_width(&menu.completions);
+            let columns = usize::min(
+                MAX_COMPLETION_COLUMNS,
+                usize::max(1, terminal_width / column_width),
+            );
+            let rows = menu.completions.candidates.len().div_ceil(columns);
+            let required_lines = i16::try_from(rows).unwrap_or(i16::MAX);
+
+            menu.rows = rows.max(1);
+            menu.columns = columns.max(1);
+
+            if required_lines >= buffer_height {
+                return self.handle_multiple_completions_fallback();
+            }
+
+            (rows, columns, column_width, menu.rendered_lines)
+        };
+
         let required_lines = i16::try_from(rows).unwrap_or(i16::MAX);
+        input_cursor =
+            self.ensure_completion_menu_space(input_cursor, required_lines, buffer_height)?;
+        let completions_start_y = input_cursor.y.saturating_add(1);
 
-        if completions_start_y.saturating_add(required_lines) >= buffer_height {
-            return self.handle_multiple_completions_fallback();
-        }
-
-        let max_rendered = rows.max(menu.rendered_lines);
+        let max_rendered = rows.max(rendered_lines);
         for row in 0..max_rendered {
             let y = completions_start_y + i16::try_from(row).unwrap_or(i16::MAX);
             win_term::set_cursor_position(0, y)?;
             win_term::clear_current_line()?;
         }
+
+        let Some(menu) = self.completion_menu.as_mut() else {
+            return Ok(());
+        };
 
         for row in 0..rows {
             let y = completions_start_y + i16::try_from(row).unwrap_or(i16::MAX);
@@ -403,6 +461,45 @@ impl<'a> ReadLineState<'a> {
         std::io::stderr().flush()?;
 
         Ok(())
+    }
+
+    fn ensure_completion_menu_space(
+        &self,
+        input_cursor: win_term::CursorPosition,
+        required_lines: i16,
+        buffer_height: i16,
+    ) -> Result<win_term::CursorPosition, ShellError> {
+        let menu_end_y = input_cursor
+            .y
+            .saturating_add(1)
+            .saturating_add(required_lines);
+        if menu_end_y <= buffer_height {
+            return Ok(input_cursor);
+        }
+
+        let lines_to_move_up = menu_end_y.saturating_sub(buffer_height);
+        let lines_to_bottom = buffer_height
+            .saturating_sub(1)
+            .saturating_sub(input_cursor.y);
+        let newlines = lines_to_bottom.saturating_add(lines_to_move_up);
+
+        for _ in 0..newlines {
+            eprintln!();
+        }
+        std::io::stderr().flush()?;
+
+        let input_y = input_cursor.y.saturating_sub(lines_to_move_up);
+        win_term::set_cursor_position(0, input_y)?;
+        win_term::clear_current_line()?;
+        self.display_prompt()?;
+        eprint!(
+            "{}{}",
+            self.line,
+            repeated_char_str(BACKSPACE, self.line.len() - self.cursor)
+        );
+        std::io::stderr().flush()?;
+
+        win_term::get_cursor_position().map_err(ShellError::from)
     }
 
     fn handle_multiple_completions_fallback(&self) -> Result<(), ShellError> {
@@ -541,6 +638,124 @@ fn format_completion_cell(marker: char, value: &str, width: usize) -> String {
     format!("{marker}{value} ")
 }
 
+fn move_completion_selection_index(
+    selected: usize,
+    candidate_count: usize,
+    rows: usize,
+    columns: usize,
+    direction: CompletionDirection,
+) -> usize {
+    if candidate_count == 0 {
+        return 0;
+    }
+
+    let rows = rows.max(1);
+    let columns = columns.max(1);
+    let selected = selected.min(candidate_count - 1);
+    let row = selected % rows;
+    let column = selected / rows;
+
+    match direction {
+        CompletionDirection::Up => row
+            .checked_sub(1)
+            .map_or(selected, |row| column * rows + row),
+        CompletionDirection::Down => {
+            let next = selected + 1;
+            if row + 1 < completion_column_len(candidate_count, rows, column) {
+                next
+            } else {
+                selected
+            }
+        }
+        CompletionDirection::Left => {
+            let Some(column) = column.checked_sub(1) else {
+                return selected;
+            };
+            let row = row.min(completion_column_len(candidate_count, rows, column) - 1);
+            column * rows + row
+        }
+        CompletionDirection::Right => {
+            if column + 1 >= columns {
+                return selected;
+            }
+            let column = column + 1;
+            let column_len = completion_column_len(candidate_count, rows, column);
+            if column_len == 0 {
+                selected
+            } else {
+                let row = row.min(column_len - 1);
+                column * rows + row
+            }
+        }
+    }
+}
+
+fn completion_column_len(candidate_count: usize, rows: usize, column: usize) -> usize {
+    candidate_count.saturating_sub(column * rows).min(rows)
+}
+
 fn repeated_char_str(c: char, count: usize) -> String {
     (0..count).map(|_| c).collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CompletionDirection, move_completion_selection_index};
+
+    #[test]
+    fn completion_selection_moves_inside_visible_grid() {
+        let rows = 3;
+        let columns = 4;
+
+        assert_eq!(
+            move_completion_selection_index(0, 10, rows, columns, CompletionDirection::Down),
+            1
+        );
+        assert_eq!(
+            move_completion_selection_index(1, 10, rows, columns, CompletionDirection::Up),
+            0
+        );
+        assert_eq!(
+            move_completion_selection_index(1, 10, rows, columns, CompletionDirection::Right),
+            4
+        );
+        assert_eq!(
+            move_completion_selection_index(4, 10, rows, columns, CompletionDirection::Left),
+            1
+        );
+    }
+
+    #[test]
+    fn completion_selection_clamps_at_grid_edges() {
+        let rows = 3;
+        let columns = 4;
+
+        assert_eq!(
+            move_completion_selection_index(0, 10, rows, columns, CompletionDirection::Up),
+            0
+        );
+        assert_eq!(
+            move_completion_selection_index(2, 10, rows, columns, CompletionDirection::Down),
+            2
+        );
+        assert_eq!(
+            move_completion_selection_index(0, 10, rows, columns, CompletionDirection::Left),
+            0
+        );
+        assert_eq!(
+            move_completion_selection_index(9, 10, rows, columns, CompletionDirection::Right),
+            9
+        );
+    }
+
+    #[test]
+    fn completion_selection_right_clamps_to_short_last_column() {
+        let rows = 3;
+        let columns = 4;
+
+        assert_eq!(
+            move_completion_selection_index(8, 10, rows, columns, CompletionDirection::Right),
+            9
+        );
+    }
 }

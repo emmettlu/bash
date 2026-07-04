@@ -89,7 +89,7 @@ fn format_prompt_piece(
             basename,
         } => format_current_working_directory(shell, tilde_replaced, basename),
         crate::parser::prompt::PromptPiece::Date(format) => {
-            format_date(&chrono::Local::now(), &format)
+            crate::engine::timefmt::format_date(&nanotime::NanoTime::now(), &format)
         }
         crate::parser::prompt::PromptPiece::DollarOrPound => {
             if users::is_root() {
@@ -157,7 +157,7 @@ fn format_prompt_piece(
                 .unwrap_or_default()
         }
         crate::parser::prompt::PromptPiece::Time(time_fmt) => {
-            format_time(&chrono::Local::now(), &time_fmt)
+            crate::engine::timefmt::format_time(&nanotime::NanoTime::now(), &time_fmt)
         }
     };
 
@@ -180,106 +180,4 @@ fn format_current_working_directory(shell: &Shell, tilde_replaced: bool, basenam
     }
 
     working_dir_str
-}
-
-fn format_time<Tz: chrono::TimeZone>(
-    datetime: &chrono::DateTime<Tz>,
-    format: &crate::parser::prompt::PromptTimeFormat,
-) -> String
-where
-    Tz::Offset: std::fmt::Display,
-{
-    let formatted = match format {
-        crate::parser::prompt::PromptTimeFormat::TwelveHourAM => datetime.format("%I:%M %p"),
-        crate::parser::prompt::PromptTimeFormat::TwelveHourHHMMSS => datetime.format("%I:%M:%S"),
-        crate::parser::prompt::PromptTimeFormat::TwentyFourHourHHMM => datetime.format("%H:%M"),
-        crate::parser::prompt::PromptTimeFormat::TwentyFourHourHHMMSS => {
-            datetime.format("%H:%M:%S")
-        }
-    };
-
-    formatted.to_string()
-}
-
-fn format_date<Tz: chrono::TimeZone>(
-    datetime: &chrono::DateTime<Tz>,
-    format: &crate::parser::prompt::PromptDateFormat,
-) -> String
-where
-    Tz::Offset: std::fmt::Display,
-{
-    match format {
-        crate::parser::prompt::PromptDateFormat::WeekdayMonthDate => {
-            datetime.format("%a %b %d").to_string()
-        }
-        crate::parser::prompt::PromptDateFormat::Custom(fmt) => {
-            let fmt_items = chrono::format::StrftimeItems::new(fmt);
-            datetime.format_with_items(fmt_items).to_string()
-        }
-    }
-}
-
-#[cfg(test)]
-#[allow(clippy::unwrap_used)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_format_time() {
-        // Create a well-known test date/time.
-        let dt = chrono::DateTime::parse_from_rfc3339("2024-12-25T13:34:56.789Z").unwrap();
-
-        assert_eq!(
-            format_time(&dt, &crate::parser::prompt::PromptTimeFormat::TwelveHourAM),
-            "01:34 PM"
-        );
-
-        assert_eq!(
-            format_time(
-                &dt,
-                &crate::parser::prompt::PromptTimeFormat::TwentyFourHourHHMMSS
-            ),
-            "13:34:56"
-        );
-
-        assert_eq!(
-            format_time(
-                &dt,
-                &crate::parser::prompt::PromptTimeFormat::TwelveHourHHMMSS
-            ),
-            "01:34:56"
-        );
-    }
-
-    #[test]
-    fn test_format_date() {
-        // Create a well-known test date/time.
-        let dt = chrono::DateTime::parse_from_rfc3339("2024-12-25T12:34:56.789Z").unwrap();
-
-        assert_eq!(
-            format_date(
-                &dt,
-                &crate::parser::prompt::PromptDateFormat::WeekdayMonthDate
-            ),
-            "Wed Dec 25"
-        );
-
-        assert_eq!(
-            format_date(
-                &dt,
-                &crate::parser::prompt::PromptDateFormat::Custom(String::from("%Y-%m-%d"))
-            ),
-            "2024-12-25"
-        );
-
-        assert_eq!(
-            format_date(
-                &dt,
-                &crate::parser::prompt::PromptDateFormat::Custom(String::from(
-                    "%Y-%m-%d %H:%M:%S.%f"
-                ))
-            ),
-            "2024-12-25 12:34:56.789000000"
-        );
-    }
 }

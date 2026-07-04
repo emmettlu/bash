@@ -276,12 +276,11 @@ fn display_history(
     for (i, item) in history.iter().skip(skip_count).enumerate() {
         let mut formatted_timestamp = String::new();
 
-        if let Some(timestamp) = item.timestamp {
-            let local_timestamp = timestamp.with_timezone(&chrono::Local);
-            if let Some(time_format) = &config.time_format {
-                let fmt_items = chrono::format::StrftimeItems::new(time_format);
-                formatted_timestamp = local_timestamp.format_with_items(fmt_items).to_string();
-            }
+        if let Some(timestamp) = item.timestamp
+            && let Some(time_format) = &config.time_format
+        {
+            formatted_timestamp =
+                crate::engine::timefmt::format_strftime_subset(&timestamp, time_format);
         }
 
         // Output format is something like:

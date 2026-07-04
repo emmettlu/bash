@@ -10,7 +10,6 @@ categories = ["command-line-utilities", "development-tools"]
 [dependencies]
 anyhow = "1"
 bon = "3"
-chrono = "0"
 
 compio = { version = "0", default-features = false, features = ["macros", "runtime"] }
 fancy-regex = "0"
@@ -20,6 +19,7 @@ log = "0"
 nanoargs = { version = "0", features = ["color"] }
 nanocolor = "0"
 nanologger = { version = "0", features = ["log"] }
+nanotime = "0"
 peg = "0"
 strum = "0"
 strum_macros = "0"

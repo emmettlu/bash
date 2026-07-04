@@ -37,6 +37,7 @@ pub mod sourceinfo;
 pub mod sys;
 pub mod terminal;
 pub mod tests;
+pub mod timefmt;
 pub mod timing;
 pub mod trace_categories;
 pub mod traps;

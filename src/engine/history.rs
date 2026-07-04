@@ -1,6 +1,5 @@
 //! Facilities for tracking and persisting the shell's command history.
 
-use chrono::Utc;
 use std::{
     collections::HashMap,
     io::{BufRead, Read, Write},
@@ -55,8 +54,8 @@ impl History {
 
             // Look for timestamp comments; ignore other comment lines.
             if let Some(comment) = line.strip_prefix("#") {
-                if let Ok(seconds_since_epoch) = comment.trim().parse() {
-                    next_timestamp = ItemTimestamp::from_timestamp(seconds_since_epoch, 0);
+                if let Ok(seconds_since_epoch) = comment.trim().parse::<u64>() {
+                    next_timestamp = Some(ItemTimestamp::from_epoch(seconds_since_epoch));
                 } else {
                     next_timestamp = None;
                 }
@@ -186,7 +185,7 @@ impl History {
                 }
 
                 if write_timestamps && let Some(timestamp) = item.timestamp {
-                    writeln!(file, "#{}", timestamp.timestamp())?;
+                    writeln!(file, "#{}", timestamp.to_epoch_secs())?;
                 }
 
                 writeln!(file, "{}", item.command_line)?;
@@ -237,7 +236,7 @@ impl History {
 }
 
 /// Represents a timestamp for a history item.
-pub type ItemTimestamp = chrono::DateTime<Utc>;
+pub type ItemTimestamp = nanotime::NanoTime;
 
 /// Represents an item in the history.
 #[derive(Clone, Default)]
@@ -262,7 +261,7 @@ impl Item {
         Self {
             id: 0, // NOTE: ID will be assigned when added to the history.
             command_line: command_line.into(),
-            timestamp: Some(chrono::Utc::now()),
+            timestamp: Some(nanotime::NanoTime::now_utc()),
             dirty: true,
         }
     }

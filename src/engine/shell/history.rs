@@ -88,7 +88,7 @@ impl crate::engine::Shell {
             history.add(crate::engine::history::Item {
                 id: 0,
                 command_line: command.to_owned(),
-                timestamp: Some(chrono::Utc::now()),
+                timestamp: Some(nanotime::NanoTime::now_utc()),
                 dirty: true,
             })?;
         }

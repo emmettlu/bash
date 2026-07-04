@@ -1,17 +1,16 @@
-#![allow(missing_docs)]
-
 //! Windows Console API wrapper for terminal input/output.
 
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use windows_sys::Win32::System::Console::{
-    CONSOLE_CURSOR_INFO, CONSOLE_SCREEN_BUFFER_INFO, COORD, ENABLE_ECHO_INPUT, ENABLE_LINE_INPUT,
-    ENABLE_PROCESSED_INPUT, FillConsoleOutputCharacterW, GetConsoleCursorInfo, GetConsoleMode,
-    GetConsoleScreenBufferInfo, GetStdHandle, INPUT_RECORD, ReadConsoleInputW, STD_ERROR_HANDLE,
-    STD_INPUT_HANDLE, SetConsoleCursorInfo, SetConsoleCursorPosition, SetConsoleMode,
-};
-use windows_sys::Win32::UI::Input::KeyboardAndMouse::{
-    VK_BACK, VK_DOWN, VK_LEFT, VK_RETURN, VK_RIGHT, VK_TAB, VK_UP,
+use windows_sys::Win32::{
+    System::Console::{
+        CONSOLE_CURSOR_INFO, CONSOLE_SCREEN_BUFFER_INFO, COORD, ENABLE_ECHO_INPUT,
+        ENABLE_LINE_INPUT, ENABLE_PROCESSED_INPUT, FillConsoleOutputCharacterW,
+        GetConsoleCursorInfo, GetConsoleMode, GetConsoleScreenBufferInfo, GetStdHandle,
+        INPUT_RECORD, ReadConsoleInputW, STD_ERROR_HANDLE, STD_INPUT_HANDLE, SetConsoleCursorInfo,
+        SetConsoleCursorPosition, SetConsoleMode,
+    },
+    UI::Input::KeyboardAndMouse::{VK_BACK, VK_DOWN, VK_LEFT, VK_RETURN, VK_RIGHT, VK_TAB, VK_UP},
 };
 
 const KEY_EVENT: u16 = 0x0001;

@@ -4,10 +4,9 @@
 // completion, and without using VT100-style escape sequences for cursor movement and display.
 //
 
-use std::io::Write;
-
-use crate::interactive::win_term::{self, KeyCode};
+use crate::interactive::term::{self, KeyCode};
 use crate::interactive::{ReadResult, ShellError};
+use std::io::Write;
 
 const BACKSPACE: char = 8u8 as char;
 const MAX_COMPLETION_COLUMNS: usize = 4;
@@ -22,14 +21,14 @@ struct ConsoleModeGuard {
 
 impl ConsoleModeGuard {
     fn new() -> Result<Self, ShellError> {
-        let original_mode = win_term::enable_raw_mode()?;
+        let original_mode = term::enable_raw_mode()?;
         Ok(Self { original_mode })
     }
 }
 
 impl Drop for ConsoleModeGuard {
     fn drop(&mut self) {
-        let _ = win_term::restore_console_mode(self.original_mode);
+        let _ = term::restore_console_mode(self.original_mode);
     }
 }
 
@@ -55,7 +54,7 @@ impl super::LineReader for TermLineReader {
         state.display_prompt()?;
 
         loop {
-            let key_event = win_term::read_key_event()?;
+            let key_event = term::read_key_event()?;
             if let Some(result) = state.on_key(key_event, &mut completion_handler)? {
                 return Ok(result);
             }
@@ -81,7 +80,7 @@ struct CompletionMenu {
     rows: usize,
     columns: usize,
     rendered_lines: usize,
-    cursor_visibility: Option<win_term::CursorVisibilityGuard>,
+    cursor_visibility: Option<term::CursorVisibilityGuard>,
 }
 
 #[derive(Clone, Copy)]
@@ -113,7 +112,7 @@ impl<'a> ReadLineState<'a> {
 
     fn on_key(
         &mut self,
-        event: win_term::KeyEvent,
+        event: term::KeyEvent,
         mut completion_handler: impl FnMut(
             &str,
             usize,
@@ -213,7 +212,7 @@ impl<'a> ReadLineState<'a> {
     }
 
     fn clear_screen(&self) -> Result<(), ShellError> {
-        win_term::clear_screen()?;
+        term::clear_screen()?;
         self.display_prompt()?;
         eprint!("{}", self.line.as_str());
         std::io::stderr().flush()?;
@@ -385,8 +384,8 @@ impl<'a> ReadLineState<'a> {
     }
 
     fn render_completion_menu(&mut self) -> Result<(), ShellError> {
-        let mut input_cursor = win_term::get_cursor_position()?;
-        let (buffer_width, buffer_height) = win_term::screen_buffer_size()?;
+        let mut input_cursor = term::get_cursor_position()?;
+        let (buffer_width, buffer_height) = term::screen_buffer_size()?;
         let terminal_width = usize::try_from(buffer_width).unwrap_or(80).max(1);
 
         let (rows, columns, column_width, rendered_lines) = {
@@ -395,7 +394,7 @@ impl<'a> ReadLineState<'a> {
             };
 
             if menu.cursor_visibility.is_none() {
-                menu.cursor_visibility = win_term::hide_cursor().ok();
+                menu.cursor_visibility = term::hide_cursor().ok();
             }
 
             let column_width = completion_column_width(&menu.completions);
@@ -424,8 +423,8 @@ impl<'a> ReadLineState<'a> {
         let max_rendered = rows.max(rendered_lines);
         for row in 0..max_rendered {
             let y = completions_start_y + i16::try_from(row).unwrap_or(i16::MAX);
-            win_term::set_cursor_position(0, y)?;
-            win_term::clear_current_line()?;
+            term::set_cursor_position(0, y)?;
+            term::clear_current_line()?;
         }
 
         let Some(menu) = self.completion_menu.as_mut() else {
@@ -434,7 +433,7 @@ impl<'a> ReadLineState<'a> {
 
         for row in 0..rows {
             let y = completions_start_y + i16::try_from(row).unwrap_or(i16::MAX);
-            win_term::set_cursor_position(0, y)?;
+            term::set_cursor_position(0, y)?;
 
             for column in 0..columns {
                 let index = column * rows + row;
@@ -457,7 +456,7 @@ impl<'a> ReadLineState<'a> {
         }
 
         menu.rendered_lines = rows;
-        win_term::set_cursor_position(input_cursor.x, input_cursor.y)?;
+        term::set_cursor_position(input_cursor.x, input_cursor.y)?;
         std::io::stderr().flush()?;
 
         Ok(())
@@ -465,10 +464,10 @@ impl<'a> ReadLineState<'a> {
 
     fn ensure_completion_menu_space(
         &self,
-        input_cursor: win_term::CursorPosition,
+        input_cursor: term::CursorPosition,
         required_lines: i16,
         buffer_height: i16,
-    ) -> Result<win_term::CursorPosition, ShellError> {
+    ) -> Result<term::CursorPosition, ShellError> {
         let menu_end_y = input_cursor
             .y
             .saturating_add(1)
@@ -489,8 +488,8 @@ impl<'a> ReadLineState<'a> {
         std::io::stderr().flush()?;
 
         let input_y = input_cursor.y.saturating_sub(lines_to_move_up);
-        win_term::set_cursor_position(0, input_y)?;
-        win_term::clear_current_line()?;
+        term::set_cursor_position(0, input_y)?;
+        term::clear_current_line()?;
         self.display_prompt()?;
         eprint!(
             "{}{}",
@@ -499,7 +498,7 @@ impl<'a> ReadLineState<'a> {
         );
         std::io::stderr().flush()?;
 
-        win_term::get_cursor_position().map_err(ShellError::from)
+        term::get_cursor_position().map_err(ShellError::from)
     }
 
     fn handle_multiple_completions_fallback(&self) -> Result<(), ShellError> {
@@ -538,16 +537,16 @@ impl<'a> ReadLineState<'a> {
             return Ok(());
         };
 
-        let input_cursor = win_term::get_cursor_position()?;
+        let input_cursor = term::get_cursor_position()?;
         let start_y = input_cursor.y.saturating_add(1);
 
         for row in 0..menu.rendered_lines {
             let y = start_y + i16::try_from(row).unwrap_or(i16::MAX);
-            win_term::set_cursor_position(0, y)?;
-            win_term::clear_current_line()?;
+            term::set_cursor_position(0, y)?;
+            term::clear_current_line()?;
         }
 
-        win_term::set_cursor_position(input_cursor.x, input_cursor.y)?;
+        term::set_cursor_position(input_cursor.x, input_cursor.y)?;
         std::io::stderr().flush()?;
         Ok(())
     }
@@ -587,7 +586,7 @@ impl<'a> ReadLineState<'a> {
         self.line = updated_line;
         self.cursor = insertion_index + candidate.len();
 
-        win_term::clear_current_line()?;
+        term::clear_current_line()?;
         self.display_prompt()?;
         eprint!(
             "{}{}",

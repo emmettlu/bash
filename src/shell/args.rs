@@ -107,12 +107,6 @@ pub struct CommandLineArgs {
     /// 显示 shell 版本。
     pub version: Option<bool>,
 
-    /// TOML 配置文件路径, 会覆盖默认位置。
-    pub config_file: Option<PathBuf>,
-
-    /// 禁用 TOML 配置文件加载。
-    pub no_config: bool,
-
     /// 启用 `noclobber` shell 选项。
     pub disallow_overwriting_regular_files_via_output_redirection: bool,
 
@@ -211,8 +205,7 @@ impl CommandLineArgs {
         Self {
             help: None,
             version: None,
-            config_file: None,
-            no_config: false,
+
             disallow_overwriting_regular_files_via_output_redirection: false,
             command: None,
             exit_on_nonzero_command_exit: false,
@@ -323,16 +316,7 @@ fn parse_long_option(
             reject_inline_value(name, inline_value)?;
             Err(CliParseError::display_version())
         }
-        "config" => {
-            let (value, next_index) = take_long_value(args, index, name, inline_value)?;
-            parsed.config_file = Some(PathBuf::from(value));
-            Ok(next_index)
-        }
-        "no-config" => {
-            reject_inline_value(name, inline_value)?;
-            parsed.no_config = true;
-            Ok(index + 1)
-        }
+
         "inherit-fd" => {
             let (value, next_index) = take_long_value(args, index, name, inline_value)?;
             let fd = value
@@ -612,12 +596,6 @@ fn help_message() -> String {
         .version(VERSION)
         .flag(nanoargs::Flag::new("help").desc("Display usage information"))
         .flag(nanoargs::Flag::new("version").desc("Display shell version"))
-        .option(
-            nanoargs::Opt::new("config")
-                .placeholder("FILE")
-                .desc("Use a TOML config file"),
-        )
-        .flag(nanoargs::Flag::new("no-config").desc("Disable config loading"))
         .option(
             nanoargs::Opt::new("input-backend")
                 .placeholder("BACKEND")

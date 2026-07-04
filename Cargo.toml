@@ -21,11 +21,9 @@ nanoargs = { version = "0", features = ["color"] }
 nanocolor = "0"
 nanologger = { version = "0", features = ["log"] }
 peg = "0"
-serde = { version = "1", features = ["derive"] }
 strum = "0"
 strum_macros = "0"
 thiserror = "2"
-toml = { version = "1", default-features = false, features = ["parse", "serde", "std"] }
 utf8-chars = "3"
 windows-sys = { version = "0", features = [
   "Win32_Foundation",
@@ -38,6 +36,7 @@ windows-sys = { version = "0", features = [
 [dev-dependencies]
 insta = { version = "1", features = ["redactions", "ron"] }
 pretty_assertions = { version = "1", features = ["unstable"] }
+serde = { version = "1", features = ["derive"] }
 tempfile = "3"
 
 [features]

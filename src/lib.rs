@@ -41,17 +41,13 @@ pub async fn run() -> anyhow::Result<()> {
     let _event_config =
         shell::events::TraceEventConfig::init(&args.enabled_debug_events, &args.disabled_events);
 
-    let file_config = shell::config::load_config(args.no_config, args.config_file.as_deref())
-        .into_config_or_log()
-        .map_err(|e| anyhow::anyhow!(e))?;
-
     // Instantiate an appropriately configured shell. Note that we do *not* run any code in the
     // shell yet. We'll delay loading profiles and such until after we've set up everything else.
     let mut shell = shell::entry::instantiate_shell(&args, cli_args).await?;
 
     let default_backend = shell::entry::get_default_input_backend_type(&args);
     let selected_backend = args.input_backend.unwrap_or(default_backend);
-    let ui_options = file_config.to_ui_options(&args);
+    let ui_options = interactive::UIOptions::from(&args);
 
     let result = match selected_backend {
         shell::args::InputBackendType::Basic => {

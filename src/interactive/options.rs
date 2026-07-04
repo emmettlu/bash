@@ -26,6 +26,15 @@ pub struct UIOptions {
     pub run_cmd_exec_funcs: bool,
 }
 
+impl From<&crate::shell::args::CommandLineArgs> for UIOptions {
+    fn from(args: &crate::shell::args::CommandLineArgs) -> Self {
+        Self::builder()
+            .terminal_shell_integration(args.terminal_shell_integration)
+            .run_cmd_exec_funcs(args.zsh_style_hooks)
+            .build()
+    }
+}
+
 impl UIOptions {
     /// 返回用于 `-s` 标准输入命令循环的选项。
     #[must_use]

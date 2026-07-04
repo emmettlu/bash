@@ -1,6 +1,5 @@
 //! Implements the command-line interface for the shell.
 
-use crate::builtins::ShellBuilderExt as _;
 use crate::shell::args::CommandLineArgs;
 use crate::shell::args::InputBackendType;
 
@@ -17,8 +16,6 @@ static TRACE_EVENT_CONFIG: LazyLock<Arc<StdMutex<Option<events::TraceEventConfig
     LazyLock::new(|| Arc::new(StdMutex::new(None)));
 
 type BashShell = crate::engine::Shell;
-
-pub(crate) const DEFAULT_ENABLE_HIGHLIGHTING: bool = false;
 
 /// Shell 启动时要执行的顶层模式。
 #[derive(Clone, Debug)]
@@ -142,7 +139,7 @@ pub(crate) async fn run_in_shell(
         // args) passed on the command line via positional arguments, then we copy over the
         // parameters but do *not* execute it.
         ShellRunMode::Stdin => {
-            let interactive_options = crate::interactive::InteractiveOptions::stdin_input_loop();
+            let interactive_options = crate::interactive::UIOptions::stdin_input_loop();
             crate::interactive::InteractiveShell::new(
                 shell_ref,
                 input_backend,
@@ -164,14 +161,9 @@ pub(crate) async fn run_in_shell(
         // If we got down here, then we don't have any commands to run. We'll be reading
         // them in from stdin one way or the other.
         ShellRunMode::Interactive => {
-            let interactive_options = ui_options.into();
-            crate::interactive::InteractiveShell::new(
-                shell_ref,
-                input_backend,
-                &interactive_options,
-            )?
-            .run_interactively()
-            .await?;
+            crate::interactive::InteractiveShell::new(shell_ref, input_backend, ui_options)?
+                .run_interactively()
+                .await?;
         }
     }
 
@@ -272,8 +264,6 @@ async fn instantiate_shell_from_args(
         })
         .collect();
 
-    let parser_impl = crate::engine::parser::ParserImpl::Peg;
-
     // Set up the shell builder with the requested options.
     // NOTE: We skip loading profile and rc files here; that will be handled later after we've
     // fully instantiated everything we want set before running any code.
@@ -304,12 +294,9 @@ async fn instantiate_shell_from_args(
         .exit_on_nonzero_command_exit(args.exit_on_nonzero_command_exit)
         .disable_pathname_expansion(args.disable_pathname_expansion)
         .verbose(args.verbose)
-        .parser(parser_impl)
         .error_formatter(new_error_behavior(args))
-        .shell_version(env!("CARGO_PKG_VERSION").to_string());
-
-    // Add builtins.
-    let shell = shell.default_builtins();
+        .shell_version(env!("CARGO_PKG_VERSION").to_string())
+        .builtins(crate::builtins::default_builtins());
 
     // Build the shell.
     let mut shell = shell.build().await?;

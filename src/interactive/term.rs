@@ -1,7 +1,5 @@
 //! Windows Console API wrapper for terminal input/output.
 
-use std::sync::atomic::{AtomicU32, Ordering};
-
 use windows_sys::Win32::{
     System::Console::{
         CONSOLE_CURSOR_INFO, CONSOLE_SCREEN_BUFFER_INFO, COORD, ENABLE_ECHO_INPUT,
@@ -14,12 +12,8 @@ use windows_sys::Win32::{
 };
 
 const KEY_EVENT: u16 = 0x0001;
-const SHIFT_PRESSED: u32 = 0x0010;
 const LEFT_CTRL_PRESSED: u32 = 0x0008;
 const RIGHT_CTRL_PRESSED: u32 = 0x0004;
-
-const NO_SAVED_CONSOLE_MODE: u32 = u32::MAX;
-static SAVED_CONSOLE_MODE: AtomicU32 = AtomicU32::new(NO_SAVED_CONSOLE_MODE);
 
 pub struct CursorVisibilityGuard {
     previous_visible: bool,
@@ -63,25 +57,6 @@ pub struct CursorPosition {
 pub struct KeyModifiers {
     pub ctrl: bool,
     pub alt: bool,
-    pub shift: bool,
-}
-
-impl KeyModifiers {
-    pub const NONE: Self = Self {
-        ctrl: false,
-        alt: false,
-        shift: false,
-    };
-    pub const CONTROL: Self = Self {
-        ctrl: true,
-        alt: false,
-        shift: false,
-    };
-    pub const SHIFT: Self = Self {
-        ctrl: false,
-        alt: false,
-        shift: true,
-    };
 }
 
 /// Reads a single keyboard event from stdin.
@@ -106,7 +81,6 @@ pub fn read_key_event() -> Result<KeyEvent, std::io::Error> {
         }
 
         let ctrl = (key_event.dwControlKeyState & (LEFT_CTRL_PRESSED | RIGHT_CTRL_PRESSED)) != 0;
-        let shift = (key_event.dwControlKeyState & SHIFT_PRESSED) != 0;
 
         let code = match key_event.wVirtualKeyCode {
             VK_RETURN => KeyCode::Enter,
@@ -135,11 +109,7 @@ pub fn read_key_event() -> Result<KeyEvent, std::io::Error> {
 
         return Ok(KeyEvent {
             code,
-            modifiers: KeyModifiers {
-                ctrl,
-                alt: false,
-                shift,
-            },
+            modifiers: KeyModifiers { ctrl, alt: false },
         });
     }
 }
@@ -255,8 +225,6 @@ pub fn enable_raw_mode() -> Result<u32, std::io::Error> {
         return Err(std::io::Error::last_os_error());
     }
 
-    SAVED_CONSOLE_MODE.store(original_mode, Ordering::Release);
-
     let raw_mode =
         original_mode & !(ENABLE_ECHO_INPUT | ENABLE_LINE_INPUT | ENABLE_PROCESSED_INPUT);
 
@@ -276,16 +244,6 @@ pub fn restore_console_mode(mode: u32) -> Result<(), std::io::Error> {
     }
 
     Ok(())
-}
-
-/// Restores raw mode if a saved mode exists.
-pub fn disable_raw_mode() -> Result<(), std::io::Error> {
-    let mode = SAVED_CONSOLE_MODE.swap(NO_SAVED_CONSOLE_MODE, Ordering::AcqRel);
-    if mode == NO_SAVED_CONSOLE_MODE {
-        return Ok(());
-    }
-
-    restore_console_mode(mode)
 }
 
 pub fn hide_cursor() -> Result<CursorVisibilityGuard, std::io::Error> {
@@ -309,28 +267,6 @@ fn set_cursor_visible(visible: bool) -> Result<bool, std::io::Error> {
     }
 
     Ok(previous_visible)
-}
-
-/// Resets the terminal to its default state.
-pub fn reset_terminal_state() -> Result<(), std::io::Error> {
-    let _ = disable_raw_mode();
-
-    let handle = match output_handle() {
-        Ok(handle) => handle,
-        Err(_) => return Ok(()),
-    };
-
-    let mut cursor_info: CONSOLE_CURSOR_INFO = unsafe { std::mem::zeroed() };
-    if unsafe { GetConsoleCursorInfo(handle, &mut cursor_info) } == 0 {
-        return Ok(());
-    }
-
-    cursor_info.bVisible = 1;
-    if unsafe { SetConsoleCursorInfo(handle, &cursor_info) } == 0 {
-        return Err(std::io::Error::last_os_error());
-    }
-
-    Ok(())
 }
 
 fn stdin_handle() -> Result<windows_sys::Win32::Foundation::HANDLE, std::io::Error> {

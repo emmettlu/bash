@@ -4,7 +4,7 @@ mod error;
 pub use error::ShellError;
 
 mod interactive_shell;
-pub use interactive_shell::{InteractiveExecutionResult, InteractiveOptions, InteractiveShell};
+pub use interactive_shell::{InteractiveExecutionResult, InteractiveShell};
 
 mod input_backend;
 pub use input_backend::{InputBackend, InteractivePrompt, ReadResult};
@@ -15,12 +15,9 @@ pub use options::UIOptions;
 mod refs;
 pub use refs::ShellRef;
 
-pub mod term;
+mod term;
 mod term_detection;
 mod term_integration;
-mod trace_categories;
-
-pub mod highlighting;
 
 mod completion;
 

@@ -14,29 +14,26 @@ pub fn default_builtins() -> HashMap<String, builtins::Registration> {
     // Bash special builtins
     //
 
-    m.insert("break".into(), builtin::<break_::BreakCommand>().special());
+    m.insert("break".into(), builtin::<small::BreakCommand>().special());
     m.insert(
         ":".into(),
-        simple_builtin::<colon::ColonCommand>().special(),
+        simple_builtin::<small::ColonCommand>().special(),
     );
     m.insert(
         "continue".into(),
-        builtin::<continue_::ContinueCommand>().special(),
+        builtin::<small::ContinueCommand>().special(),
     );
     m.insert(".".into(), builtin::<dot::DotCommand>().special());
     m.insert("eval".into(), builtin::<eval::EvalCommand>().special());
     m.insert("exec".into(), builtin::<exec::ExecCommand>().special());
-    m.insert("exit".into(), builtin::<exit::ExitCommand>().special());
+    m.insert("exit".into(), builtin::<small::ExitCommand>().special());
     m.insert(
         "export".into(),
         decl_builtin::<export::ExportCommand>().special(),
     );
-    m.insert(
-        "return".into(),
-        builtin::<return_::ReturnCommand>().special(),
-    );
+    m.insert("return".into(), builtin::<small::ReturnCommand>().special());
     m.insert("set".into(), builtin::<set::SetCommand>().special());
-    m.insert("shift".into(), builtin::<shift::ShiftCommand>().special());
+    m.insert("shift".into(), builtin::<small::ShiftCommand>().special());
     m.insert("trap".into(), builtin::<trap::TrapCommand>().special());
     m.insert("unset".into(), builtin::<unset::UnsetCommand>().special());
 
@@ -52,9 +49,9 @@ pub fn default_builtins() -> HashMap<String, builtins::Registration> {
 
     m.insert("alias".into(), builtin::<alias::AliasCommand>()); // TODO(alias): should be exec_declaration_builtin
     m.insert("cd".into(), builtin::<cd::CdCommand>());
-    m.insert("clear".into(), builtin::<clear::ClearCommand>());
+    m.insert("clear".into(), builtin::<small::ClearCommand>());
     m.insert("command".into(), builtin::<command::CommandCommand>());
-    m.insert("false".into(), simple_builtin::<false_::FalseCommand>());
+    m.insert("false".into(), simple_builtin::<small::FalseCommand>());
     m.insert("getopts".into(), builtin::<getopts::GetOptsCommand>());
     m.insert("hash".into(), builtin::<hash::HashCommand>());
     m.insert("help".into(), builtin::<help::HelpCommand>());
@@ -62,7 +59,7 @@ pub fn default_builtins() -> HashMap<String, builtins::Registration> {
     m.insert("local".into(), decl_builtin::<declare::DeclareCommand>());
     m.insert("pwd".into(), builtin::<pwd::PwdCommand>());
     m.insert("read".into(), builtin::<read::ReadCommand>());
-    m.insert("true".into(), simple_builtin::<true_::TrueCommand>());
+    m.insert("true".into(), simple_builtin::<small::TrueCommand>());
     m.insert("type".into(), builtin::<type_::TypeCommand>());
     m.insert("unalias".into(), builtin::<unalias::UnaliasCommand>());
     m.insert("wait".into(), builtin::<wait::WaitCommand>());

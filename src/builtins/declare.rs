@@ -1,6 +1,7 @@
 use itertools::Itertools;
 use std::io::Write;
 
+use super::common::PlusMinusFlag;
 use crate::engine::{
     ErrorKind, ExecutionResult, builtins,
     env::{self, EnvironmentLookup, EnvironmentScope},
@@ -11,34 +12,6 @@ use crate::engine::{
         ShellVariableUpdateTransform,
     },
 };
-
-#[derive(Default)]
-struct PlusMinusFlag {
-    enable: bool,
-    disable: bool,
-}
-
-impl PlusMinusFlag {
-    const fn is_some(&self) -> bool {
-        self.enable || self.disable
-    }
-
-    const fn to_bool(&self) -> Option<bool> {
-        match (self.enable, self.disable) {
-            (true, false) => Some(true),
-            (false, true) => Some(false),
-            _ => None,
-        }
-    }
-
-    fn set(&mut self, enabled: bool) {
-        if enabled {
-            self.enable = true;
-        } else {
-            self.disable = true;
-        }
-    }
-}
 
 /// Display or update variables and their attributes.
 #[derive(Default)]

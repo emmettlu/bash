@@ -1,19 +1,9 @@
-use std::path::PathBuf;
-
 use bon::bon;
 
 use crate::parser::ast;
 use crate::parser::tokenizer::{Token, TokenEndReason, Tokenizer, TokenizerOptions, Tokens};
 
 pub mod peg;
-
-/// Parser implementation to use.
-#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, Default)]
-pub enum ParserImpl {
-    /// PEG-based parser (token-based).
-    #[default]
-    Peg,
-}
 
 /// Options used to control the behavior of the parser.
 #[derive(Clone, Eq, Hash, PartialEq)]
@@ -24,8 +14,6 @@ pub struct ParserOptions {
     pub tilde_expansion_at_word_start: bool,
     /// Whether or not to perform tilde expansion for tildes after colons.
     pub tilde_expansion_after_colon: bool,
-    /// Select the parser internal implementation
-    pub parser_impl: ParserImpl,
 }
 
 impl Default for ParserOptions {
@@ -34,7 +22,6 @@ impl Default for ParserOptions {
             enable_extended_globbing: true,
             tilde_expansion_at_word_start: true,
             tilde_expansion_after_colon: false,
-            parser_impl: ParserImpl::default(),
         }
     }
 }
@@ -44,22 +31,6 @@ impl ParserOptions {
     pub const fn tokenizer_options(&self) -> TokenizerOptions {
         TokenizerOptions {
             enable_extended_globbing: self.enable_extended_globbing,
-        }
-    }
-}
-
-/// Information about the source of tokens.
-#[derive(Clone, Debug, Default)]
-#[allow(dead_code)]
-pub struct SourceInfo {
-    /// The source of the tokens.
-    pub source: String,
-}
-
-impl From<PathBuf> for SourceInfo {
-    fn from(path: PathBuf) -> Self {
-        Self {
-            source: path.to_string_lossy().to_string(),
         }
     }
 }
@@ -106,15 +77,11 @@ impl<R: std::io::BufRead> Parser<R> {
         #[builder(default = false)]
         /// Whether or not to perform tilde expansion for tildes after colons.
         tilde_expansion_after_colon: bool,
-        #[builder(default)]
-        /// Select the parser internal implementation
-        parser_impl: ParserImpl,
     ) -> Self {
         let options = ParserOptions {
             enable_extended_globbing,
             tilde_expansion_at_word_start,
             tilde_expansion_after_colon,
-            parser_impl,
         };
         Self { reader, options }
     }

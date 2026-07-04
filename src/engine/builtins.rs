@@ -349,7 +349,7 @@ pub fn simple_builtin<B: SimpleCommand + Send + Sync>() -> Registration {
 pub fn builtin<B: Command + Send + Sync>() -> Registration {
     Registration {
         execute_func: exec_builtin::<B>,
-        content_func: get_builtin_content::<B>,
+        content_func: B::get_content,
         disabled: false,
         special_builtin: false,
         declaration_builtin: false,
@@ -362,7 +362,7 @@ pub fn builtin<B: Command + Send + Sync>() -> Registration {
 pub fn decl_builtin<B: DeclarationCommand + Send + Sync>() -> Registration {
     Registration {
         execute_func: exec_declaration_builtin::<B>,
-        content_func: get_builtin_content::<B>,
+        content_func: B::get_content,
         disabled: false,
         special_builtin: false,
         declaration_builtin: true,
@@ -378,19 +378,11 @@ pub fn decl_builtin<B: DeclarationCommand + Send + Sync>() -> Registration {
 pub fn raw_arg_builtin<B: DeclarationCommand + Default + Send + Sync>() -> Registration {
     Registration {
         execute_func: exec_raw_arg_builtin::<B>,
-        content_func: get_builtin_content::<B>,
+        content_func: B::get_content,
         disabled: false,
         special_builtin: false,
         declaration_builtin: true,
     }
-}
-
-fn get_builtin_content<T: Command + Send + Sync>(
-    name: &str,
-    content_type: ContentType,
-    options: &ContentOptions,
-) -> Result<String, error::Error> {
-    T::get_content(name, content_type, options)
 }
 
 fn exec_simple_builtin<T: SimpleCommand + Send + Sync>(

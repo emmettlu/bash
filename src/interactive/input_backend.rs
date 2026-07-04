@@ -28,6 +28,17 @@ pub trait InputBackend: Send {
     }
 }
 
+/// 将 Windows 控制台输入的 CRLF 行尾规范化为 shell 内部使用的 LF。
+pub(crate) fn normalize_line_ending(input: &mut String) {
+    if input.ends_with("\r\n") {
+        input.truncate(input.len() - 2);
+        input.push('\n');
+    } else if input.ends_with('\r') {
+        input.pop();
+        input.push('\n');
+    }
+}
+
 /// Result of a read operation.
 pub enum ReadResult {
     /// The user entered a line of input.

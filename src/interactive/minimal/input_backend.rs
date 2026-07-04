@@ -2,7 +2,7 @@ use std::io::{IsTerminal, Write};
 
 use crate::interactive::{
     InputBackend, ShellError,
-    input_backend::{InteractivePrompt, ReadResult},
+    input_backend::{InteractivePrompt, ReadResult, normalize_line_ending},
 };
 
 /// Represents a minimal shell input backend, capable of taking commands from standard input.
@@ -49,9 +49,8 @@ impl MinimalInputBackend {
 
     fn read_input_line() -> Result<ReadResult, ShellError> {
         let mut input = String::new();
-        let bytes_read = std::io::stdin()
-            .read_line(&mut input)
-            .map_err(ShellError::InputError)?;
+        let bytes_read = std::io::stdin().read_line(&mut input)?;
+        normalize_line_ending(&mut input);
 
         if bytes_read == 0 {
             Ok(ReadResult::Eof)

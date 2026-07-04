@@ -1,5 +1,7 @@
 //! Trace utilities
 
+/// Trace category for arithmetic expression parsing and evaluation.
+pub const ARITHMETIC: &str = "arithmetic";
 /// Trace category for command execution.
 pub const COMMANDS: &str = "commands";
 /// Trace category for completion.
@@ -16,5 +18,7 @@ pub const JOBS: &str = "jobs";
 pub const PARSE: &str = "parse";
 /// Trace category for shell patterns.
 pub const PATTERN: &str = "pattern";
+/// Trace category for tokenization.
+pub const TOKENIZE: &str = "tokenize";
 /// Trace category for unimplemented behavior.
 pub const UNIMPLEMENTED: &str = "unimplemented";

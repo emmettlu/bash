@@ -3,31 +3,8 @@ use std::io::Write;
 
 use itertools::Itertools;
 
+use super::common::PlusMinusFlag;
 use crate::engine::{ExecutionResult, builtins, variables};
-
-#[derive(Default)]
-struct PlusMinusFlag {
-    enable: bool,
-    disable: bool,
-}
-
-impl PlusMinusFlag {
-    const fn to_bool(&self) -> Option<bool> {
-        match (self.enable, self.disable) {
-            (true, false) => Some(true),
-            (false, true) => Some(false),
-            _ => None,
-        }
-    }
-
-    fn set(&mut self, enabled: bool) {
-        if enabled {
-            self.enable = true;
-        } else {
-            self.disable = true;
-        }
-    }
-}
 
 #[derive(Default)]
 pub(crate) struct SetOption {

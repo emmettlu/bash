@@ -64,7 +64,7 @@ pub async fn run() -> anyhow::Result<()> {
 
     let result = match selected_backend {
         shell::args::InputBackendType::Basic => {
-            let mut input_backend = interactive::BasicInputBackend;
+            let mut input_backend = interactive::BasicInputBackend::default();
             shell::entry::run_in_shell(&shell, args.clone(), &mut input_backend, &ui_options).await
         }
         shell::args::InputBackendType::Minimal => {

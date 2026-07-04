@@ -2,6 +2,7 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
+use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -28,19 +29,14 @@ pub type ShellFd = i32;
 mod builder;
 mod builtin_registry;
 mod callstack;
-mod completion;
-mod env;
 mod execution;
-mod expansion;
 mod fs;
 mod funcs;
 mod history;
 mod initscripts;
 mod io;
-mod job_control;
 mod parsing;
 mod prompts;
-mod readline;
 mod traps;
 
 pub(crate) use builder::CreateOptions;
@@ -125,9 +121,6 @@ pub struct Shell {
     /// Last "SECONDS" offset requested.
     last_stopwatch_offset: u32,
 
-    /// Parser implementation to use.
-    parser_impl: crate::engine::parser::ParserImpl,
-
     /// Key bindings for the shell, optionally implemented by an interactive shell.
     key_bindings: Option<KeyBindingsHelper>,
 
@@ -169,7 +162,6 @@ impl Clone for Shell {
             external_command_completion_cache: self.external_command_completion_cache.clone(),
             last_stopwatch_time: self.last_stopwatch_time,
             last_stopwatch_offset: self.last_stopwatch_offset,
-            parser_impl: self.parser_impl,
             key_bindings: self.key_bindings.clone(),
             history: self.history.clone(),
             depth: self.depth + 1,
@@ -225,7 +217,6 @@ impl Shell {
             product_display_str: options.shell_product_display_str,
             working_dir: options.working_dir.map_or_else(std::env::current_dir, Ok)?,
             builtins: Arc::new(options.builtins),
-            parser_impl: options.parser,
             key_bindings: options.key_bindings,
             ..Self::default()
         };
@@ -433,6 +424,35 @@ impl Shell {
         &mut self.env
     }
 
+    /// 尝试获取环境变量的字符串形式.
+    pub fn env_str(&self, name: &str) -> Option<Cow<'_, str>> {
+        self.env.get_str(name, self)
+    }
+
+    /// 尝试获取环境变量.
+    pub fn env_var(&self, name: &str) -> Option<&crate::engine::ShellVariable> {
+        self.env.get(name).map(|(_, var)| var)
+    }
+
+    /// 尝试设置全局环境变量.
+    pub fn set_env_global(
+        &mut self,
+        name: &str,
+        var: crate::engine::ShellVariable,
+    ) -> Result<(), error::Error> {
+        self.env.set_global(name, var)
+    }
+
+    /// 返回当前 IFS 变量值, 未设置时返回默认值.
+    pub fn ifs(&self) -> Cow<'_, str> {
+        self.env_str("IFS").unwrap_or_else(|| " \t\n".into())
+    }
+
+    /// 返回 IFS 变量的首字符, 未设置时返回空格.
+    pub(crate) fn get_ifs_first_char(&self) -> char {
+        self.ifs().chars().next().unwrap_or(' ')
+    }
+
     /// 返回运行时选项的可变引用.
     pub fn options_mut(&mut self) -> &mut RuntimeOptions {
         &mut self.options
@@ -451,6 +471,19 @@ impl Shell {
     /// 返回作业管理器的可变引用.
     pub fn jobs_mut(&mut self) -> &mut jobs::JobManager {
         &mut self.jobs
+    }
+
+    /// 检查已完成作业并在启用作业控制时报告状态变化.
+    pub fn check_for_completed_jobs(&mut self) -> Result<(), error::Error> {
+        let results = self.jobs.poll()?;
+
+        if self.options.enable_job_control {
+            for (job, _result) in results {
+                writeln!(self.stderr(), "{job}")?;
+            }
+        }
+
+        Ok(())
     }
 
     /// 返回 trap 处理器配置.
@@ -486,6 +519,18 @@ impl Shell {
     /// 返回补全配置的可变引用.
     pub fn completion_config_mut(&mut self) -> &mut crate::engine::completion::Config {
         Arc::make_mut(&mut self.completion_config)
+    }
+
+    /// 生成命令补全结果.
+    pub async fn complete(
+        &mut self,
+        input: &str,
+        position: usize,
+    ) -> Result<crate::engine::completion::Completions, error::Error> {
+        let completion_config = self.completion_config.clone();
+        completion_config
+            .get_completions(self, input, position)
+            .await
     }
 
     /// 返回 shell 的打开文件集合.
@@ -537,5 +582,61 @@ impl Shell {
     /// 返回产品显示名称.
     pub fn product_display_str(&self) -> Option<&str> {
         self.product_display_str.as_deref()
+    }
+
+    /// 对字符串应用基础 shell 展开.
+    pub async fn basic_expand_string<S: AsRef<str>>(
+        &mut self,
+        params: &crate::engine::interp::ExecutionParameters,
+        s: S,
+    ) -> Result<String, error::Error> {
+        let result = crate::engine::expansion::basic_expand_word(self, params, s.as_ref()).await?;
+        Ok(result)
+    }
+
+    /// 对字符串应用完整 shell 展开和字段拆分.
+    pub async fn full_expand_and_split_string<S: AsRef<str>>(
+        &mut self,
+        params: &crate::engine::interp::ExecutionParameters,
+        s: S,
+    ) -> Result<Vec<String>, error::Error> {
+        let result =
+            crate::engine::expansion::full_expand_and_split_word(self, params, s.as_ref()).await?;
+        Ok(result)
+    }
+
+    /// 更新 shell 状态以反映当前编辑缓冲区内容.
+    pub fn set_edit_buffer(&mut self, contents: String, cursor: usize) -> Result<(), error::Error> {
+        self.env.set_global(
+            "READLINE_LINE",
+            crate::engine::variables::ShellVariable::new(contents),
+        )?;
+
+        self.env.set_global(
+            "READLINE_POINT",
+            crate::engine::variables::ShellVariable::new(cursor.to_string()),
+        )?;
+
+        Ok(())
+    }
+
+    /// 返回并清除 shell 的编辑缓冲区内容.
+    pub fn pop_edit_buffer(&mut self) -> Result<Option<(String, usize)>, error::Error> {
+        let line = self
+            .env
+            .unset("READLINE_LINE")?
+            .map(|line| line.value().to_cow_str(self).to_string());
+
+        let point = self
+            .env
+            .unset("READLINE_POINT")?
+            .and_then(|point| point.value().to_cow_str(self).parse::<usize>().ok())
+            .unwrap_or(0);
+
+        if let Some(line) = line {
+            Ok(Some((line, point)))
+        } else {
+            Ok(None)
+        }
     }
 }

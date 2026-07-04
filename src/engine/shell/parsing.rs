@@ -44,7 +44,6 @@ impl Shell {
             enable_extended_globbing: self.options.extended_globbing,
             tilde_expansion_at_word_start: true,
             tilde_expansion_after_colon: false,
-            parser_impl: self.parser_impl,
         }
     }
 }

@@ -8,11 +8,9 @@
 
 pub mod async_pipe;
 pub mod commands;
-pub(crate) mod env;
 pub mod fd;
 pub mod fs;
 pub mod input;
-pub(crate) mod network;
 pub mod poll;
 pub mod process;
 pub mod resource;

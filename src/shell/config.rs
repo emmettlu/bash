@@ -27,11 +27,7 @@ pub struct Config {
 /// User interface configuration options.
 #[derive(Debug, Default, Clone, serde::Deserialize)]
 #[serde(default)]
-pub struct UiConfig {
-    /// Enable syntax highlighting in the input line.
-    #[serde(rename = "syntax-highlighting")]
-    pub syntax_highlighting: Option<bool>,
-}
+pub struct UiConfig {}
 
 /// Experimental features configuration.
 ///
@@ -66,11 +62,6 @@ impl Config {
         // 使用命令行默认值检测 CLI 参数是否显式覆盖配置。
         let defaults = CommandLineArgs::default_values();
 
-        let enable_highlighting = merge_bool_setting(
-            args.enable_highlighting,
-            defaults.enable_highlighting,
-            self.ui.syntax_highlighting,
-        );
         let terminal_shell_integration = merge_bool_setting(
             args.terminal_shell_integration,
             defaults.terminal_shell_integration,
@@ -83,11 +74,8 @@ impl Config {
         );
 
         UIOptions::builder()
-            .disable_bracketed_paste(args.disable_bracketed_paste)
-            .disable_color(args.disable_color)
-            .disable_highlighting(!enable_highlighting)
             .terminal_shell_integration(terminal_shell_integration)
-            .zsh_style_hooks(zsh_style_hooks)
+            .run_cmd_exec_funcs(zsh_style_hooks)
             .build()
     }
 }
@@ -283,7 +271,6 @@ mod tests {
     #[test]
     fn empty_config() {
         let config: Config = toml::from_str("").unwrap();
-        assert!(config.ui.syntax_highlighting.is_none());
         assert!(config.experimental.zsh_hooks.is_none());
         assert!(config.experimental.terminal_shell_integration.is_none());
     }
@@ -291,16 +278,12 @@ mod tests {
     #[test]
     fn full_config() {
         let toml = r"
-            [ui]
-            syntax-highlighting = true
-
             [experimental]
             zsh-hooks = true
             terminal-shell-integration = false
         ";
 
         let config: Config = toml::from_str(toml).unwrap();
-        assert_eq!(config.ui.syntax_highlighting, Some(true));
         assert_eq!(config.experimental.zsh_hooks, Some(true));
         assert_eq!(config.experimental.terminal_shell_integration, Some(false));
     }
@@ -308,20 +291,18 @@ mod tests {
     #[test]
     fn partial_config() {
         let toml = r"
-            [ui]
-            syntax-highlighting = false
+            [experimental]
+            zsh-hooks = false
         ";
 
         let config: Config = toml::from_str(toml).unwrap();
-        assert_eq!(config.ui.syntax_highlighting, Some(false));
-        assert!(config.experimental.zsh_hooks.is_none());
+        assert_eq!(config.experimental.zsh_hooks, Some(false));
     }
 
     #[test]
     fn unknown_fields_ignored() {
         let toml = r#"
             [ui]
-            syntax-highlighting = true
             unknown-field = "should be ignored"
             another-unknown = 42
 
@@ -334,7 +315,6 @@ mod tests {
         "#;
 
         let config: Config = toml::from_str(toml).unwrap();
-        assert_eq!(config.ui.syntax_highlighting, Some(true));
         assert_eq!(config.experimental.zsh_hooks, Some(false));
     }
 
@@ -367,20 +347,13 @@ mod tests {
         let args = CommandLineArgs::default_values();
         let ui = config.to_ui_options(&args);
 
-        assert!(!ui.disable_bracketed_paste);
-        assert!(!ui.disable_color);
-        // Note: whether highlighting is enabled by default depends on the compile-time
-        // DEFAULT_ENABLE_HIGHLIGHTING constant.
         assert!(!ui.terminal_shell_integration);
-        assert!(!ui.zsh_style_hooks);
+        assert!(!ui.run_cmd_exec_funcs);
     }
 
     #[test]
     fn to_ui_options_config_overrides_defaults() {
         let toml = r"
-            [ui]
-            syntax-highlighting = true
-
             [experimental]
             zsh-hooks = true
             terminal-shell-integration = true
@@ -391,17 +364,13 @@ mod tests {
         // CLI values match defaults, so config should take effect
         let ui = config.to_ui_options(&args);
 
-        assert!(!ui.disable_highlighting); // config enabled highlighting
         assert!(ui.terminal_shell_integration);
-        assert!(ui.zsh_style_hooks);
+        assert!(ui.run_cmd_exec_funcs);
     }
 
     #[test]
     fn to_ui_options_cli_overrides_config() {
         let toml = r"
-            [ui]
-            syntax-highlighting = false
-
             [experimental]
             zsh-hooks = false
         ";
@@ -409,29 +378,26 @@ mod tests {
 
         // Simulate CLI explicitly setting values different from defaults
         // by parsing with the flags enabled
-        let args = CommandLineArgs::try_parse_from(
-            ["bash", "--enable-highlighting", "--enable-zsh-hooks"].map(String::from),
-        )
-        .unwrap();
+        let args =
+            CommandLineArgs::try_parse_from(["bash", "--enable-zsh-hooks"].map(String::from))
+                .unwrap();
 
-        // CLI explicitly enables highlighting and zsh-hooks (differs from default)
+        // CLI explicitly enables zsh-hooks (differs from default)
         let ui = config.to_ui_options(&args);
 
-        assert!(!ui.disable_highlighting); // CLI enabled highlighting
-        assert!(ui.zsh_style_hooks); // CLI enabled
+        assert!(ui.run_cmd_exec_funcs); // CLI enabled
     }
 
     #[test]
     fn to_ui_options_cli_only_settings() {
         let config = Config::default();
         let args = CommandLineArgs::try_parse_from(
-            ["bash", "--disable-bracketed-paste", "--disable-color"].map(String::from),
+            ["bash", "--enable-terminal-integration"].map(String::from),
         )
         .unwrap();
 
         let ui = config.to_ui_options(&args);
 
-        assert!(ui.disable_bracketed_paste);
-        assert!(ui.disable_color);
+        assert!(ui.terminal_shell_integration);
     }
 }

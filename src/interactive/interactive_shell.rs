@@ -27,51 +27,6 @@ impl From<&InteractiveExecutionResult> for i32 {
     }
 }
 
-/// Options for interactive shells.
-#[derive(Clone)]
-pub struct InteractiveOptions {
-    /// 这个输入循环是否代表真正的交互 session。
-    pub interactive_session: bool,
-    /// 是否启用终端 shell 集成。
-    pub terminal_shell_integration: bool,
-    /// 是否在 session 期间持有终端前台控制权。
-    pub terminal_control: bool,
-    /// 是否显示提示符。
-    pub display_prompt: bool,
-    /// Whether or not to run `PROMPT_COMMAND` before each prompt.
-    pub run_prompt_command: bool,
-    /// Whether or not to run zsh-style exec/cmd functions (e.g., `preexec_functions`,
-    /// `precmd_functions`).
-    pub run_cmd_exec_funcs: bool,
-}
-
-impl Default for InteractiveOptions {
-    fn default() -> Self {
-        Self {
-            interactive_session: true,
-            terminal_shell_integration: false,
-            terminal_control: true,
-            display_prompt: true,
-            run_prompt_command: true,
-            run_cmd_exec_funcs: false,
-        }
-    }
-}
-
-impl InteractiveOptions {
-    /// 返回用于 `-s` 标准输入命令循环的选项。
-    pub(crate) fn stdin_input_loop() -> Self {
-        Self {
-            interactive_session: false,
-            terminal_shell_integration: false,
-            terminal_control: false,
-            display_prompt: false,
-            run_prompt_command: false,
-            run_cmd_exec_funcs: false,
-        }
-    }
-}
-
 /// Represents an interactive shell that displays prompts, interactively reads user input, etc.
 pub struct InteractiveShell<'a, IB: InputBackend> {
     /// The underlying shell instance.
@@ -83,7 +38,7 @@ pub struct InteractiveShell<'a, IB: InputBackend> {
     /// Terminal integration utility, if any.
     terminal_integration: Option<crate::interactive::term_integration::TerminalIntegration>,
     /// Options.
-    options: InteractiveOptions,
+    options: crate::interactive::UIOptions,
 }
 
 impl<'a, IB: InputBackend> InteractiveShell<'a, IB> {
@@ -97,7 +52,7 @@ impl<'a, IB: InputBackend> InteractiveShell<'a, IB> {
     pub fn new(
         shell: &crate::interactive::ShellRef,
         input: &'a mut IB,
-        options: &InteractiveOptions,
+        options: &crate::interactive::UIOptions,
     ) -> Result<Self, ShellError> {
         let stdin_is_terminal = std::io::stdin().is_terminal();
 
@@ -355,6 +310,13 @@ impl<'a, IB: InputBackend> InteractiveShell<'a, IB> {
         read_result: String,
         user_input: bool,
     ) -> Result<InteractiveExecutionResult, ShellError> {
+        if read_result.trim().is_empty() {
+            let exit_code = self.shell.lock().await.last_exit_status();
+            return Ok(InteractiveExecutionResult::Executed(
+                crate::engine::ExecutionResult::new(exit_code),
+            ));
+        }
+
         let mut shell = self.shell.lock().await;
 
         // See if the the user interface has a non-empty read buffer.
@@ -431,7 +393,7 @@ impl<'a, IB: InputBackend> InteractiveShell<'a, IB> {
 
     async fn run_pre_prompt_actions(
         shell: &mut crate::engine::Shell,
-        options: &InteractiveOptions,
+        options: &crate::interactive::UIOptions,
     ) -> Result<(), ShellError> {
         // Check for any completed jobs.
         shell.check_for_completed_jobs()?;
@@ -482,7 +444,7 @@ impl<'a, IB: InputBackend> InteractiveShell<'a, IB> {
     async fn run_pre_exec_actions(
         shell: &mut crate::engine::Shell,
         command_line: &str,
-        options: &InteractiveOptions,
+        options: &crate::interactive::UIOptions,
         terminal_integration: Option<&crate::interactive::term_integration::TerminalIntegration>,
     ) -> Result<(), ShellError> {
         // Display the pre-command prompt (if there is one).

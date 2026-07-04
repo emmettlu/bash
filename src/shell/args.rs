@@ -182,14 +182,8 @@ pub struct CommandLineArgs {
     /// 启用 xtrace 并写入给定文件。
     pub xtrace_file_path: Option<PathBuf>,
 
-    /// 禁用 bracketed paste。
-    pub disable_bracketed_paste: bool,
-
     /// 禁用彩色输出。
     pub disable_color: bool,
-
-    /// 启用输入语法高亮。
-    pub enable_highlighting: bool,
 
     /// 启用终端集成。
     pub terminal_shell_integration: bool,
@@ -242,9 +236,7 @@ impl CommandLineArgs {
             verbose: false,
             print_commands_and_arguments: false,
             xtrace_file_path: None,
-            disable_bracketed_paste: false,
             disable_color: false,
-            enable_highlighting: crate::shell::entry::DEFAULT_ENABLE_HIGHLIGHTING,
             terminal_shell_integration: false,
             zsh_style_hooks: false,
             input_backend: None,
@@ -399,19 +391,9 @@ fn parse_long_option(
             parsed.xtrace_file_path = Some(PathBuf::from(value));
             Ok(next_index)
         }
-        "disable-bracketed-paste" => {
-            reject_inline_value(name, inline_value)?;
-            parsed.disable_bracketed_paste = true;
-            Ok(index + 1)
-        }
         "disable-color" => {
             reject_inline_value(name, inline_value)?;
             parsed.disable_color = true;
-            Ok(index + 1)
-        }
-        "enable-highlighting" => {
-            reject_inline_value(name, inline_value)?;
-            parsed.enable_highlighting = true;
             Ok(index + 1)
         }
         "enable-terminal-integration" => {

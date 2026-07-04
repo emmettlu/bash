@@ -13,7 +13,7 @@ mod simple_commands;
 
 use crate::parser::ast::Program;
 use crate::parser::error::ParseError;
-use crate::parser::parse_impl::{Parser, ParserImpl, ParserOptions};
+use crate::parser::parse_impl::{Parser, ParserOptions};
 use anyhow::Result;
 
 /// Wrapper struct for serializing parse results with input context.
@@ -36,40 +36,16 @@ macro_rules! assert_snapshot_redacted {
     }};
 }
 
-/// A named parser configuration for test output clarity.
-#[derive(Debug, Clone)]
-pub struct ParserConfig {
-    pub name: &'static str,
-    pub parser_impl: ParserImpl,
-}
-
-/// Returns all available parser implementations for testing.
-pub fn parser_configs() -> Vec<ParserConfig> {
-    vec![ParserConfig {
-        name: "peg",
-        parser_impl: ParserImpl::Peg,
-    }]
-}
-
-/// Helper to parse input with a specific parser configuration.
-pub fn parse_with_config(input: &str, config: &ParserConfig) -> Result<Program, ParseError> {
-    let options = ParserOptions {
-        parser_impl: config.parser_impl,
-        ..Default::default()
-    };
-
+/// 使用唯一 parser 解析输入.
+pub fn parse(input: &str) -> Result<Program, ParseError> {
+    let options = ParserOptions::default();
     let mut parser = Parser::new(std::io::Cursor::new(input), &options);
     parser.parse_program()
 }
 
-/// Run a test and create snapshot for the canonical parser.
+/// 使用标准 parser 运行测试并创建快照.
 pub fn test_with_snapshot(input: &str) -> Result<Program> {
-    let peg_config = ParserConfig {
-        name: "peg",
-        parser_impl: ParserImpl::Peg,
-    };
-    parse_with_config(input, &peg_config)
-        .map_err(|e| anyhow::anyhow!("parser failed: {e}\nInput: {input}"))
+    parse(input).map_err(|e| anyhow::anyhow!("parser failed: {e}\nInput: {input}"))
 }
 
 #[cfg(test)]
@@ -77,29 +53,14 @@ mod harness_tests {
     use super::*;
 
     #[test]
-    fn test_parser_configs_includes_peg() {
-        let configs = parser_configs();
-        assert_eq!(configs.len(), 1);
-        assert_eq!(configs[0].name, "peg");
-    }
-
-    #[test]
-    fn test_parse_with_config_basic() {
-        let config = ParserConfig {
-            name: "peg",
-            parser_impl: ParserImpl::Peg,
-        };
-        let result = parse_with_config("echo hello", &config);
+    fn test_parse_basic() {
+        let result = parse("echo hello");
         assert!(result.is_ok());
     }
 
     #[test]
     fn test_parse_error_preserves_expected_tokens() {
-        let config = ParserConfig {
-            name: "peg",
-            parser_impl: ParserImpl::Peg,
-        };
-        let err = parse_with_config("echo hello && ;", &config).unwrap_err();
+        let err = parse("echo hello && ;").unwrap_err();
 
         let ParseError::ParsingNearWithExpected { position, expected } = &err else {
             panic!("expected PEG expected-token details, got {err:?}");

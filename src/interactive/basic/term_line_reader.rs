@@ -125,14 +125,18 @@ impl<'a> ReadLineState<'a> {
             }
             (_, KeyCode::Enter) => {
                 self.clear_completion_menu()?;
-                Self::display_newline()?;
+                if !self.line.trim().is_empty() {
+                    Self::display_newline()?;
+                }
                 self.line.push('\n');
                 let line = std::mem::take(&mut self.line);
                 return Ok(Some(ReadResult::Input(line)));
             }
             (mods, KeyCode::Char('j')) if mods.ctrl => {
                 self.clear_completion_menu()?;
-                Self::display_newline()?;
+                if !self.line.trim().is_empty() {
+                    Self::display_newline()?;
+                }
                 self.line.push('\n');
                 let line = std::mem::take(&mut self.line);
                 return Ok(Some(ReadResult::Input(line)));

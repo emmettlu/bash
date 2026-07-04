@@ -14,16 +14,4 @@ pub enum ShellError {
     /// Failed to create xtrace file.
     #[error("failed to create xtrace file '{0}': {1}")]
     FailedToCreateXtraceFile(PathBuf, std::io::Error),
-
-    /// An error occurred while reading input.
-    #[error("input error occurred: {0}")]
-    InputError(std::io::Error),
-
-    /// The requested input backend type is not supported.
-    #[error("requested input backend type not supported")]
-    InputBackendNotSupported,
-
-    /// An unexpected error occurred while reading input.
-    #[error("unexpected error occurred reading input")]
-    UnexpectedInputFailure,
 }

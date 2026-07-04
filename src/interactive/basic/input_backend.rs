@@ -12,7 +12,9 @@ use super::{non_term_line_reader, term_line_reader};
 /// Represents a basic shell input backend capable of interactive usage, with primitive support
 /// for completion and test-focused automation via pexpect and similar technologies.
 #[derive(Default)]
-pub struct BasicInputBackend;
+pub struct BasicInputBackend {
+    pending_prompt_newline: bool,
+}
 
 impl InputBackend for BasicInputBackend {
     fn read_line(
@@ -20,11 +22,27 @@ impl InputBackend for BasicInputBackend {
         shell: &crate::interactive::ShellRef,
         prompt: InteractivePrompt,
     ) -> Result<ReadResult, ShellError> {
-        if std::io::stdin().is_terminal() {
-            self.read_line_via(shell, &term_line_reader::TermLineReader::new()?, &prompt)
-        } else {
-            self.read_line_via(shell, &non_term_line_reader::NonTermLineReader, &prompt)
+        let is_terminal = std::io::stdin().is_terminal();
+        let mut prompt = prompt;
+        if is_terminal && self.pending_prompt_newline {
+            prompt.prompt.insert(0, '\n');
+            self.pending_prompt_newline = false;
         }
+
+        let result = if is_terminal {
+            self.read_line_via(shell, &term_line_reader::TermLineReader::new()?, &prompt)?
+        } else {
+            self.read_line_via(shell, &non_term_line_reader::NonTermLineReader, &prompt)?
+        };
+
+        if is_terminal
+            && let ReadResult::Input(line) = &result
+            && line.trim().is_empty()
+        {
+            self.pending_prompt_newline = true;
+        }
+
+        Ok(result)
     }
 }
 

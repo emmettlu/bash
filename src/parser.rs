@@ -20,7 +20,7 @@ pub use error::{
     BindingParseError, ParseError, ParseErrorLocation, TestCommandParseError, WordParseError,
 };
 
-pub use parse_impl::{Parser, ParserBuilder, ParserImpl, ParserOptions, SourceInfo, parse_tokens};
+pub use parse_impl::{Parser, ParserBuilder, ParserOptions, parse_tokens};
 
 pub use source::{SourcePosition, SourcePositionOffset, SourceSpan};
 pub use tokenizer::{

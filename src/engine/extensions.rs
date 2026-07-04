@@ -21,12 +21,3 @@ pub trait ErrorFormatter: Send + Sync + 'static {
 pub struct DefaultErrorFormatter;
 
 impl ErrorFormatter for DefaultErrorFormatter {}
-
-/// 占位行为 trait (为未来扩展保留的桩).
-pub trait PlaceholderBehavior: Clone + Default + Send + Sync + 'static {}
-
-/// 默认占位实现.
-#[derive(Clone, Default)]
-pub struct DefaultPlaceholder;
-
-impl PlaceholderBehavior for DefaultPlaceholder {}

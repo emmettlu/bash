@@ -46,8 +46,8 @@ mod wellknownvars;
 /// Re-export parser types used in engine definitions.
 pub mod parser {
     pub use crate::parser::{
-        BindingParseError, ParseError, ParserImpl, SourcePosition, SourcePositionOffset,
-        SourceSpan, TestCommandParseError, WordParseError, ast,
+        BindingParseError, ParseError, SourcePosition, SourcePositionOffset, SourceSpan,
+        TestCommandParseError, WordParseError, ast,
     };
 }
 

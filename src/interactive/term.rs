@@ -91,7 +91,11 @@ pub fn read_key_event() -> Result<KeyEvent, std::io::Error> {
             VK_DOWN => KeyCode::Down,
             VK_TAB => KeyCode::Tab,
             _ => {
-                let ch = unsafe { key_event.uChar.AsciiChar } as u8 as char;
+                let code_unit = unsafe { key_event.uChar.UnicodeChar };
+                let Some(ch) = char_from_utf16_code_unit(code_unit) else {
+                    continue;
+                };
+
                 if ctrl
                     && ch.is_ascii_control()
                     && let Some(ctrl_char) =
@@ -111,6 +115,14 @@ pub fn read_key_event() -> Result<KeyEvent, std::io::Error> {
             code,
             modifiers: KeyModifiers { ctrl, alt: false },
         });
+    }
+}
+
+const fn char_from_utf16_code_unit(code_unit: u16) -> Option<char> {
+    if code_unit == 0 || (code_unit >= 0xD800 && code_unit <= 0xDFFF) {
+        None
+    } else {
+        char::from_u32(code_unit as u32)
     }
 }
 

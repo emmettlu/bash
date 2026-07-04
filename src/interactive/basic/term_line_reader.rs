@@ -201,7 +201,7 @@ impl<'a> ReadLineState<'a> {
         eprint!("{}", &self.line[insertion_index..]);
         eprint!(
             "{}",
-            repeated_char_str(BACKSPACE, self.line.len() - self.cursor)
+            repeated_char_str(BACKSPACE, display_width(&self.line[self.cursor..]))
         );
         std::io::stderr().flush()?;
 
@@ -230,14 +230,16 @@ impl<'a> ReadLineState<'a> {
         }
 
         let deleted_char_start = self.prev_char_boundary(self.cursor);
+        let deleted_width = display_width(&self.line[deleted_char_start..self.cursor]);
         self.line.drain(deleted_char_start..self.cursor);
         self.cursor = deleted_char_start;
+        let suffix_width = display_width(&self.line[self.cursor..]);
 
-        eprint!("{BACKSPACE}");
-        eprint!("{} ", &self.line[self.cursor..]);
+        eprint!("{}", repeated_char_str(BACKSPACE, deleted_width));
+        eprint!("{}{}", &self.line[self.cursor..], " ".repeat(deleted_width));
         eprint!(
             "{}",
-            repeated_char_str(BACKSPACE, self.line.len() + 1 - self.cursor)
+            repeated_char_str(BACKSPACE, suffix_width + deleted_width)
         );
 
         std::io::stderr().flush()?;
@@ -249,9 +251,13 @@ impl<'a> ReadLineState<'a> {
             return Ok(());
         }
 
-        eprint!("{BACKSPACE}");
+        let previous = self.prev_char_boundary(self.cursor);
+        eprint!(
+            "{}",
+            repeated_char_str(BACKSPACE, display_width(&self.line[previous..self.cursor]))
+        );
         std::io::stderr().flush()?;
-        self.cursor = self.prev_char_boundary(self.cursor);
+        self.cursor = previous;
 
         Ok(())
     }
@@ -366,6 +372,10 @@ impl<'a> ReadLineState<'a> {
             delete_count = 0;
         }
 
+        let deleted_width = display_width(
+            &self.line[completions.insertion_index..completions.insertion_index + delete_count],
+        );
+
         let mut updated_line = self.line.clone();
         updated_line.truncate(completions.insertion_index);
         updated_line.push_str(candidate);
@@ -374,12 +384,12 @@ impl<'a> ReadLineState<'a> {
 
         self.cursor = completions.insertion_index + candidate.len();
 
-        let move_left = repeated_char_str(BACKSPACE, delete_count);
+        let move_left = repeated_char_str(BACKSPACE, deleted_width);
         eprint!("{move_left}{}", &self.line[redisplay_offset..]);
 
         eprint!(
             "{}",
-            repeated_char_str(BACKSPACE, self.line.len() - self.cursor)
+            repeated_char_str(BACKSPACE, display_width(&self.line[self.cursor..]))
         );
 
         std::io::stderr().flush()?;
@@ -498,7 +508,7 @@ impl<'a> ReadLineState<'a> {
         eprint!(
             "{}{}",
             self.line,
-            repeated_char_str(BACKSPACE, self.line.len() - self.cursor)
+            repeated_char_str(BACKSPACE, display_width(&self.line[self.cursor..]))
         );
         std::io::stderr().flush()?;
 
@@ -529,7 +539,7 @@ impl<'a> ReadLineState<'a> {
         eprint!(
             "{}{}",
             self.line,
-            repeated_char_str(BACKSPACE, self.line.len() - self.cursor)
+            repeated_char_str(BACKSPACE, display_width(&self.line[self.cursor..]))
         );
         std::io::stderr().flush()?;
 
@@ -595,7 +605,7 @@ impl<'a> ReadLineState<'a> {
         eprint!(
             "{}{}",
             self.line,
-            repeated_char_str(BACKSPACE, self.line.len() - self.cursor)
+            repeated_char_str(BACKSPACE, display_width(&self.line[self.cursor..]))
         );
         std::io::stderr().flush()?;
         Ok(())
@@ -622,9 +632,10 @@ fn completion_column_width(completions: &crate::engine::completion::Completions)
         .candidates
         .iter()
         .map(|candidate| {
-            format_completion_candidate(candidate.as_str(), &completions.options)
-                .chars()
-                .count()
+            display_width(&format_completion_candidate(
+                candidate.as_str(),
+                &completions.options,
+            ))
         })
         .max()
         .unwrap_or(1);
@@ -634,9 +645,10 @@ fn completion_column_width(completions: &crate::engine::completion::Completions)
 
 fn format_completion_cell(marker: char, value: &str, width: usize) -> String {
     let available = width.saturating_sub(2);
-    let mut value = value.chars().take(available).collect::<String>();
-    if value.chars().count() < available {
-        value.push_str(&" ".repeat(available - value.chars().count()));
+    let mut value = truncate_to_display_width(value, available);
+    let value_width = display_width(&value);
+    if value_width < available {
+        value.push_str(&" ".repeat(available - value_width));
     }
     format!("{marker}{value} ")
 }
@@ -695,6 +707,60 @@ fn move_completion_selection_index(
 
 fn completion_column_len(candidate_count: usize, rows: usize, column: usize) -> usize {
     candidate_count.saturating_sub(column * rows).min(rows)
+}
+
+fn truncate_to_display_width(value: &str, max_width: usize) -> String {
+    let mut result = String::new();
+    let mut width = 0;
+    for ch in value.chars() {
+        let ch_width = char_display_width(ch);
+        if width + ch_width > max_width {
+            break;
+        }
+        result.push(ch);
+        width += ch_width;
+    }
+    result
+}
+
+fn display_width(value: &str) -> usize {
+    value.chars().map(char_display_width).sum()
+}
+
+fn char_display_width(ch: char) -> usize {
+    if ch.is_control() || is_combining_mark(ch) {
+        0
+    } else if is_wide_char(ch) {
+        2
+    } else {
+        1
+    }
+}
+
+fn is_combining_mark(ch: char) -> bool {
+    matches!(
+        ch as u32,
+        0x0300..=0x036F
+            | 0x1AB0..=0x1AFF
+            | 0x1DC0..=0x1DFF
+            | 0x20D0..=0x20FF
+            | 0xFE20..=0xFE2F
+    )
+}
+
+fn is_wide_char(ch: char) -> bool {
+    matches!(
+        ch as u32,
+        0x1100..=0x115F
+            | 0x2329..=0x232A
+            | 0x2E80..=0xA4CF
+            | 0xAC00..=0xD7A3
+            | 0xF900..=0xFAFF
+            | 0xFE10..=0xFE19
+            | 0xFE30..=0xFE6F
+            | 0xFF00..=0xFF60
+            | 0xFFE0..=0xFFE6
+    )
 }
 
 fn repeated_char_str(c: char, count: usize) -> String {

@@ -57,8 +57,10 @@ impl BasicInputBackend {
         let mut prompt_to_use = should_display_prompt.then_some(prompt.prompt.as_str());
         let mut result = String::new();
 
+        let history_entries = Self::history_entries(shell);
+
         loop {
-            match reader.read_line(prompt_to_use, |line, cursor| {
+            match reader.read_line(prompt_to_use, &history_entries, |line, cursor| {
                 Self::generate_completions(shell, line, cursor)
             })? {
                 ReadResult::Input(s) => {
@@ -106,6 +108,18 @@ impl BasicInputBackend {
             // Parse error at a specific position OR successful parse - complete
             _ => true,
         }
+    }
+
+    fn history_entries(shell: &Shell) -> Vec<String> {
+        shell
+            .history()
+            .map(|history| {
+                history
+                    .iter()
+                    .map(|item| item.command_line.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     fn generate_completions(

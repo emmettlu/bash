@@ -10,6 +10,7 @@ pub(crate) trait LineReader {
     fn read_line(
         &self,
         prompt: Option<&str>,
+        history_entries: &[String],
         completion_handler: impl FnMut(
             &str,
             usize,

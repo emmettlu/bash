@@ -8,6 +8,7 @@ impl super::LineReader for NonTermLineReader {
     fn read_line(
         &self,
         prompt: Option<&str>,
+        _history_entries: &[String],
         _completion_handler: impl FnMut(
             &str,
             usize,

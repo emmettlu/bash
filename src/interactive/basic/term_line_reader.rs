@@ -44,13 +44,14 @@ impl super::LineReader for TermLineReader {
     fn read_line(
         &self,
         prompt: Option<&str>,
+        history_entries: &[String],
         mut completion_handler: impl FnMut(
             &str,
             usize,
         )
             -> Result<crate::engine::completion::Completions, ShellError>,
     ) -> Result<ReadResult, ShellError> {
-        let mut state = ReadLineState::new(prompt);
+        let mut state = ReadLineState::new(prompt, history_entries);
         state.display_prompt()?;
 
         loop {
@@ -71,6 +72,10 @@ struct ReadLineState<'a> {
     cursor: usize,
     // Current prompt to use.
     prompt: Option<&'a str>,
+    input_origin: Option<term::CursorPosition>,
+    history_entries: &'a [String],
+    history_position: Option<usize>,
+    history_draft: Option<String>,
     completion_menu: Option<CompletionMenu>,
 }
 
@@ -92,21 +97,26 @@ enum CompletionDirection {
 }
 
 impl<'a> ReadLineState<'a> {
-    const fn new(prompt: Option<&'a str>) -> Self {
+    const fn new(prompt: Option<&'a str>, history_entries: &'a [String]) -> Self {
         Self {
             line: String::new(),
             cursor: 0,
             prompt,
+            input_origin: None,
+            history_entries,
+            history_position: None,
+            history_draft: None,
             completion_menu: None,
         }
     }
 
-    pub fn display_prompt(&self) -> Result<(), ShellError> {
+    pub fn display_prompt(&mut self) -> Result<(), ShellError> {
         if let Some(prompt) = self.prompt {
             eprint!("{prompt}");
             std::io::stderr().flush()?;
         }
 
+        self.input_origin = term::get_cursor_position().ok();
         Ok(())
     }
 
@@ -175,6 +185,12 @@ impl<'a> ReadLineState<'a> {
             (_, KeyCode::Right) if self.completion_menu.is_some() => {
                 self.move_completion_selection(CompletionDirection::Right)?;
             }
+            (_, KeyCode::Up) => {
+                self.move_history_previous()?;
+            }
+            (_, KeyCode::Down) => {
+                self.move_history_next()?;
+            }
             (_, KeyCode::Left) => {
                 self.clear_completion_menu()?;
                 self.move_cursor_left()?;
@@ -194,6 +210,7 @@ impl<'a> ReadLineState<'a> {
     }
 
     fn on_char(&mut self, c: char) -> Result<(), ShellError> {
+        self.reset_history_navigation();
         let insertion_index = self.cursor;
         self.line.insert(self.cursor, c);
         self.cursor += c.len_utf8();
@@ -215,7 +232,7 @@ impl<'a> ReadLineState<'a> {
         Ok(())
     }
 
-    fn clear_screen(&self) -> Result<(), ShellError> {
+    fn clear_screen(&mut self) -> Result<(), ShellError> {
         term::clear_screen()?;
         self.display_prompt()?;
         eprint!("{}", self.line.as_str());
@@ -225,6 +242,7 @@ impl<'a> ReadLineState<'a> {
 
     #[allow(clippy::string_slice, reason = "it's calculated based on char indices")]
     fn backspace(&mut self) -> Result<(), ShellError> {
+        self.reset_history_navigation();
         if self.cursor == 0 {
             return Ok(());
         }
@@ -272,6 +290,75 @@ impl<'a> ReadLineState<'a> {
         std::io::stderr().flush()?;
         self.cursor = next;
 
+        Ok(())
+    }
+
+    fn reset_history_navigation(&mut self) {
+        self.history_position = None;
+        self.history_draft = None;
+    }
+
+    fn move_history_previous(&mut self) -> Result<(), ShellError> {
+        if self.history_entries.is_empty() {
+            return Ok(());
+        }
+
+        let next_position = match self.history_position {
+            Some(0) => 0,
+            Some(position) => position - 1,
+            None => {
+                self.history_draft = Some(self.line.clone());
+                self.history_entries.len() - 1
+            }
+        };
+
+        self.history_position = Some(next_position);
+        self.replace_line(self.history_entries[next_position].clone())
+    }
+
+    fn move_history_next(&mut self) -> Result<(), ShellError> {
+        let Some(position) = self.history_position else {
+            return Ok(());
+        };
+
+        if position + 1 < self.history_entries.len() {
+            let next_position = position + 1;
+            self.history_position = Some(next_position);
+            self.replace_line(self.history_entries[next_position].clone())
+        } else {
+            self.history_position = None;
+            let draft = self.history_draft.take().unwrap_or_default();
+            self.replace_line(draft)
+        }
+    }
+
+    fn replace_line(&mut self, line: String) -> Result<(), ShellError> {
+        let old_width = display_width(&self.line);
+        self.line = line;
+        self.cursor = self.line.len();
+        let new_width = display_width(&self.line);
+
+        let Some(origin) = self.input_origin else {
+            term::clear_current_line()?;
+            self.display_prompt()?;
+            eprint!("{}", self.line);
+            std::io::stderr().flush()?;
+            return Ok(());
+        };
+
+        let _cursor = term::hide_cursor().ok();
+        term::set_cursor_position(origin.x, origin.y)?;
+        eprint!("{}", self.line);
+        if old_width > new_width {
+            eprint!("{}", " ".repeat(old_width - new_width));
+        }
+        term::set_cursor_position(
+            origin
+                .x
+                .saturating_add(i16::try_from(new_width).unwrap_or(i16::MAX)),
+            origin.y,
+        )?;
+        std::io::stderr().flush()?;
         Ok(())
     }
 
@@ -477,7 +564,7 @@ impl<'a> ReadLineState<'a> {
     }
 
     fn ensure_completion_menu_space(
-        &self,
+        &mut self,
         input_cursor: term::CursorPosition,
         required_lines: i16,
         buffer_height: i16,
@@ -515,7 +602,7 @@ impl<'a> ReadLineState<'a> {
         term::get_cursor_position().map_err(ShellError::from)
     }
 
-    fn handle_multiple_completions_fallback(&self) -> Result<(), ShellError> {
+    fn handle_multiple_completions_fallback(&mut self) -> Result<(), ShellError> {
         let Some(menu) = &self.completion_menu else {
             return Ok(());
         };

@@ -2,10 +2,19 @@
 name = "bash"
 version = "0.4.0"
 edition = "2024"
+autobins = false
 description = "Rust-implemented shell focused on bash compatibility"
 readme = "README.md"
 license = "MIT"
 categories = ["command-line-utilities", "development-tools"]
+
+[[bin]]
+name = "bash"
+path = "src/main.rs"
+
+[[bin]]
+name = "besh"
+path = "src/bin/besh.rs"
 
 [dependencies]
 anyhow = "1"

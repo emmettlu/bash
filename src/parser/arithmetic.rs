@@ -6,8 +6,8 @@ use crate::parser::ast;
 use crate::parser::error;
 
 thread_local! {
-    static ARITHMETIC_PARSE_CACHE: RefCell<crate::engine::cache::FixedCache<String, ast::ArithmeticExpr>> =
-        RefCell::new(crate::engine::cache::FixedCache::new(64));
+    static ARITHMETIC_PARSE_CACHE: RefCell<crate::parser::cache::FixedCache<String, ast::ArithmeticExpr>> =
+        const { RefCell::new(crate::parser::cache::FixedCache::new(64)) };
 }
 
 /// Parses a shell arithmetic expression.
@@ -16,16 +16,29 @@ thread_local! {
 ///
 /// * `input` - The arithmetic expression to parse, in string form.
 pub fn parse(input: &str) -> Result<ast::ArithmeticExpr, error::WordParseError> {
+    if let Err(limit) = crate::parser::nesting::check_delimiters(input) {
+        return Err(error::WordParseError::NestingLimitExceeded {
+            limit: crate::parser::nesting::MAX_NESTING_DEPTH,
+            position: crate::parser::nesting::span_at(input, limit.index).start,
+        });
+    }
     cacheable_parse(input.to_owned())
 }
 
 fn cacheable_parse(input: String) -> Result<ast::ArithmeticExpr, error::WordParseError> {
+    let input_bytes = input.len();
     ARITHMETIC_PARSE_CACHE.with(|cache| {
-        crate::engine::cache::get_or_try_insert_with(cache, input, |input| {
-            log::debug!(target: "arithmetic", "parsing arithmetic expression: '{input}'");
-            arithmetic::full_expression(input.as_str())
-                .map_err(|e| error::WordParseError::ArithmeticExpression(e.into()))
-        })
+        crate::parser::cache::get_or_try_insert_with(
+            cache,
+            input,
+            input_bytes,
+            |_| input_bytes.saturating_mul(8),
+            |input| {
+                log::debug!(target: "arithmetic", "parsing arithmetic expression: '{input}'");
+                arithmetic::full_expression(input.as_str())
+                    .map_err(|e| error::WordParseError::ArithmeticExpression(e.into()))
+            },
+        )
     })
 }
 

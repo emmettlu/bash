@@ -427,3 +427,17 @@ fn display_all(context: &crate::engine::ExecutionContext<'_>) -> Result<(), crat
 
     Ok(())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn repeated_plus_minus_options_use_the_last_value() {
+        let command = parse_set_args(["set", "-e", "+e"].map(String::from)).unwrap();
+        assert_eq!(command.exit_on_nonzero_command_exit.to_bool(), Some(false));
+
+        let command = parse_set_args(["set", "+e", "-e"].map(String::from)).unwrap();
+        assert_eq!(command.exit_on_nonzero_command_exit.to_bool(), Some(true));
+    }
+}

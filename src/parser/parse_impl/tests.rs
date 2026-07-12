@@ -51,6 +51,7 @@ pub fn test_with_snapshot(input: &str) -> Result<Program> {
 #[cfg(test)]
 mod harness_tests {
     use super::*;
+    use crate::parser::ast;
 
     #[test]
     fn test_parse_basic() {
@@ -69,5 +70,56 @@ mod harness_tests {
         assert_eq!(position.line, 1);
         assert_eq!(position.column, 15);
         assert!(expected.tokens().next().is_some());
+    }
+
+    #[test]
+    fn test_eof_parse_error_preserves_expected_tokens() {
+        let err = parse("echo hello &&").unwrap_err();
+
+        let ParseError::ParsingAtEndOfInputWithExpected { position, expected } = &err else {
+            panic!("expected end-of-input PEG details, got {err:?}");
+        };
+
+        assert_eq!(position.line, 1);
+        assert_eq!(position.column, 14);
+        assert!(expected.tokens().next().is_some());
+    }
+
+    #[test]
+    fn test_io_number_overflow_is_a_parse_error() {
+        assert!(parse("echo 999999999999999999999999>output").is_err());
+    }
+
+    #[test]
+    fn deeply_nested_subshells_return_a_structured_error() {
+        let depth = crate::parser::nesting::MAX_NESTING_DEPTH + 1;
+        let input = std::format!("{}true{}", "(".repeat(depth), ")".repeat(depth));
+        let error = parse(&input).unwrap_err();
+
+        assert!(matches!(error, ParseError::NestingLimitExceeded { .. }));
+    }
+
+    #[test]
+    fn reserved_words_used_as_arguments_do_not_count_as_nesting() {
+        let input = std::format!(
+            "echo {}",
+            std::iter::repeat_n("if", crate::parser::nesting::MAX_NESTING_DEPTH + 1)
+                .collect::<Vec<_>>()
+                .join(" ")
+        );
+
+        assert!(parse(&input).is_ok());
+    }
+
+    #[test]
+    fn arithmetic_source_reconstruction_preserves_space_count() {
+        let program = parse("((1  +   2))").unwrap();
+        let ast::Command::Compound(ast::CompoundCommand::Arithmetic(command), _) =
+            &program.complete_commands[0].0[0].0.first.seq[0]
+        else {
+            panic!("expected arithmetic command");
+        };
+
+        assert_eq!(command.expr.value, "1  +   2");
     }
 }

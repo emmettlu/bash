@@ -4,12 +4,17 @@ use itertools::Itertools;
 use std::collections::VecDeque;
 use std::io::Write;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
+use std::task::Poll;
 
 use crate::engine::arithmetic::{self, ExpandAndEvaluate};
 use crate::engine::commands::{self, CommandArg};
 use crate::engine::env::{EnvironmentLookup, EnvironmentScope, valid_variable_name};
 use crate::engine::openfiles::{OpenFile, OpenFiles};
-use crate::engine::results::{ExecutionResult, ExecutionSpawnResult, ExecutionWaitResult};
+use crate::engine::results::{
+    ExecutionResult, ExecutionSpawnResult, ExecutionTask, ExecutionWaitResult,
+    ProcessSubstitutionTask,
+};
 use crate::engine::shell::Shell;
 use crate::engine::variables::{
     ArrayLiteral, ShellValue, ShellValueLiteral, ShellValueUnsetType, ShellVariable,
@@ -27,7 +32,7 @@ struct PipelineExecutionContext<'a> {
 }
 
 /// Parameters for execution.
-#[derive(Clone, Default)]
+#[derive(Default)]
 pub struct ExecutionParameters {
     /// The open files tracked by the current context.
     open_files: openfiles::OpenFiles,
@@ -36,6 +41,10 @@ pub struct ExecutionParameters {
     /// Whether `errexit` (exit on error) behavior should be
     /// suppressed in this execution context. Defaults to `false`.
     pub suppress_errexit: bool,
+    /// owned shell task 的祖先取消控制器.
+    task_cancellations: Vec<crate::engine::processes::TaskCancellation>,
+    /// 当前命令上下文创建的 process substitution producer.
+    process_substitutions: Arc<Mutex<Vec<ProcessSubstitutionTask>>>,
 }
 
 impl ExecutionParameters {
@@ -117,7 +126,9 @@ impl ExecutionParameters {
     /// * `shell` - The shell context.
     /// * `fd` - The file descriptor number to retrieve.
     pub fn try_fd(&self, shell: &Shell, fd: ShellFd) -> Option<openfiles::OpenFile> {
-        self.fd_overlay(shell).try_fd(fd).cloned()
+        self.fd_overlay(shell)
+            .try_fd(fd)
+            .and_then(|file| file.try_clone().ok())
     }
 
     /// 尝试复制指定编号的文件描述符.
@@ -143,6 +154,11 @@ impl ExecutionParameters {
         self.open_files.set_fd(fd, file);
     }
 
+    /// 将指定 fd 标记为显式关闭.
+    pub fn remove_fd(&mut self, fd: ShellFd) -> Option<openfiles::OpenFile> {
+        self.open_files.remove_fd(fd)
+    }
+
     /// Iterates over all open file descriptors in this context.
     ///
     /// # Arguments
@@ -158,12 +174,57 @@ impl ExecutionParameters {
             .collect()
     }
 
+    fn process_substitution_registry(&self) -> Arc<Mutex<Vec<ProcessSubstitutionTask>>> {
+        Arc::clone(&self.process_substitutions)
+    }
+
+    fn add_process_substitution(&mut self, task: ProcessSubstitutionTask) {
+        self.process_substitutions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(task);
+    }
+
+    fn reset_process_substitutions(&mut self) {
+        self.process_substitutions = Arc::default();
+    }
+
+    pub(crate) fn has_process_substitutions(&self) -> bool {
+        !self
+            .process_substitutions
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .is_empty()
+    }
+
+    /// 为新 owned shell task 安装取消控制器.
+    pub(crate) fn install_task_cancellation(
+        &mut self,
+    ) -> crate::engine::processes::TaskCancellation {
+        let cancellation = crate::engine::processes::TaskCancellation::new();
+        self.task_cancellations.push(cancellation.clone());
+        cancellation
+    }
+
+    /// 将外部进程注册到全部祖先 task 的取消控制器.
+    pub(crate) fn register_process_for_cancellation(
+        &self,
+        process: &crate::engine::processes::ChildProcess,
+    ) -> Result<(), error::Error> {
+        for cancellation in &self.task_cancellations {
+            cancellation.register(process)?;
+        }
+        Ok(())
+    }
+
     /// 尝试复制执行参数及其 fd 叠加状态.
     pub fn try_clone(&self) -> Result<Self, error::Error> {
         Ok(Self {
-            open_files: self.open_files.try_clone_open_files()?,
+            open_files: self.open_files.try_clone()?,
             process_group_policy: self.process_group_policy,
             suppress_errexit: self.suppress_errexit,
+            task_cancellations: self.task_cancellations.clone(),
+            process_substitutions: Arc::clone(&self.process_substitutions),
         })
     }
 }
@@ -274,7 +335,7 @@ fn spawn_async_ao_list_in_task<'a>(
     params: &ExecutionParameters,
 ) -> Result<&'a jobs::Job, error::Error> {
     // Clone the inputs.
-    let mut cloned_shell = shell.fork_subshell();
+    let mut cloned_shell = shell.try_fork_subshell()?;
     let mut cloned_params = params.try_clone()?;
     let cloned_ao_list = ao_list.clone();
 
@@ -286,6 +347,7 @@ fn spawn_async_ao_list_in_task<'a>(
         cloned_params.set_fd(openfiles::OpenFiles::STDIN_FD, null);
     }
 
+    let cancellation = cloned_params.install_task_cancellation();
     let join_handle = compio::runtime::spawn(async move {
         cloned_ao_list
             .execute(&mut cloned_shell, &cloned_params)
@@ -293,7 +355,10 @@ fn spawn_async_ao_list_in_task<'a>(
     });
 
     Ok(shell.jobs_mut().add_as_current(jobs::Job::new(
-        [jobs::JobTask::Internal(join_handle)],
+        [jobs::JobTask::Internal(ExecutionTask::new(
+            join_handle,
+            cancellation,
+        ))],
         ao_list.to_string(),
         jobs::JobState::Running,
     )))
@@ -482,7 +547,15 @@ async fn spawn_pipeline_processes(
                 && !shell.options().enable_job_control);
 
         // Set up parameters appropriate for this command.
-        let mut cmd_params = params.try_clone()?;
+        let mut cmd_params = match params.try_clone() {
+            Ok(params) => params,
+            Err(err) => {
+                pipe_readers.clear();
+                pipe_writers.clear();
+                cleanup_failed_pipeline_spawn(spawn_results, shell).await;
+                return Err(err);
+            }
+        };
 
         // Install pipes.
         if let Some(Some(reader)) = pipe_readers.pop() {
@@ -498,8 +571,18 @@ async fn spawn_pipeline_processes(
                 cmd_params.process_group_policy = ProcessGroupPolicy::SameProcessGroup;
             }
 
+            let subshell = match shell.try_fork_subshell() {
+                Ok(subshell) => subshell,
+                Err(err) => {
+                    pipe_readers.clear();
+                    pipe_writers.clear();
+                    drop(cmd_params);
+                    cleanup_failed_pipeline_spawn(spawn_results, shell).await;
+                    return Err(err);
+                }
+            };
             PipelineExecutionContext {
-                shell: commands::ShellForCommand::subshell(Box::new(shell.fork_subshell()), shell),
+                shell: commands::ShellForCommand::subshell(Box::new(subshell), shell),
                 process_group_id,
             }
         } else {
@@ -509,9 +592,18 @@ async fn spawn_pipeline_processes(
             }
         };
 
-        let spawn_result = command
+        let spawn_result = match command
             .execute_in_pipeline(pipeline_context, cmd_params)
-            .await?;
+            .await
+        {
+            Ok(result) => result,
+            Err(err) => {
+                pipe_readers.clear();
+                pipe_writers.clear();
+                cleanup_failed_pipeline_spawn(spawn_results, shell).await;
+                return Err(err);
+            }
+        };
 
         // Update the process group ID if something was spawned.
         if let ExecutionSpawnResult::StartedProcess(child) = &spawn_result
@@ -524,6 +616,41 @@ async fn spawn_pipeline_processes(
     }
 
     Ok(spawn_results)
+}
+
+#[cfg(test)]
+async fn reap_pipeline_stages(mut spawn_results: VecDeque<ExecutionSpawnResult>) {
+    while let Some(stage) = spawn_results.pop_front() {
+        let _ = stage.wait().await;
+    }
+}
+
+fn cleanup_pipeline_stages(mut spawn_results: VecDeque<ExecutionSpawnResult>) {
+    while let Some(stage) = spawn_results.pop_front() {
+        if let Err(err) = stage.cleanup() {
+            log::debug!("failed to clean up pipeline stage: {err}");
+        }
+    }
+}
+
+fn cleanup_pipeline_job_tasks(tasks: impl IntoIterator<Item = jobs::JobTask>) {
+    for task in tasks {
+        if let Err(err) = task.cleanup() {
+            log::debug!("failed to clean up pipeline job task: {err}");
+        }
+    }
+}
+
+async fn cleanup_failed_pipeline_spawn(
+    spawn_results: VecDeque<ExecutionSpawnResult>,
+    shell: &Shell,
+) {
+    // 错误路径必须主动取消 task 或终止 process. 外部进程的 wait 已转移到后台,
+    // 因而这里不会等待无限运行的 stage 自然退出.
+    cleanup_pipeline_stages(spawn_results);
+    if shell.options().interactive && sys::terminal::supports_foreground_control() {
+        let _ = sys::terminal::move_self_to_foreground();
+    }
 }
 
 async fn wait_for_pipeline_processes_and_update_status(
@@ -541,9 +668,22 @@ async fn wait_for_pipeline_processes_and_update_status(
 
     while let Some(child) = process_spawn_results.pop_front() {
         let wait_result = if !stopped_children.is_empty() {
-            child.poll().await?
+            child.poll().await
         } else {
-            child.wait().await?
+            child.wait().await
+        };
+        let wait_result = match wait_result {
+            Ok(result) => result,
+            Err(err) => {
+                // 当前 stage 已经返回错误, 剩余及先前停止的 stage 都必须主动清理,
+                // 不能在错误返回路径中自然等待.
+                cleanup_pipeline_stages(process_spawn_results);
+                cleanup_pipeline_job_tasks(stopped_children);
+                if shell.options().interactive && sys::terminal::supports_foreground_control() {
+                    let _ = sys::terminal::move_self_to_foreground();
+                }
+                return Err(err);
+            }
         };
 
         match wait_result {
@@ -615,10 +755,36 @@ impl ExecuteInPipeline for ast::Command {
                 return Ok(ExecutionSpawnResult::Completed(ExecutionResult::success()));
             }
 
+            // 非 current-shell 的内部 stage 必须先返回 task handle, 否则其输出填满
+            // pipe 后会在下游 stage 启动前阻塞.
+            if pipeline_context.shell.is_owned() && !matches!(self, Self::Simple(_)) {
+                let command = self.clone();
+                let process_group_id = pipeline_context.process_group_id;
+                let (owned_shell, _) = pipeline_context.shell.into_owned_and_parent();
+                let Some(mut shell) = owned_shell else {
+                    unreachable!("owned shell expected")
+                };
+
+                let cancellation = params.install_task_cancellation();
+                let join_handle = compio::runtime::spawn(async move {
+                    let context = PipelineExecutionContext {
+                        shell: commands::ShellForCommand::parent(&mut shell),
+                        process_group_id,
+                    };
+                    let spawn_result = command.execute_in_pipeline(context, params).await?;
+                    Ok(ExecutionResult::from(spawn_result.wait().await?))
+                });
+                return Ok(ExecutionSpawnResult::StartedTask(ExecutionTask::new(
+                    join_handle,
+                    cancellation,
+                )));
+            }
+
             // Updates the shell with information about the currently executing command.
             pipeline_context.shell.target_mut().set_current_cmd(self);
 
-            match self {
+            let process_substitutions = params.process_substitution_registry();
+            let execution = match self {
                 Self::Simple(simple) => simple.execute_in_pipeline(pipeline_context, params).await,
                 Self::Compound(compound, redirects) => {
                     // Set up any additional redirects.
@@ -633,15 +799,19 @@ impl ExecuteInPipeline for ast::Command {
                         }
                     }
 
-                    Ok(compound
+                    let result = compound
                         .execute(pipeline_context.shell.target_mut(), &params)
-                        .await?
-                        .into())
+                        .await?;
+                    drop(params);
+                    Ok(result.into())
                 }
-                Self::Function(func) => Ok(func
-                    .execute(pipeline_context.shell.target_mut(), &params)
-                    .await?
-                    .into()),
+                Self::Function(func) => {
+                    let result = func
+                        .execute(pipeline_context.shell.target_mut(), &params)
+                        .await?;
+                    drop(params);
+                    Ok(result.into())
+                }
                 Self::ExtendedTest(e, redirects) => {
                     // Set up any additional redirects.
                     if let Some(redirects) = redirects {
@@ -667,7 +837,27 @@ impl ExecuteInPipeline for ast::Command {
                     } else {
                         1
                     };
+                    drop(params);
                     Ok(ExecutionResult::new(result).into())
+                }
+            };
+
+            let tasks = std::mem::take(
+                &mut *process_substitutions
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner),
+            );
+            match execution {
+                Ok(result) => result.with_process_substitutions(tasks).await,
+                Err(err) => {
+                    for task in tasks {
+                        if let Err(cleanup_err) = task.cancel() {
+                            log::debug!(
+                                "failed to clean up process substitution after command error: {cleanup_err}"
+                            );
+                        }
+                    }
+                    Err(err)
                 }
             }
         })
@@ -693,7 +883,7 @@ impl Execute for ast::CompoundCommand {
                 Self::Subshell(ast::SubshellCommand { list, .. }) => {
                     // Clone off a new subshell, and run the body of the subshell there.
                     // TODO(source-info): Do we need to reset the line number?
-                    let mut subshell = shell.fork_subshell();
+                    let mut subshell = shell.try_fork_subshell()?;
 
                     // Handle errors within the subshell context to prevent fatal errors
                     // from propagating to the parent shell.
@@ -755,17 +945,31 @@ impl Execute for ast::CoprocessCommand {
             let (stdin_reader, stdin_writer) = std::io::pipe()?;
             let (stdout_reader, stdout_writer) = std::io::pipe()?;
 
+            // 在把 parent ends 安装到父 shell 前先 fork, 避免 child 持有这些 ends,
+            // 导致 EOF 永远无法到达任一侧.
+            let mut child_shell = shell.try_fork_subshell()?;
+            child_shell.options_mut().interactive = false;
+
             // Allocate new fds in the (parent) shell for the read end of the coprocess's stdout
             // and the write end of the coprocess's stdin.
             let stdout_fd = shell.open_files_mut().add(stdout_reader.into())?;
-            let stdin_fd = shell.open_files_mut().add(stdin_writer.into())?;
-
-            // Crete a subshell that the coprocess will own and run in.
-            let mut child_shell = shell.fork_subshell();
-            child_shell.options_mut().interactive = false;
+            let stdin_fd = match shell.open_files_mut().add(stdin_writer.into()) {
+                Ok(fd) => fd,
+                Err(err) => {
+                    shell.open_files_mut().remove_fd(stdout_fd);
+                    return Err(err);
+                }
+            };
 
             // Setup redirection for the coprocess's shell's stdin/stdout.
-            let mut child_params = params.try_clone()?;
+            let mut child_params = match params.try_clone() {
+                Ok(params) => params,
+                Err(err) => {
+                    shell.open_files_mut().remove_fd(stdout_fd);
+                    shell.open_files_mut().remove_fd(stdin_fd);
+                    return Err(err);
+                }
+            };
             child_params
                 .open_files
                 .set_fd(OpenFiles::STDIN_FD, stdin_reader.into());
@@ -774,6 +978,7 @@ impl Execute for ast::CoprocessCommand {
                 .set_fd(OpenFiles::STDOUT_FD, stdout_writer.into());
 
             let body = self.body.clone();
+            let cancellation = child_params.install_task_cancellation();
             let join_handle = compio::runtime::spawn(async move {
                 let pipeline_context = PipelineExecutionContext {
                     shell: commands::ShellForCommand::parent(&mut child_shell),
@@ -790,7 +995,10 @@ impl Execute for ast::CoprocessCommand {
             });
 
             let job = shell.jobs_mut().add_as_current(jobs::Job::new(
-                [jobs::JobTask::Internal(join_handle)],
+                [jobs::JobTask::Internal(ExecutionTask::new(
+                    join_handle,
+                    cancellation,
+                ))],
                 format!("coproc {name}"),
                 jobs::JobState::Running,
             ));
@@ -1200,10 +1408,11 @@ impl ExecuteInPipeline for ast::SimpleCommand {
                     CommandPrefixOrSuffixItem::ProcessSubstitution(kind, subshell_command) => {
                         let (installed_fd_num, substitution_file) = setup_process_substitution(
                             context.shell.target(),
-                            &params,
+                            &mut params,
                             kind,
                             subshell_command,
-                        )?;
+                        )
+                        .await?;
 
                         params
                             .open_files
@@ -1811,8 +2020,16 @@ pub(crate) async fn setup_redirect(
                     }
 
                     if dash {
-                        // Close the specified fd. Ignore it if it's not valid.
-                        params.open_files.remove_fd(fd_num);
+                        if expanded.is_empty() {
+                            // `n>&-` 关闭目标 fd n.
+                            params.open_files.remove_fd(fd_num);
+                        } else {
+                            // `n>&m-` 是 move: 复制到 n 后关闭源 fd m.
+                            let source_fd_num = expanded
+                                .parse::<ShellFd>()
+                                .map_err(|_| error::ErrorKind::InvalidRedirection)?;
+                            params.open_files.remove_fd(source_fd_num);
+                        }
                     }
                 }
 
@@ -1828,7 +2045,8 @@ pub(crate) async fn setup_redirect(
                                 params,
                                 substitution_kind,
                                 subshell_cmd,
-                            )?;
+                            )
+                            .await?;
 
                             let target_file = substitution_file.try_clone()?;
                             params.open_files.set_fd(substitution_fd, substitution_file);
@@ -1893,11 +2111,21 @@ fn setup_redirect_output_and_error_to(
     let abs_file_path: PathBuf = shell.absolute_path(Path::new(file_path));
 
     let mut file_options = std::fs::File::options();
-    file_options
-        .create(true)
-        .write(true)
-        .truncate(!append)
-        .append(append);
+    if append {
+        file_options.create(true).append(true);
+    } else if shell
+        .options()
+        .disallow_overwriting_regular_files_via_output_redirection
+    {
+        if abs_file_path.is_file() {
+            file_options.create_new(true);
+        } else {
+            file_options.create(true);
+        }
+        file_options.write(true);
+    } else {
+        file_options.create(true).write(true).truncate(true);
+    }
 
     let stdout_file = shell
         .open_file(&file_options, &abs_file_path, params)
@@ -1928,21 +2156,28 @@ const fn get_default_fd_for_redirect_kind(kind: &ast::IoFileRedirectKind) -> She
     }
 }
 
-fn setup_process_substitution(
+async fn setup_process_substitution(
     shell: &Shell,
-    params: &ExecutionParameters,
+    params: &mut ExecutionParameters,
     kind: &ast::ProcessSubstitutionKind,
     subshell_cmd: &ast::SubshellCommand,
 ) -> Result<(ShellFd, OpenFile), error::Error> {
-    // TODO(execute): Don't execute synchronously!
-    // Execute in a subshell.
-    let mut subshell = shell.fork_subshell();
+    // 在分配 pipe 或启动 producer 前先保留 fd, 使失败路径不产生孤儿资源.
+    let fd_overlay = params.fd_overlay(shell);
+    let mut candidate_fd_num = 63;
+    while fd_overlay.contains_fd(candidate_fd_num) {
+        candidate_fd_num -= 1;
+        if candidate_fd_num == 0 {
+            return error::unimp("no available file descriptors");
+        }
+    }
 
-    // Set up execution parameters for the child execution.
+    let mut subshell = shell.try_fork_subshell()?;
     let mut child_params = params.try_clone()?;
     child_params.process_group_policy = ProcessGroupPolicy::SameProcessGroup;
+    // producer 自身使用独立 registry, 避免将自己注册为自己的依赖.
+    child_params.reset_process_substitutions();
 
-    // Set up pipe so we can connect to the command.
     let (reader, writer) = std::io::pipe()?;
     let (reader, writer) = (reader.into(), writer.into());
 
@@ -1957,39 +2192,256 @@ fn setup_process_substitution(
         }
     };
 
-    // Asynchronously spawn off the subshell; we intentionally don't block on its
-    // completion.
+    let cancellation = child_params.install_task_cancellation();
     let subshell_cmd = subshell_cmd.to_owned();
     let handle = compio::runtime::spawn(async move {
-        // Intentionally ignore the result of the subshell command.
-        let _ = subshell_cmd
+        subshell_cmd
             .list
             .execute(&mut subshell, &child_params)
-            .await;
+            .await
     });
-    handle.detach();
+    params.add_process_substitution(ProcessSubstitutionTask::new(ExecutionTask::new(
+        handle,
+        cancellation,
+    )));
 
-    // Starting at 63 (a.k.a. 64-1)--and decrementing--look for an
-    // available fd.
-    let fd_overlay = params.fd_overlay(shell);
-    let mut candidate_fd_num = 63;
-    while fd_overlay.contains_fd(candidate_fd_num) {
-        candidate_fd_num -= 1;
-        if candidate_fd_num == 0 {
-            return error::unimp("no available file descriptors");
-        }
-    }
+    // 同步 builtin 可能立即阻塞读取 pipe. 先让 producer 至少获得一次调度机会,
+    // 与 pipeline 先 spawn producer 再执行 consumer 的顺序保持一致.
+    yield_to_spawned_tasks().await;
 
     Ok((candidate_fd_num, target_file))
+}
+
+async fn yield_to_spawned_tasks() {
+    let mut yielded = false;
+    futures::future::poll_fn(|cx| {
+        if yielded {
+            Poll::Ready(())
+        } else {
+            yielded = true;
+            cx.waker().wake_by_ref();
+            Poll::Pending
+        }
+    })
+    .await;
 }
 
 fn setup_open_file_with_contents(contents: &str) -> Result<OpenFile, error::Error> {
     let (reader, mut writer) = std::io::pipe()?;
     let bytes = contents.as_bytes().to_vec();
 
-    std::thread::spawn(move || {
+    compio::runtime::spawn_blocking(move || {
         let _ = writer.write_all(&bytes);
-    });
+    })
+    .detach();
 
     Ok(reader.into())
+}
+
+#[expect(clippy::panic_in_result_fn)]
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anyhow::Result;
+
+    fn first_pipeline(program: &ast::Program) -> &ast::Pipeline {
+        &program.complete_commands[0].0[0].0.first
+    }
+
+    fn first_redirect(program: &ast::Program) -> &ast::IoRedirect {
+        let ast::Command::Simple(simple) = &first_pipeline(program).seq[0] else {
+            panic!("expected simple command")
+        };
+
+        simple
+            .prefix
+            .as_ref()
+            .into_iter()
+            .flat_map(|prefix| prefix.0.iter())
+            .chain(
+                simple
+                    .suffix
+                    .as_ref()
+                    .into_iter()
+                    .flat_map(|suffix| suffix.0.iter()),
+            )
+            .find_map(|item| match item {
+                CommandPrefixOrSuffixItem::IoRedirect(redirect) => Some(redirect),
+                _ => None,
+            })
+            .expect("expected redirect")
+    }
+
+    async fn test_shell() -> Result<Shell> {
+        Ok(Shell::builder()
+            .builtins(crate::builtins::default_builtins())
+            .build()
+            .await?)
+    }
+
+    #[compio::test]
+    async fn internal_builtin_consumes_process_substitution() -> Result<()> {
+        let mut shell = test_shell().await?;
+        let params = shell.default_exec_params();
+        let source = crate::engine::SourceInfo::from("test");
+
+        let result = shell
+            .run_string("read value < <(printf 'hello\\n')", &source, &params)
+            .await?;
+
+        assert!(result.is_success());
+        let (_, value) = shell.env().get("value").expect("read should assign value");
+        assert_eq!(value.value().to_cow_str(&shell), "hello");
+        assert!(!params.has_process_substitutions());
+        Ok(())
+    }
+
+    #[compio::test]
+    async fn producer_failure_is_isolated_and_cleaned_up() -> Result<()> {
+        let mut shell = test_shell().await?;
+        let params = shell.default_exec_params();
+        let source = crate::engine::SourceInfo::from("test");
+
+        let result = shell
+            .run_string(
+                ": < <(missing_process_substitution_producer)",
+                &source,
+                &params,
+            )
+            .await?;
+
+        // 与 Bash 一致, producer 的非零状态不会覆盖 consumer 的成功状态.
+        assert!(result.is_success());
+        assert!(!params.has_process_substitutions());
+        Ok(())
+    }
+
+    #[cfg(windows)]
+    #[compio::test]
+    async fn external_process_substitution_is_rejected_before_spawn() -> Result<()> {
+        let mut shell = test_shell().await?;
+        let params = shell.default_exec_params();
+        let source = crate::engine::SourceInfo::from("test");
+
+        let result = shell
+            .run_string("cmd.exe /D /C exit 0 < <(:)", &source, &params)
+            .await?;
+
+        // 命令级错误会被解释器转换成非零执行结果, 而不是逃逸为 Rust 错误.
+        assert!(!result.is_success());
+        assert!(!params.has_process_substitutions());
+        Ok(())
+    }
+
+    #[compio::test]
+    async fn owned_compound_pipeline_stage_starts_task() -> Result<()> {
+        let mut shell = test_shell().await?;
+        let params = shell.default_exec_params();
+        let program = shell.parse_string("{ :; } | :")?;
+
+        let stages =
+            spawn_pipeline_processes(first_pipeline(&program), &mut shell, &params).await?;
+        assert!(matches!(
+            stages.front(),
+            Some(ExecutionSpawnResult::StartedTask(_))
+        ));
+        reap_pipeline_stages(stages).await;
+
+        Ok(())
+    }
+
+    #[compio::test]
+    async fn owned_function_pipeline_stage_starts_task() -> Result<()> {
+        let mut shell = test_shell().await?;
+        let params = shell.default_exec_params();
+        let source = crate::engine::SourceInfo::from("test");
+        shell
+            .run_string("producer() { :; }", &source, &params)
+            .await?;
+        let program = shell.parse_string("producer | :")?;
+
+        let stages =
+            spawn_pipeline_processes(first_pipeline(&program), &mut shell, &params).await?;
+        assert!(matches!(
+            stages.front(),
+            Some(ExecutionSpawnResult::StartedTask(_))
+        ));
+        reap_pipeline_stages(stages).await;
+
+        Ok(())
+    }
+
+    #[compio::test]
+    async fn failed_pipeline_cleanup_does_not_wait_for_internal_stage() -> Result<()> {
+        let shell = test_shell().await?;
+        let stage = compio::runtime::spawn(async {
+            futures::future::pending::<Result<ExecutionResult, error::Error>>().await
+        });
+        let cancellation = crate::engine::processes::TaskCancellation::new();
+        let stage = ExecutionTask::new(stage, cancellation.clone());
+        let stages = VecDeque::from([ExecutionSpawnResult::StartedTask(stage)]);
+
+        cleanup_failed_pipeline_spawn(stages, &shell).await;
+
+        assert!(cancellation.is_cancelled());
+        Ok(())
+    }
+
+    #[compio::test]
+    async fn duplicate_and_close_redirect_closes_source_fd() -> Result<()> {
+        let mut shell = test_shell().await?;
+        let mut params = shell.default_exec_params();
+        params.set_fd(7, openfiles::null()?);
+        params.set_fd(8, openfiles::null()?);
+        let program = shell.parse_string(": 8>&7-")?;
+
+        setup_redirect(&mut shell, &mut params, first_redirect(&program)).await?;
+
+        assert!(matches!(
+            params.fd_overlay(&shell).fd_entry(7),
+            openfiles::OpenFileEntry::NotPresent
+        ));
+        assert!(matches!(
+            params.fd_overlay(&shell).fd_entry(8),
+            openfiles::OpenFileEntry::Open(_)
+        ));
+
+        let mut params = shell.default_exec_params();
+        params.set_fd(8, openfiles::null()?);
+        let program = shell.parse_string(": 8>&-")?;
+        setup_redirect(&mut shell, &mut params, first_redirect(&program)).await?;
+        assert!(matches!(
+            params.fd_overlay(&shell).fd_entry(8),
+            openfiles::OpenFileEntry::NotPresent
+        ));
+
+        Ok(())
+    }
+
+    #[compio::test]
+    async fn output_and_error_redirect_honors_noclobber() -> Result<()> {
+        let scratch = tempfile::tempdir()?;
+        let path = scratch.path().join("output.txt");
+        std::fs::write(&path, "original")?;
+
+        let mut shell = test_shell().await?;
+        shell
+            .options_mut()
+            .disallow_overwriting_regular_files_via_output_redirection = true;
+        let mut params = shell.default_exec_params();
+        let path = path.to_string_lossy();
+
+        assert!(setup_redirect_output_and_error_to(&shell, &mut params, &path, false).is_err());
+        assert_eq!(std::fs::read_to_string(path.as_ref())?, "original");
+
+        setup_redirect_output_and_error_to(&shell, &mut params, &path, true)?;
+        writeln!(params.stdout(&shell), " appended")?;
+        drop(params);
+        assert_eq!(
+            std::fs::read_to_string(path.as_ref())?,
+            "original appended\n"
+        );
+
+        Ok(())
+    }
 }

@@ -3,16 +3,15 @@
 use std::collections::VecDeque;
 use std::fmt::Display;
 
-use futures::FutureExt;
-
 use crate::engine::ExecutionResult;
 use crate::engine::error;
 use crate::engine::processes;
+use crate::engine::results::ExecutionTask;
 use crate::engine::sys;
 use crate::engine::trace_categories;
 use crate::engine::traps;
 
-pub(crate) type JobJoinHandle = compio::runtime::JoinHandle<Result<ExecutionResult, error::Error>>;
+pub(crate) type JobJoinHandle = ExecutionTask;
 pub(crate) type JobResult = (Job, Result<ExecutionResult, error::Error>);
 
 /// Manages the jobs that are currently managed by the shell.
@@ -52,6 +51,14 @@ impl JobTask {
         matches!(self, Self::External(_))
     }
 
+    /// 取消或终止 task, 并在需要时后台回收进程.
+    pub(crate) fn cleanup(self) -> Result<(), error::Error> {
+        match self {
+            Self::External(process) => process.terminate_and_reap(),
+            Self::Internal(task) => task.cancel(),
+        }
+    }
+
     /// Waits for the task to complete. Returns the task's execution result.
     pub async fn wait(&mut self) -> Result<ExecutionResult, error::Error> {
         match self {
@@ -59,26 +66,19 @@ impl JobTask {
                 processes::ProcessWaitResult::Completed(output) => Ok(output.into()),
                 processes::ProcessWaitResult::Stopped => Ok(ExecutionResult::stopped()),
             },
-            Self::Internal(handle) => handle
-                .await
-                .map_err(|err| error::ErrorKind::ThreadingError(err.to_string()))?,
+            Self::Internal(task) => task.wait().await,
         }
     }
 
-    /// Polls the task for completion. Returns `Some(result)` if the task has completed,
-    /// or `None` if it is still running. The result is the execution result of the task.
-    /// Behaves in a best-effort manner; if an internal error occurs during polling,
-    /// it will return `None`.
+    /// 轮询 task 是否完成. 已完成时返回结果, 仍在运行时返回 `None`.
+    /// 内部 task 的 join 错误会保留为执行错误.
     fn poll(&mut self) -> Option<Result<ExecutionResult, error::Error>> {
         match self {
             Self::External(process) => {
                 let check_result = process.poll();
                 check_result.map(|polled_result| polled_result.map(|output| output.into()))
             }
-            Self::Internal(handle) => {
-                let checkable_handle = handle;
-                checkable_handle.now_or_never().and_then(|r| r.ok())
-            }
+            Self::Internal(task) => task.poll(),
         }
     }
 }
@@ -182,9 +182,11 @@ impl JobManager {
                 let job = self.remove_job_at(i);
                 results.push((job, result));
             } else if matches!(self.jobs[i].state, JobState::Done) {
-                // TODO(jobs): This is a workaround to remove jobs that are done but for which we
-                // don't know what happened.
-                results.push((self.remove_job_at(i), Ok(ExecutionResult::success())));
+                let result = self.jobs[i]
+                    .completion_result
+                    .take()
+                    .unwrap_or_else(ExecutionResult::success);
+                results.push((self.remove_job_at(i), Ok(result)));
             } else {
                 i += 1;
             }
@@ -318,6 +320,9 @@ pub struct Job {
     /// The annotation of the job (e.g., current, previous).
     annotation: JobAnnotation,
 
+    /// 已完成 job 的最终执行结果.
+    completion_result: Option<ExecutionResult>,
+
     /// The shell-internal ID of the job.
     pub id: usize,
 
@@ -358,6 +363,7 @@ impl Job {
             tasks: tasks.into_iter().collect(),
             pgid: None,
             annotation: JobAnnotation::None,
+            completion_result: None,
             command_line,
             state,
         }
@@ -405,9 +411,15 @@ impl Job {
         while !self.tasks.is_empty() {
             let task = &mut self.tasks[0];
             match task.poll() {
-                Some(r) => {
-                    self.tasks.remove(0);
-                    result = Some(r);
+                Some(Ok(completed)) => {
+                    self.tasks.pop_front();
+                    result = Some(Ok(completed));
+                }
+                Some(Err(err)) => {
+                    self.tasks.pop_front();
+                    self.cleanup_remaining_tasks();
+                    self.state = JobState::Done;
+                    return Ok(Some(Err(err)));
                 }
                 None => {
                     return Ok(None);
@@ -418,28 +430,56 @@ impl Job {
         log::debug!(target: trace_categories::JOBS, "Job {} has completed.", self.id);
 
         self.state = JobState::Done;
+        if let Some(Ok(completed)) = &result {
+            self.completion_result = Some(completed.clone());
+        }
 
         Ok(result)
     }
 
     /// Waits for the job to complete.
     pub async fn wait(&mut self) -> Result<ExecutionResult, error::Error> {
+        if self.tasks.is_empty() && matches!(self.state, JobState::Done) {
+            return Ok(self
+                .completion_result
+                .clone()
+                .unwrap_or_else(ExecutionResult::success));
+        }
+
         let mut result = ExecutionResult::success();
 
-        while let Some(task) = self.tasks.back_mut() {
-            let execution_result = task.wait().await?;
+        // 按 stage 顺序等待, 使 job 的最终状态来自最后一个 stage.
+        while let Some(task) = self.tasks.front_mut() {
+            let execution_result = match task.wait().await {
+                Ok(result) => result,
+                Err(err) => {
+                    self.tasks.pop_front();
+                    self.cleanup_remaining_tasks();
+                    self.state = JobState::Done;
+                    return Err(err);
+                }
+            };
             if execution_result.exit_code == ExecutionResult::stopped().exit_code {
                 self.state = JobState::Stopped;
                 return Ok(execution_result);
             }
 
             result = execution_result;
-            self.tasks.pop_back();
+            self.tasks.pop_front();
         }
 
         self.state = JobState::Done;
+        self.completion_result = Some(result.clone());
 
         Ok(result)
+    }
+
+    fn cleanup_remaining_tasks(&mut self) {
+        while let Some(task) = self.tasks.pop_front() {
+            if let Err(err) = task.cleanup() {
+                log::debug!("failed to clean up job task after wait error: {err}");
+            }
+        }
     }
 
     /// Moves the job to execute in the background.
@@ -515,5 +555,62 @@ impl Job {
     pub fn process_group_id(&self) -> Option<sys::process::ProcessId> {
         // TODO(jobs): Don't assume that the first PID is the PGID.
         self.pgid.or_else(|| self.representative_pid())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anyhow::Result;
+
+    #[compio::test]
+    async fn wait_error_cancels_remaining_internal_tasks() -> Result<()> {
+        let failed = compio::runtime::spawn(async {
+            Err(error::ErrorKind::InternalError("test failure".into()).into())
+        });
+        let failed = ExecutionTask::new(failed, processes::TaskCancellation::new());
+
+        let pending = compio::runtime::spawn(async {
+            futures::future::pending::<Result<ExecutionResult, error::Error>>().await
+        });
+        let cancellation = processes::TaskCancellation::new();
+        let pending = ExecutionTask::new(pending, cancellation.clone());
+        let mut job = Job::new(
+            [JobTask::Internal(failed), JobTask::Internal(pending)],
+            "test".into(),
+            JobState::Running,
+        );
+
+        assert!(job.wait().await.is_err());
+        assert!(job.tasks.is_empty());
+        assert!(matches!(job.state, JobState::Done));
+        assert!(cancellation.is_cancelled());
+
+        Ok(())
+    }
+
+    #[compio::test]
+    async fn completed_job_preserves_its_result() -> Result<()> {
+        let task = compio::runtime::spawn(async { Ok(ExecutionResult::new(23)) });
+        let task = ExecutionTask::new(task, processes::TaskCancellation::new());
+        let mut manager = JobManager::new();
+        manager.add_as_current(Job::new(
+            [JobTask::Internal(task)],
+            "test".into(),
+            JobState::Running,
+        ));
+
+        let first_result = manager
+            .current_job_mut()
+            .expect("current job")
+            .wait()
+            .await?;
+        assert_eq!(first_result.exit_code, 23);
+
+        let completed = manager.poll()?;
+        assert_eq!(completed.len(), 1);
+        assert_eq!(completed[0].1.as_ref().expect("job result").exit_code, 23);
+
+        Ok(())
     }
 }

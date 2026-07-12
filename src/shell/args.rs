@@ -256,7 +256,7 @@ impl CommandLineArgs {
             let argument = &args[index];
 
             if argument == "--" {
-                parsed.script_args.extend(args[index..].iter().cloned());
+                parsed.script_args.extend(args[index + 1..].iter().cloned());
                 break;
             }
 
@@ -288,7 +288,9 @@ impl CommandLineArgs {
             return true;
         }
 
-        if self.command.is_some() || !self.script_args.is_empty() {
+        if self.command.is_some()
+            || (!self.read_commands_from_stdin && !self.script_args.is_empty())
+        {
             return false;
         }
 
@@ -352,12 +354,24 @@ fn parse_long_option(
         }
         "+o" => {
             let (value, next_index) = take_long_value(args, index, name, inline_value)?;
-            parsed.disabled_options.push(value);
+            update_named_option(
+                parsed,
+                crate::engine::namedoptions::ShellOptionKind::SetO,
+                value,
+                false,
+                "--+o",
+            )?;
             Ok(next_index)
         }
         "+O" => {
             let (value, next_index) = take_long_value(args, index, name, inline_value)?;
-            parsed.disabled_shopt_options.push(value);
+            update_named_option(
+                parsed,
+                crate::engine::namedoptions::ShellOptionKind::Shopt,
+                value,
+                false,
+                "--+O",
+            )?;
             Ok(next_index)
         }
         "rcfile" | "init-file" => {
@@ -437,12 +451,24 @@ fn parse_plus_option(
     match flag {
         'o' => {
             let (value, next_index) = take_short_value(args, index, "+o", attached)?;
-            parsed.disabled_options.push(value);
+            update_named_option(
+                parsed,
+                crate::engine::namedoptions::ShellOptionKind::SetO,
+                value,
+                false,
+                "+o",
+            )?;
             Ok(next_index)
         }
         'O' => {
             let (value, next_index) = take_short_value(args, index, "+O", attached)?;
-            parsed.disabled_shopt_options.push(value);
+            update_named_option(
+                parsed,
+                crate::engine::namedoptions::ShellOptionKind::Shopt,
+                value,
+                false,
+                "+O",
+            )?;
             Ok(next_index)
         }
         _ => Err(CliParseError::unknown_argument(argument)),
@@ -475,13 +501,25 @@ fn parse_short_option_group(
             'o' => {
                 let attached = (!flags.is_empty()).then_some(flags);
                 let (value, next_index) = take_short_value(args, index, "-o", attached)?;
-                parsed.enabled_options.push(value);
+                update_named_option(
+                    parsed,
+                    crate::engine::namedoptions::ShellOptionKind::SetO,
+                    value,
+                    true,
+                    "-o",
+                )?;
                 return Ok(next_index);
             }
             'O' => {
                 let attached = (!flags.is_empty()).then_some(flags);
                 let (value, next_index) = take_short_value(args, index, "-O", attached)?;
-                parsed.enabled_shopt_options.push(value);
+                update_named_option(
+                    parsed,
+                    crate::engine::namedoptions::ShellOptionKind::Shopt,
+                    value,
+                    true,
+                    "-O",
+                )?;
                 return Ok(next_index);
             }
             's' => parsed.read_commands_from_stdin = true,
@@ -494,6 +532,46 @@ fn parse_short_option_group(
     }
 
     Ok(index + 1)
+}
+
+fn update_named_option(
+    parsed: &mut CommandLineArgs,
+    kind: crate::engine::namedoptions::ShellOptionKind,
+    value: String,
+    enabled: bool,
+    option: &str,
+) -> Result<(), CliParseError> {
+    if crate::engine::namedoptions::options(kind)
+        .get(value.as_str())
+        .is_none()
+    {
+        return Err(CliParseError::invalid_value(
+            option,
+            &value,
+            "unknown shell option",
+        ));
+    }
+
+    let (enabled_options, disabled_options) = match kind {
+        crate::engine::namedoptions::ShellOptionKind::SetO => {
+            (&mut parsed.enabled_options, &mut parsed.disabled_options)
+        }
+        crate::engine::namedoptions::ShellOptionKind::Shopt => (
+            &mut parsed.enabled_shopt_options,
+            &mut parsed.disabled_shopt_options,
+        ),
+        crate::engine::namedoptions::ShellOptionKind::Set => unreachable!(),
+    };
+
+    enabled_options.retain(|name| name != &value);
+    disabled_options.retain(|name| name != &value);
+    if enabled {
+        enabled_options.push(value);
+    } else {
+        disabled_options.push(value);
+    }
+
+    Ok(())
 }
 
 fn parse_command_value(
@@ -627,6 +705,10 @@ fn write_message(mut writer: impl Write, message: &str) -> io::Result<()> {
 mod tests {
     use super::*;
 
+    fn args(values: &[&str]) -> Vec<String> {
+        values.iter().map(|value| (*value).to_string()).collect()
+    }
+
     #[test]
     fn test_default_values() {
         let args = CommandLineArgs::default_values();
@@ -634,5 +716,36 @@ mod tests {
         assert!(!args.login);
         assert!(args.command.is_none());
         assert!(args.script_args.is_empty());
+    }
+
+    #[test]
+    fn double_dash_ends_shell_options_without_becoming_script_path() {
+        let parsed = CommandLineArgs::try_parse_from(args(&["bash", "--"])).unwrap();
+        assert!(parsed.script_args.is_empty());
+
+        let parsed =
+            CommandLineArgs::try_parse_from(args(&["bash", "--", "script.sh", "arg"])).unwrap();
+        assert_eq!(parsed.script_args, ["script.sh", "arg"]);
+    }
+
+    #[test]
+    fn invalid_named_options_are_rejected() {
+        assert!(CommandLineArgs::try_parse_from(args(&["bash", "-o", "invalid"])).is_err());
+        assert!(CommandLineArgs::try_parse_from(args(&["bash", "-O", "invalid"])).is_err());
+        assert!(CommandLineArgs::try_parse_from(args(&["bash", "+o", "invalid"])).is_err());
+        assert!(CommandLineArgs::try_parse_from(args(&["bash", "+O", "invalid"])).is_err());
+    }
+
+    #[test]
+    fn last_named_option_occurrence_wins() {
+        let parsed = CommandLineArgs::try_parse_from(args(&[
+            "bash", "+o", "errexit", "-o", "errexit", "-O", "nullglob", "+O", "nullglob",
+        ]))
+        .unwrap();
+
+        assert_eq!(parsed.enabled_options, ["errexit"]);
+        assert!(parsed.disabled_options.is_empty());
+        assert!(parsed.enabled_shopt_options.is_empty());
+        assert_eq!(parsed.disabled_shopt_options, ["nullglob"]);
     }
 }

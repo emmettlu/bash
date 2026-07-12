@@ -1,5 +1,8 @@
 //! Encapsulation of execution results.
 
+use futures::FutureExt;
+use std::sync::{Arc, Mutex};
+
 use crate::engine::{error, processes};
 
 /// 常见退出码常量.
@@ -15,7 +18,7 @@ pub mod exit_code {
 }
 
 /// Represents the result of executing a command or similar item.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct ExecutionResult {
     /// The control flow transition to apply after execution.
     pub next_control_flow: ExecutionControlFlow,
@@ -184,6 +187,268 @@ impl ExecutionControlFlow {
     }
 }
 
+/// 与消费端执行上下文共享生命周期的 process substitution task.
+#[derive(Clone)]
+pub(crate) struct ProcessSubstitutionTask {
+    state: Arc<Mutex<ProcessSubstitutionTaskState>>,
+}
+
+struct ProcessSubstitutionTaskState {
+    task: Option<ExecutionTask>,
+}
+
+impl ProcessSubstitutionTask {
+    /// 创建一个由消费端生命周期管理的 producer task.
+    pub(crate) fn new(task: ExecutionTask) -> Self {
+        Self {
+            state: Arc::new(Mutex::new(ProcessSubstitutionTaskState {
+                task: Some(task),
+            })),
+        }
+    }
+
+    fn take_task(&self) -> Option<ExecutionTask> {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .task
+            .take()
+    }
+
+    /// 等待 producer 完成, 并保留执行错误.
+    pub(crate) async fn wait(&self) -> Result<(), error::Error> {
+        let Some(mut task) = self.take_task() else {
+            return Ok(());
+        };
+
+        // producer 可递归创建 process substitution, 这里用装箱切断 future 类型递归.
+        let result = Box::pin(task.wait()).await?;
+        if !result.is_success() {
+            log::debug!(
+                "process substitution producer exited with status {}",
+                result.exit_code
+            );
+        }
+        Ok(())
+    }
+
+    /// 非阻塞轮询 producer 是否完成.
+    fn poll(&self) -> Option<Result<(), error::Error>> {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(task) = state.task.as_mut() else {
+            return Some(Ok(()));
+        };
+        let result = task.poll()?;
+        state.task.take();
+        Some(result.map(|result| {
+            if !result.is_success() {
+                log::debug!(
+                    "process substitution producer exited with status {}",
+                    result.exit_code
+                );
+            }
+        }))
+    }
+
+    /// 取消尚未完成的 producer.
+    pub(crate) fn cancel(&self) -> Result<(), error::Error> {
+        self.take_task().map_or(Ok(()), ExecutionTask::cancel)
+    }
+}
+
+impl Drop for ProcessSubstitutionTaskState {
+    fn drop(&mut self) {
+        let Some(mut task) = self.task.take() else {
+            return;
+        };
+
+        if let Some(result) = task.poll() {
+            match result {
+                Ok(result) if !result.is_success() => log::debug!(
+                    "process substitution producer exited with status {}",
+                    result.exit_code
+                ),
+                Err(err) => log::debug!("process substitution producer failed: {err}"),
+                Ok(_) => {}
+            }
+        }
+    }
+}
+
+/// 可取消的 owned shell task.
+pub struct ExecutionTask {
+    handle: compio::runtime::JoinHandle<Result<ExecutionResult, error::Error>>,
+    cancellation: processes::TaskCancellation,
+    process_substitutions: Vec<ProcessSubstitutionTask>,
+    process_substitution_error: Option<error::Error>,
+    completion_result: Option<Result<ExecutionResult, error::Error>>,
+    armed: bool,
+}
+
+impl ExecutionTask {
+    /// 包装 task, 并在异常 drop 时触发外部进程取消.
+    pub(crate) const fn new(
+        handle: compio::runtime::JoinHandle<Result<ExecutionResult, error::Error>>,
+        cancellation: processes::TaskCancellation,
+    ) -> Self {
+        Self {
+            handle,
+            cancellation,
+            process_substitutions: Vec::new(),
+            process_substitution_error: None,
+            completion_result: None,
+            armed: true,
+        }
+    }
+
+    /// 将 process substitution producer 绑定到消费 task.
+    pub(crate) fn add_process_substitutions(
+        &mut self,
+        tasks: impl IntoIterator<Item = ProcessSubstitutionTask>,
+    ) {
+        self.process_substitutions.extend(tasks);
+    }
+
+    fn cancel_process_substitutions(&mut self) -> Result<(), error::Error> {
+        let mut first_error = None;
+        for task in self.process_substitutions.drain(..) {
+            if let Err(err) = task.cancel()
+                && first_error.is_none()
+            {
+                first_error = Some(err);
+            }
+        }
+        first_error.map_or(Ok(()), Err)
+    }
+
+    async fn wait_for_process_substitutions(&mut self) -> Result<(), error::Error> {
+        let mut first_error = self.process_substitution_error.take();
+        for task in self.process_substitutions.drain(..) {
+            if let Err(err) = task.wait().await
+                && first_error.is_none()
+            {
+                first_error = Some(err);
+            }
+        }
+        first_error.map_or(Ok(()), Err)
+    }
+
+    /// 主动取消 task 及其已注册的外部进程.
+    pub(crate) fn cancel(mut self) -> Result<(), error::Error> {
+        let task_result = self.cancellation.cancel();
+        let substitution_result = self.cancel_process_substitutions();
+        self.armed = false;
+        task_result.and(substitution_result)
+    }
+
+    /// 等待 task 完成.
+    pub(crate) async fn wait(&mut self) -> Result<ExecutionResult, error::Error> {
+        let task_result = if let Some(result) = self.completion_result.take() {
+            result
+        } else {
+            let result = (&mut self.handle)
+                .await
+                .map_err(|err| {
+                    error::Error::from(error::ErrorKind::ThreadingError(err.to_string()))
+                })
+                .and_then(|result| result);
+            self.armed = false;
+            result
+        };
+
+        match task_result {
+            Ok(result) if result.is_success() => {
+                self.wait_for_process_substitutions().await?;
+                Ok(result)
+            }
+            Ok(result) => {
+                if let Err(cleanup_err) = self.cancel_process_substitutions() {
+                    log::debug!(
+                        "failed to clean up process substitution after consumer failure: {cleanup_err}"
+                    );
+                }
+                Ok(result)
+            }
+            Err(err) => {
+                if let Err(cleanup_err) = self.cancel_process_substitutions() {
+                    log::debug!(
+                        "failed to clean up process substitution after consumer error: {cleanup_err}"
+                    );
+                }
+                Err(err)
+            }
+        }
+    }
+
+    /// 非阻塞轮询 task 是否完成.
+    pub(crate) fn poll(&mut self) -> Option<Result<ExecutionResult, error::Error>> {
+        if self.completion_result.is_none() {
+            let result = (&mut self.handle).now_or_never()?;
+            self.armed = false;
+            self.completion_result = Some(
+                result
+                    .map_err(|err| error::ErrorKind::ThreadingError(err.to_string()).into())
+                    .and_then(|result| result),
+            );
+        }
+
+        if self
+            .completion_result
+            .as_ref()
+            .is_some_and(|result| match result {
+                Ok(result) => !result.is_success(),
+                Err(_) => true,
+            })
+        {
+            if let Err(err) = self.cancel_process_substitutions() {
+                log::debug!(
+                    "failed to clean up process substitution after consumer failure: {err}"
+                );
+            }
+            return self.completion_result.take();
+        }
+
+        let mut first_error = self.process_substitution_error.take();
+        for task in &self.process_substitutions {
+            match task.poll() {
+                Some(Ok(())) => {}
+                Some(Err(err)) => {
+                    if first_error.is_none() {
+                        first_error = Some(err);
+                    }
+                }
+                None => {
+                    self.process_substitution_error = first_error;
+                    return None;
+                }
+            }
+        }
+        self.process_substitutions.clear();
+
+        if let Some(err) = first_error {
+            Some(Err(err))
+        } else {
+            self.completion_result.take()
+        }
+    }
+}
+
+impl Drop for ExecutionTask {
+    fn drop(&mut self) {
+        if self.armed
+            && let Err(err) = self.cancellation.cancel()
+        {
+            log::debug!("failed to cancel owned shell task: {err}");
+        }
+        if let Err(err) = self.cancel_process_substitutions() {
+            log::debug!("failed to cancel process substitution producer: {err}");
+        }
+    }
+}
+
 /// Represents the result of spawning an execution; captures both execution
 /// that immediately returns as well as execution that starts a process
 /// asynchronously.
@@ -193,7 +458,7 @@ pub enum ExecutionSpawnResult {
     /// Indicates that a process was started and had not yet completed.
     StartedProcess(processes::ChildProcess),
     /// Indicates that a task was started to handle the execution asynchronously.
-    StartedTask(compio::runtime::JoinHandle<Result<ExecutionResult, error::Error>>),
+    StartedTask(ExecutionTask),
 }
 
 impl From<ExecutionResult> for ExecutionSpawnResult {
@@ -203,17 +468,71 @@ impl From<ExecutionResult> for ExecutionSpawnResult {
 }
 
 impl ExecutionSpawnResult {
+    /// 将 process substitution producer 绑定到消费命令.
+    pub(crate) async fn with_process_substitutions(
+        self,
+        tasks: Vec<ProcessSubstitutionTask>,
+    ) -> Result<Self, error::Error> {
+        if tasks.is_empty() {
+            return Ok(self);
+        }
+
+        match self {
+            Self::Completed(result) if result.is_success() => {
+                for task in tasks {
+                    task.wait().await?;
+                }
+                Ok(Self::Completed(result))
+            }
+            Self::Completed(result) => {
+                for task in tasks {
+                    if let Err(err) = task.cancel() {
+                        log::debug!(
+                            "failed to clean up process substitution after consumer failure: {err}"
+                        );
+                    }
+                }
+                Ok(Self::Completed(result))
+            }
+            Self::StartedTask(mut task) => {
+                task.add_process_substitutions(tasks);
+                Ok(Self::StartedTask(task))
+            }
+            Self::StartedProcess(process) => {
+                for task in tasks {
+                    if let Err(err) = task.cancel() {
+                        log::debug!(
+                            "failed to clean up unsupported external process substitution: {err}"
+                        );
+                    }
+                }
+                if let Err(err) = process.terminate_and_reap() {
+                    log::debug!("failed to clean up external consumer process: {err}");
+                }
+                Err(error::ErrorKind::NotSupported(
+                    "process substitution with external commands on Windows",
+                )
+                .into())
+            }
+        }
+    }
+
+    /// 取消或终止仍在运行的执行单元, 并在需要时后台回收进程.
+    pub(crate) fn cleanup(self) -> Result<(), error::Error> {
+        match self {
+            Self::Completed(_) => Ok(()),
+            Self::StartedProcess(child) => child.terminate_and_reap(),
+            // 先终止 task 注册的外部进程, 再由 drop 取消异步执行.
+            Self::StartedTask(task) => task.cancel(),
+        }
+    }
+
     /// Waits for the command to complete.
     pub async fn wait(self) -> Result<ExecutionWaitResult, error::Error> {
         let result = match self {
             Self::StartedProcess(mut child) => child.wait().await?.into_wait_result(child),
             Self::Completed(result) => ExecutionWaitResult::Completed(result),
-            Self::StartedTask(join_handle) => {
-                let result = join_handle
-                    .await
-                    .map_err(|err| error::ErrorKind::ThreadingError(err.to_string()))?;
-                ExecutionWaitResult::Completed(result?)
-            }
+            Self::StartedTask(mut task) => ExecutionWaitResult::Completed(task.wait().await?),
         };
 
         Ok(result)
@@ -226,12 +545,7 @@ impl ExecutionSpawnResult {
                 None => ExecutionWaitResult::Running(child),
             },
             Self::Completed(result) => ExecutionWaitResult::Completed(result),
-            Self::StartedTask(join_handle) => {
-                let result = join_handle
-                    .await
-                    .map_err(|err| error::ErrorKind::ThreadingError(err.to_string()))?;
-                ExecutionWaitResult::Completed(result?)
-            }
+            Self::StartedTask(mut task) => ExecutionWaitResult::Completed(task.wait().await?),
         };
 
         Ok(result)

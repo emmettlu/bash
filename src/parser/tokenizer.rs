@@ -1,5 +1,6 @@
 use std::borrow::Cow;
 use std::cell::RefCell;
+use std::collections::VecDeque;
 use utf8_chars::BufReadCharsExt;
 
 use crate::parser::{SourcePosition, SourceSpan};
@@ -7,8 +8,8 @@ use crate::parser::{SourcePosition, SourceSpan};
 type TokenizeCacheKey = (String, TokenizerOptions);
 
 thread_local! {
-    static TOKENIZE_CACHE: RefCell<crate::engine::cache::FixedCache<TokenizeCacheKey, Vec<Token>>> =
-        RefCell::new(crate::engine::cache::FixedCache::new(64));
+    static TOKENIZE_CACHE: RefCell<crate::parser::cache::FixedCache<TokenizeCacheKey, Vec<Token>>> =
+        const { RefCell::new(crate::parser::cache::FixedCache::new(64)) };
 }
 
 #[derive(Clone, Debug)]
@@ -20,7 +21,7 @@ pub(crate) enum TokenEndReason {
     /// Specified terminating char.
     SpecifiedTerminatingChar,
     /// A non-newline blank char was reached.
-    NonNewLineBlank,
+    NonNewLineBlank(char),
     /// A here-document's body is starting.
     HereDocumentBodyStart,
     /// A here-document's body was terminated.
@@ -34,9 +35,6 @@ pub(crate) enum TokenEndReason {
     /// Some other condition was reached.
     Other,
 }
-
-/// Compatibility alias for `SourceSpan`.
-pub type TokenLocation = SourceSpan;
 
 /// Represents a token extracted from a shell script.
 #[derive(Clone, Debug)]
@@ -132,6 +130,15 @@ pub enum TokenizerError {
     #[error("unterminated here document sequence; tag(s) [{0}] found at: [{1}]")]
     UnterminatedHereDocuments(String, String),
 
+    /// Tokenizer 嵌套深度超过上限.
+    #[error("tokenizer nesting limit {limit} exceeded near {position}")]
+    NestingLimitExceeded {
+        /// 支持的最大嵌套深度.
+        limit: usize,
+        /// 超过上限的位置.
+        position: SourcePosition,
+    },
+
     /// An I/O error occurred while reading from the input stream.
     #[error("failed to read input")]
     ReadError(#[from] std::io::Error),
@@ -209,11 +216,11 @@ struct CrossTokenParseState {
     /// Current state of parsing here-documents.
     here_state: HereState,
     /// Ordered queue of here tags for which we're still looking for matching here-document bodies.
-    current_here_tags: Vec<HereTag>,
+    current_here_tags: VecDeque<HereTag>,
     /// Tokens already tokenized that should be used first to serve requests for tokens.
-    queued_tokens: Vec<TokenizeResult>,
-    /// Are we in an arithmetic expansion?
-    arithmetic_expansion: bool,
+    queued_tokens: VecDeque<TokenizeResult>,
+    /// 当前算术展开的嵌套深度.
+    arithmetic_expansion_depth: usize,
 }
 
 /// Options controlling how the tokenizer operates.
@@ -368,7 +375,7 @@ impl TokenParseState {
                     token: Some(self.pop(&cross_token_state.cursor)),
                 };
 
-                cross_token_state.current_here_tags.push(HereTag {
+                cross_token_state.current_here_tags.push_back(HereTag {
                     tag,
                     tag_was_escaped_or_quoted,
                     remove_tabs,
@@ -386,7 +393,7 @@ impl TokenParseState {
                     cross_token_state.here_state = HereState::NextLineIsHereDoc;
                 }
 
-                if let Some(last_here_tag) = cross_token_state.current_here_tags.last_mut() {
+                if let Some(last_here_tag) = cross_token_state.current_here_tags.back_mut() {
                     let token = self.pop(&cross_token_state.cursor);
                     let result = TokenizeResult {
                         reason,
@@ -402,21 +409,24 @@ impl TokenParseState {
             }
             HereState::InHereDocs => {
                 // We hit the end of the current here-document.
-                let completed_here_tag = cross_token_state.current_here_tags.remove(0);
+                let completed_here_tag = cross_token_state
+                    .current_here_tags
+                    .pop_front()
+                    .expect("here-document state requires a pending tag");
 
                 // First queue the redirection operator and (start) here-tag.
                 for here_token in completed_here_tag.tokens {
-                    cross_token_state.queued_tokens.push(here_token);
+                    cross_token_state.queued_tokens.push_back(here_token);
                 }
 
                 // Leave a hint that we are about to start a here-document.
-                cross_token_state.queued_tokens.push(TokenizeResult {
+                cross_token_state.queued_tokens.push_back(TokenizeResult {
                     reason: TokenEndReason::HereDocumentBodyStart,
                     token: None,
                 });
 
                 // Then queue the body document we just finished.
-                cross_token_state.queued_tokens.push(TokenizeResult {
+                cross_token_state.queued_tokens.push_back(TokenizeResult {
                     reason,
                     token: Some(self.pop(&cross_token_state.cursor)),
                 });
@@ -428,7 +438,7 @@ impl TokenParseState {
                     completed_here_tag.tag
                 };
                 self.append_str(end_tag.trim_end_matches('\n'));
-                cross_token_state.queued_tokens.push(TokenizeResult {
+                cross_token_state.queued_tokens.push_back(TokenizeResult {
                     reason: TokenEndReason::HereDocumentEndTag,
                     token: Some(self.pop(&cross_token_state.cursor)),
                 });
@@ -436,7 +446,7 @@ impl TokenParseState {
                 // Now we're ready to queue up any tokens that came between the completed
                 // here tag and the next here tag (or newline after it if it was the last).
                 for pending_token in completed_here_tag.pending_tokens_after {
-                    cross_token_state.queued_tokens.push(pending_token);
+                    cross_token_state.queued_tokens.push_back(pending_token);
                 }
 
                 if cross_token_state.current_here_tags.is_empty() {
@@ -486,11 +496,24 @@ fn uncached_tokenize_string(
     input: String,
     options: TokenizerOptions,
 ) -> Result<Vec<Token>, TokenizerError> {
+    let input_bytes = input.len();
     TOKENIZE_CACHE.with(|cache| {
-        crate::engine::cache::get_or_try_insert_with(cache, (input, options), |key| {
-            let (input, options) = key;
-            uncached_tokenize_str(input.as_str(), options)
-        })
+        crate::parser::cache::get_or_try_insert_with(
+            cache,
+            (input, options),
+            input_bytes,
+            |tokens| {
+                tokens.iter().fold(0usize, |bytes, token| {
+                    bytes
+                        .saturating_add(std::mem::size_of::<Token>())
+                        .saturating_add(token.to_str().len())
+                })
+            },
+            |key| {
+                let (input, options) = key;
+                uncached_tokenize_str(input.as_str(), options)
+            },
+        )
     })
 }
 
@@ -536,16 +559,15 @@ impl<'a, R: ?Sized + std::io::BufRead> Tokenizer<'a, R> {
                     column: 1,
                 },
                 here_state: HereState::None,
-                current_here_tags: vec![],
-                queued_tokens: vec![],
-                arithmetic_expansion: false,
+                current_here_tags: VecDeque::new(),
+                queued_tokens: VecDeque::new(),
+                arithmetic_expansion_depth: 0,
             },
         }
     }
 
-    #[expect(clippy::unnecessary_wraps)]
-    pub fn current_location(&self) -> Option<SourcePosition> {
-        Some(self.cross_state.cursor)
+    pub const fn current_location(&self) -> SourcePosition {
+        self.cross_state.cursor
     }
 
     fn next_char(&mut self) -> Result<Option<char>, TokenizerError> {
@@ -584,7 +606,7 @@ impl<'a, R: ?Sized + std::io::BufRead> Tokenizer<'a, R> {
     }
 
     pub fn next_token(&mut self) -> Result<TokenizeResult, TokenizerError> {
-        self.next_token_until(None, false /* include space? */)
+        self.next_token_until(None, false /* include space? */, 0)
     }
 
     /// Consumes a nested construct (e.g., `$((...))` or `$[...]`), handling nested delimiters
@@ -602,9 +624,10 @@ impl<'a, R: ?Sized + std::io::BufRead> Tokenizer<'a, R> {
         state: &mut TokenParseState,
         terminating_char: char,
         nesting_open: &str,
-        mut nesting_count: u32,
+        mut nesting_count: usize,
+        nesting_depth: usize,
     ) -> Result<(), TokenizerError> {
-        let mut pending_here_doc_tokens = vec![];
+        let mut pending_here_doc_tokens = VecDeque::new();
         let mut drain_here_doc_tokens = false;
 
         loop {
@@ -612,9 +635,12 @@ impl<'a, R: ?Sized + std::io::BufRead> Tokenizer<'a, R> {
                 if pending_here_doc_tokens.len() == 1 {
                     drain_here_doc_tokens = false;
                 }
-                pending_here_doc_tokens.remove(0)
+                pending_here_doc_tokens
+                    .pop_front()
+                    .expect("pending here-document token queue is not empty")
             } else {
-                let cur_token = self.next_token_until(Some(terminating_char), true)?;
+                let cur_token =
+                    self.next_token_until(Some(terminating_char), true, nesting_depth + 1)?;
 
                 if matches!(
                     cur_token.reason,
@@ -622,7 +648,7 @@ impl<'a, R: ?Sized + std::io::BufRead> Tokenizer<'a, R> {
                         | TokenEndReason::HereDocumentBodyEnd
                         | TokenEndReason::HereDocumentEndTag
                 ) {
-                    pending_here_doc_tokens.push(cur_token);
+                    pending_here_doc_tokens.push_back(cur_token);
                     continue;
                 }
                 cur_token
@@ -631,7 +657,7 @@ impl<'a, R: ?Sized + std::io::BufRead> Tokenizer<'a, R> {
             if matches!(cur_token.reason, TokenEndReason::UnescapedNewLine)
                 && !pending_here_doc_tokens.is_empty()
             {
-                pending_here_doc_tokens.push(cur_token);
+                pending_here_doc_tokens.push_back(cur_token);
                 drain_here_doc_tokens = true;
                 continue;
             }
@@ -641,6 +667,12 @@ impl<'a, R: ?Sized + std::io::BufRead> Tokenizer<'a, R> {
 
                 if matches!(cur_token_value, Token::Operator(o, _) if o == nesting_open) {
                     nesting_count += 1;
+                    if nesting_count > crate::parser::nesting::MAX_NESTING_DEPTH {
+                        return Err(TokenizerError::NestingLimitExceeded {
+                            limit: crate::parser::nesting::MAX_NESTING_DEPTH,
+                            position: self.cross_state.cursor,
+                        });
+                    }
                 }
             }
 
@@ -648,7 +680,7 @@ impl<'a, R: ?Sized + std::io::BufRead> Tokenizer<'a, R> {
                 TokenEndReason::HereDocumentBodyStart => {
                     state.append_char('\n');
                 }
-                TokenEndReason::NonNewLineBlank => state.append_char(' '),
+                TokenEndReason::NonNewLineBlank(blank) => state.append_char(blank),
                 TokenEndReason::SpecifiedTerminatingChar => {
                     nesting_count -= 1;
                     if nesting_count == 0 {
@@ -686,15 +718,23 @@ impl<'a, R: ?Sized + std::io::BufRead> Tokenizer<'a, R> {
         &mut self,
         terminating_char: Option<char>,
         include_space: bool,
+        nesting_depth: usize,
     ) -> Result<TokenizeResult, TokenizerError> {
+        if nesting_depth > crate::parser::nesting::MAX_NESTING_DEPTH {
+            return Err(TokenizerError::NestingLimitExceeded {
+                limit: crate::parser::nesting::MAX_NESTING_DEPTH,
+                position: self.cross_state.cursor,
+            });
+        }
+
         let mut state = TokenParseState::new(&self.cross_state.cursor);
         let mut result: Option<TokenizeResult> = None;
 
         while result.is_none() {
             // First satisfy token results from our queue. Once we exhaust the queue then
             // we'll look at the input stream.
-            if !self.cross_state.queued_tokens.is_empty() {
-                return Ok(self.cross_state.queued_tokens.remove(0));
+            if let Some(token) = self.cross_state.queued_tokens.pop_front() {
+                return Ok(token);
             }
 
             let next = self.peek_char()?;
@@ -758,8 +798,11 @@ impl<'a, R: ?Sized + std::io::BufRead> Tokenizer<'a, R> {
                 // For now, just include the character in the current token. We also check
                 // if there are leading tabs to be removed.
                 //
-                if !self.cross_state.current_here_tags.is_empty()
-                    && self.cross_state.current_here_tags[0].remove_tabs
+                if self
+                    .cross_state
+                    .current_here_tags
+                    .front()
+                    .is_some_and(|tag| tag.remove_tabs)
                     && (!state.started_token() || state.current_token().ends_with('\n'))
                     && c == '\t'
                 {
@@ -801,7 +844,7 @@ impl<'a, R: ?Sized + std::io::BufRead> Tokenizer<'a, R> {
                     // N.B. If the completed operator indicates a here-document, then keep
                     // track that the *next* token should be the here-tag.
                     //
-                    if self.cross_state.arithmetic_expansion {
+                    if self.cross_state.arithmetic_expansion_depth > 0 {
                         //
                         // We're in an arithmetic context; don't consider << and <<-
                         // special. They're not here-docs, they're either a left-shift
@@ -810,7 +853,7 @@ impl<'a, R: ?Sized + std::io::BufRead> Tokenizer<'a, R> {
                         //
 
                         if state.is_specific_operator(")") && c == ')' {
-                            self.cross_state.arithmetic_expansion = false;
+                            self.cross_state.arithmetic_expansion_depth -= 1;
                         }
                     } else if state.is_specific_operator("<<") {
                         self.cross_state.here_state =
@@ -819,7 +862,7 @@ impl<'a, R: ?Sized + std::io::BufRead> Tokenizer<'a, R> {
                         self.cross_state.here_state =
                             HereState::NextTokenIsHereTag { remove_tabs: true };
                     } else if state.is_specific_operator("(") && c == '(' {
-                        self.cross_state.arithmetic_expansion = true;
+                        self.cross_state.arithmetic_expansion_depth += 1;
                     }
 
                     let reason = if state.current_token() == "\n" {
@@ -920,14 +963,21 @@ impl<'a, R: ?Sized + std::io::BufRead> Tokenizer<'a, R> {
                                 };
 
                             if is_arithmetic {
-                                self.cross_state.arithmetic_expansion = true;
+                                self.cross_state.arithmetic_expansion_depth += 1;
                             }
 
-                            self.consume_nested_construct(&mut state, ')', "(", initial_nesting)?;
+                            let nested_result = self.consume_nested_construct(
+                                &mut state,
+                                ')',
+                                "(",
+                                initial_nesting,
+                                nesting_depth,
+                            );
 
                             if is_arithmetic {
-                                self.cross_state.arithmetic_expansion = false;
+                                self.cross_state.arithmetic_expansion_depth -= 1;
                             }
+                            nested_result?;
                         }
 
                         Some('[') => {
@@ -939,11 +989,17 @@ impl<'a, R: ?Sized + std::io::BufRead> Tokenizer<'a, R> {
 
                             // Keep track that we're in an arithmetic expression, since
                             // some text will be interpreted differently as a result.
-                            self.cross_state.arithmetic_expansion = true;
+                            self.cross_state.arithmetic_expansion_depth += 1;
 
-                            self.consume_nested_construct(&mut state, ']', "[", 1)?;
-
-                            self.cross_state.arithmetic_expansion = false;
+                            let nested_result = self.consume_nested_construct(
+                                &mut state,
+                                ']',
+                                "[",
+                                1,
+                                nesting_depth,
+                            );
+                            self.cross_state.arithmetic_expansion_depth -= 1;
+                            nested_result?;
                         }
 
                         Some('{') => {
@@ -953,7 +1009,7 @@ impl<'a, R: ?Sized + std::io::BufRead> Tokenizer<'a, R> {
                             // Consume the '{' and add it to the token.
                             state.append_char(self.next_char()?.unwrap());
 
-                            let mut pending_here_doc_tokens = vec![];
+                            let mut pending_here_doc_tokens = VecDeque::new();
                             let mut drain_here_doc_tokens = false;
 
                             loop {
@@ -964,11 +1020,14 @@ impl<'a, R: ?Sized + std::io::BufRead> Tokenizer<'a, R> {
                                         drain_here_doc_tokens = false;
                                     }
 
-                                    pending_here_doc_tokens.remove(0)
+                                    pending_here_doc_tokens
+                                        .pop_front()
+                                        .expect("pending here-document token queue is not empty")
                                 } else {
                                     let cur_token = self.next_token_until(
                                         Some('}'),
                                         false, /* include space? */
+                                        nesting_depth + 1,
                                     )?;
 
                                     // See if this is a here-document-related token we need to hold
@@ -980,7 +1039,7 @@ impl<'a, R: ?Sized + std::io::BufRead> Tokenizer<'a, R> {
                                             | TokenEndReason::HereDocumentBodyEnd
                                             | TokenEndReason::HereDocumentEndTag
                                     ) {
-                                        pending_here_doc_tokens.push(cur_token);
+                                        pending_here_doc_tokens.push_back(cur_token);
                                         continue;
                                     }
 
@@ -990,7 +1049,7 @@ impl<'a, R: ?Sized + std::io::BufRead> Tokenizer<'a, R> {
                                 if matches!(cur_token.reason, TokenEndReason::UnescapedNewLine)
                                     && !pending_here_doc_tokens.is_empty()
                                 {
-                                    pending_here_doc_tokens.push(cur_token);
+                                    pending_here_doc_tokens.push_back(cur_token);
                                     drain_here_doc_tokens = true;
                                     continue;
                                 }
@@ -1003,7 +1062,9 @@ impl<'a, R: ?Sized + std::io::BufRead> Tokenizer<'a, R> {
                                     TokenEndReason::HereDocumentBodyStart => {
                                         state.append_char('\n');
                                     }
-                                    TokenEndReason::NonNewLineBlank => state.append_char(' '),
+                                    TokenEndReason::NonNewLineBlank(blank) => {
+                                        state.append_char(blank);
+                                    }
                                     TokenEndReason::SpecifiedTerminatingChar => {
                                         // We hit the end brace we were looking for but did not
                                         // yet consume it. Do so now.
@@ -1075,21 +1136,47 @@ impl<'a, R: ?Sized + std::io::BufRead> Tokenizer<'a, R> {
                 self.consume_char()?;
                 state.append_char(c);
 
-                let mut paren_depth = 1;
+                let mut paren_depth = 1usize;
                 let mut in_escape = false;
+                let mut quote = None;
 
-                // Keep consuming until we see the matching end ')'.
+                // 持续读取, 直到遇到匹配且未被引用的右括号.
                 while paren_depth > 0 {
                     if let Some(extglob_char) = self.next_char()? {
-                        // Include it in the token.
                         state.append_char(extglob_char);
 
-                        match extglob_char {
-                            _ if in_escape => in_escape = false,
-                            '\\' => in_escape = true,
-                            '(' => paren_depth += 1,
-                            ')' => paren_depth -= 1,
-                            _ => (),
+                        if in_escape {
+                            in_escape = false;
+                            continue;
+                        }
+
+                        match quote {
+                            Some('\'') => {
+                                if extglob_char == '\'' {
+                                    quote = None;
+                                }
+                            }
+                            Some('"') => match extglob_char {
+                                '"' => quote = None,
+                                '\\' => in_escape = true,
+                                _ => {}
+                            },
+                            Some(_) => unreachable!("only shell quote characters are tracked"),
+                            None => match extglob_char {
+                                '\\' => in_escape = true,
+                                '\'' | '"' => quote = Some(extglob_char),
+                                '(' => {
+                                    paren_depth += 1;
+                                    if paren_depth > crate::parser::nesting::MAX_NESTING_DEPTH {
+                                        return Err(TokenizerError::NestingLimitExceeded {
+                                            limit: crate::parser::nesting::MAX_NESTING_DEPTH,
+                                            position: self.cross_state.cursor,
+                                        });
+                                    }
+                                }
+                                ')' => paren_depth -= 1,
+                                _ => {}
+                            },
                         }
                     } else {
                         return Err(TokenizerError::UnterminatedExtendedGlob(
@@ -1117,7 +1204,7 @@ impl<'a, R: ?Sized + std::io::BufRead> Tokenizer<'a, R> {
             } else if state.unquoted() && is_blank(c) {
                 if state.started_token() {
                     result = state.delimit_current_token(
-                        TokenEndReason::NonNewLineBlank,
+                        TokenEndReason::NonNewLineBlank(c),
                         &mut self.cross_state,
                     )?;
                 } else if include_space {
@@ -1184,7 +1271,11 @@ impl<'a, R: ?Sized + std::io::BufRead> Tokenizer<'a, R> {
             return Ok(false);
         }
 
-        let next_here_tag = &self.cross_state.current_here_tags[0];
+        let next_here_tag = self
+            .cross_state
+            .current_here_tags
+            .front()
+            .expect("here-document tag queue is not empty");
 
         let tag_str: Cow<'_, str> = if next_here_tag.tag_was_escaped_or_quoted {
             unquote_str(next_here_tag.tag.as_str()).into()
@@ -1311,18 +1402,49 @@ const fn is_quoting_char(c: char) -> bool {
 ///
 /// * `s` - The string to unquote.
 pub fn unquote_str(s: &str) -> String {
-    let mut result = String::new();
+    #[derive(Clone, Copy)]
+    enum Mode {
+        Unquoted,
+        SingleQuoted,
+        DoubleQuoted,
+    }
 
-    let mut in_escape = false;
-    for c in s.chars() {
-        match c {
-            c if in_escape => {
-                result.push(c);
-                in_escape = false;
+    let mut result = String::new();
+    let mut chars = s.chars().peekable();
+    let mut mode = Mode::Unquoted;
+
+    while let Some(c) = chars.next() {
+        match mode {
+            Mode::Unquoted => match c {
+                '\'' => mode = Mode::SingleQuoted,
+                '"' => mode = Mode::DoubleQuoted,
+                '\\' => match chars.next() {
+                    Some('\n') => {}
+                    Some(escaped) => result.push(escaped),
+                    None => result.push('\\'),
+                },
+                _ => result.push(c),
+            },
+            Mode::SingleQuoted => {
+                if c == '\'' {
+                    mode = Mode::Unquoted;
+                } else {
+                    result.push(c);
+                }
             }
-            '\\' => in_escape = true,
-            c if is_quoting_char(c) => (),
-            c => result.push(c),
+            Mode::DoubleQuoted => match c {
+                '"' => mode = Mode::Unquoted,
+                '\\' => match chars.peek().copied() {
+                    Some('$' | '`' | '"' | '\\') => {
+                        result.push(chars.next().expect("peeked character must exist"));
+                    }
+                    Some('\n') => {
+                        let _ = chars.next();
+                    }
+                    _ => result.push('\\'),
+                },
+                _ => result.push(c),
+            },
         }
     }
 
@@ -1561,6 +1683,48 @@ HERE2
     }
 
     #[test]
+    fn reject_excessively_nested_command_substitutions() {
+        let input = std::format!(
+            "{}true{}",
+            "$(".repeat(crate::parser::nesting::MAX_NESTING_DEPTH + 1),
+            ")".repeat(crate::parser::nesting::MAX_NESTING_DEPTH + 1),
+        );
+
+        assert_matches!(
+            tokenize_str(&input),
+            Err(TokenizerError::NestingLimitExceeded { .. })
+        );
+    }
+
+    #[test]
+    fn extglob_scanner_ignores_parentheses_inside_quotes() {
+        let tokens = tokenize_str(r#"echo @(")") tail"#).unwrap();
+        let values = tokens.iter().map(Token::to_str).collect::<Vec<_>>();
+
+        assert_eq!(values, ["echo", r#"@(")")"#, "tail"]);
+    }
+
+    #[test]
+    fn nested_reconstruction_preserves_blank_characters() {
+        let input = "$(printf 'a  b'\t  c)";
+        let tokens = tokenize_str(input).unwrap();
+
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0].to_str(), input);
+    }
+
+    #[test]
+    fn reject_excessively_nested_arithmetic_parentheses() {
+        let depth = crate::parser::nesting::MAX_NESTING_DEPTH + 1;
+        let input = std::format!("$(({}1{}))", "(".repeat(depth), ")".repeat(depth));
+
+        assert_matches!(
+            tokenize_str(&input),
+            Err(TokenizerError::NestingLimitExceeded { .. })
+        );
+    }
+
+    #[test]
     fn tokenize_unterminated_arithmetic_expansion() {
         assert_matches!(
             tokenize_str("$(("),
@@ -1610,6 +1774,15 @@ HERE2
     #[test]
     fn tokenize_arithmetic_expression_with_parens() -> Result<()> {
         assert_ron_snapshot!(test_tokenizer("$(( (0) ))")?);
+        Ok(())
+    }
+
+    #[test]
+    fn tokenize_nested_arithmetic_expansion_preserves_outer_context() -> Result<()> {
+        let tokens = tokenize_str("$(( $((1)) << 2 ))")?;
+
+        assert_eq!(tokens.len(), 1);
+        assert_eq!(tokens[0].to_str(), "$(( $((1)) << 2 ))");
         Ok(())
     }
 
@@ -1692,6 +1865,11 @@ HERE2
         assert_eq!(unquote_str(r#""hello""#), "hello");
         assert_eq!(unquote_str(r"'hello'"), "hello");
         assert_eq!(unquote_str(r#""hel\"lo""#), r#"hel"lo"#);
-        assert_eq!(unquote_str(r"'hel\'lo'"), r"hel'lo");
+        assert_eq!(unquote_str(r"'hel\lo'"), r"hel\lo");
+        assert_eq!(unquote_str(r#""hel\qlo""#), r"hel\qlo");
+        assert_eq!(unquote_str(r"hel\ lo"), "hel lo");
+        assert_eq!(unquote_str("hel\\\nlo"), "hello");
+        assert_eq!(unquote_str(r#"'hel"lo'"#), r#"hel"lo"#);
+        assert_eq!(unquote_str(r#"'E'"O"\F"#), "EOF");
     }
 }

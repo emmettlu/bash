@@ -66,7 +66,7 @@ impl crate::engine::Shell {
             return Ok(ExecutionResult::success());
         };
 
-        let mut params = params.clone();
+        let mut params = params.try_clone()?;
         params.process_group_policy = ProcessGroupPolicy::SameProcessGroup;
 
         // Preserve $? across trap handler execution so the handler doesn't
@@ -100,7 +100,7 @@ impl crate::engine::Shell {
             }
             // EXIT and system signals are always inherited — i.e. their visibility is
             // not gated by errtrace/functrace options. (The actual trap *state* for
-            // subshells is managed separately via `Shell::fork_subshell`.)
+            // subshells is managed separately via `Shell::try_fork_subshell`.)
             TrapSignal::Exit | TrapSignal::Signal(_) => true,
         }
     }

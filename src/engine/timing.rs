@@ -3,7 +3,7 @@
 use crate::engine::error;
 
 struct StopwatchTime {
-    now: std::time::SystemTime,
+    now: std::time::Instant,
     self_user: std::time::Duration,
     self_system: std::time::Duration,
     children_user: std::time::Duration,
@@ -11,17 +11,17 @@ struct StopwatchTime {
 }
 
 impl StopwatchTime {
-    #[allow(clippy::unchecked_time_subtraction)]
-    fn minus(&self, other: &Self) -> Result<StopwatchTiming, error::Error> {
-        let user = (self.self_user - other.self_user) + (self.children_user - other.children_user);
-        let system =
-            (self.self_system - other.self_system) + (self.children_system - other.children_system);
+    fn minus(&self, other: &Self) -> StopwatchTiming {
+        let user = self.self_user.saturating_sub(other.self_user)
+            + self.children_user.saturating_sub(other.children_user);
+        let system = self.self_system.saturating_sub(other.self_system)
+            + self.children_system.saturating_sub(other.children_system);
 
-        Ok(StopwatchTiming {
-            wall: self.now.duration_since(other.now)?,
+        StopwatchTiming {
+            wall: self.now.saturating_duration_since(other.now),
             user,
             system,
-        })
+        }
     }
 }
 
@@ -32,7 +32,7 @@ pub(crate) struct Stopwatch {
 impl Stopwatch {
     pub fn stop(&self) -> Result<StopwatchTiming, error::Error> {
         let end = get_current_stopwatch_time()?;
-        end.minus(&self.start)
+        Ok(end.minus(&self.start))
     }
 }
 pub(crate) struct StopwatchTiming {
@@ -48,7 +48,7 @@ pub(crate) fn start_timing() -> Result<Stopwatch, error::Error> {
 }
 
 fn get_current_stopwatch_time() -> Result<StopwatchTime, error::Error> {
-    let now = std::time::SystemTime::now();
+    let now = std::time::Instant::now();
     let (self_user, self_system) = crate::engine::sys::resource::get_self_user_and_system_time()?;
     let (children_user, children_system) =
         crate::engine::sys::resource::get_children_user_and_system_time()?;

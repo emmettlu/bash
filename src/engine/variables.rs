@@ -4,6 +4,8 @@ use std::borrow::Cow;
 use std::collections::BTreeMap;
 use std::ffi::OsString;
 use std::fmt::{Display, Write};
+use std::sync::Mutex;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::engine::shell::Shell;
 use crate::engine::{error, escape};
@@ -27,6 +29,8 @@ pub struct ShellVariable {
     treat_as_integer: bool,
     /// Whether or not the variable should be treated as a name reference.
     treat_as_nameref: bool,
+    /// 旧式可变引用 API 无法表示的赋值错误.
+    assignment_error: Option<&'static str>,
 }
 
 /// Kind of transformation to apply to a variable's value when it is updated.
@@ -53,6 +57,7 @@ impl Default for ShellVariable {
             trace: false,
             treat_as_integer: false,
             treat_as_nameref: false,
+            assignment_error: None,
         }
     }
 }
@@ -66,6 +71,14 @@ impl ShellVariable {
     pub fn new<I: Into<ShellValue>>(value: I) -> Self {
         Self {
             value: value.into(),
+            ..Self::default()
+        }
+    }
+
+    /// 创建一个始终拒绝赋值的内部错误变量.
+    pub(crate) fn assignment_error(message: &'static str) -> Self {
+        Self {
+            assignment_error: Some(message),
             ..Self::default()
         }
     }
@@ -231,11 +244,17 @@ impl ShellVariable {
     /// * `append` - Whether or not to append the value to the preexisting value.
     #[expect(clippy::too_many_lines)]
     pub fn assign(&mut self, value: ShellValueLiteral, append: bool) -> Result<(), error::Error> {
+        if let Some(message) = self.assignment_error {
+            return error::unimp(message);
+        }
         if self.is_readonly() {
             return Err(error::ErrorKind::ReadonlyVariable.into());
         }
+        let value = self.convert_value_literal_for_assignment(value)?;
 
-        let value = self.convert_value_literal_for_assignment(value);
+        if let ShellValue::Dynamic(dynamic) = &mut self.value {
+            return dynamic.assign(value, append);
+        }
 
         if append {
             match (&self.value, &value) {
@@ -271,13 +290,13 @@ impl ShellVariable {
                 ShellValue::String(base) => match value {
                     ShellValueLiteral::Scalar(suffix) => {
                         if treat_as_int {
-                            let int_value = base.parse::<i64>().unwrap_or(0)
-                                + suffix.parse::<i64>().unwrap_or(0);
+                            let int_value = parse_assignment_integer(base)?
+                                .wrapping_add(parse_assignment_integer(suffix.as_str())?);
                             base.clear();
                             base.push_str(int_value.to_string().as_str());
                         } else {
                             base.push_str(suffix.as_str());
-                            Self::apply_value_transforms(base, treat_as_int, update_transform);
+                            Self::apply_value_transforms(base, treat_as_int, update_transform)?;
                         }
                         Ok(())
                     }
@@ -307,8 +326,7 @@ impl ShellVariable {
                     }
                 },
                 ShellValue::Unset(_) => unreachable!("covered in conversion above"),
-                // TODO(dynamic): implement appending to dynamic vars
-                ShellValue::Dynamic(_) => Ok(()),
+                ShellValue::Dynamic(_) => unreachable!("dynamic values are handled above"),
             }
         } else {
             match (&self.value, value) {
@@ -331,8 +349,7 @@ impl ShellVariable {
                     | ShellValue::Unset(
                         ShellValueUnsetType::IndexedArray | ShellValueUnsetType::Untyped,
                     )
-                    | ShellValue::String(_)
-                    | ShellValue::Dynamic(_),
+                    | ShellValue::String(_),
                     ShellValueLiteral::Array(literal_values),
                 ) => {
                     self.value = ShellValue::indexed_array_from_literals(literal_values);
@@ -350,15 +367,12 @@ impl ShellVariable {
                     Ok(())
                 }
 
-                // Handle updates to dynamic values; for now we just drop them.
-                // TODO(dynamic): Allow updates to dynamic values
-                (ShellValue::Dynamic(_), _) => Ok(()),
-
                 // Assign a scalar value to a scalar or unset (and untyped) variable.
                 (ShellValue::String(_) | ShellValue::Unset(_), ShellValueLiteral::Scalar(s)) => {
                     self.value = ShellValue::String(s);
                     Ok(())
                 }
+                (ShellValue::Dynamic(_), _) => unreachable!("dynamic values are handled above"),
             }
         }
     }
@@ -378,6 +392,21 @@ impl ShellVariable {
         value: String,
         append: bool,
     ) -> Result<(), error::Error> {
+        if let Some(message) = self.assignment_error {
+            return error::unimp(message);
+        }
+        if self.is_readonly() {
+            return Err(error::ErrorKind::ReadonlyVariable.into());
+        }
+
+        let value = self.convert_value_str_for_assignment(value)?;
+        if let ShellValue::Dynamic(dynamic) = &mut self.value {
+            if array_index.parse::<i64>().unwrap_or(0) != 0 {
+                return error::unimp("assigning a nonzero index of a dynamic scalar variable");
+            }
+            return dynamic.assign(ShellValueLiteral::Scalar(value), append);
+        }
+
         match &self.value {
             ShellValue::Unset(_) => {
                 self.assign(ShellValueLiteral::Array(ArrayLiteral(vec![])), false)?;
@@ -389,7 +418,6 @@ impl ShellVariable {
         }
 
         let treat_as_int = self.is_treated_as_integer();
-        let value = self.convert_value_str_for_assignment(value);
 
         match &mut self.value {
             ShellValue::IndexedArray(arr) => {
@@ -400,9 +428,9 @@ impl ShellVariable {
 
                     let mut new_value;
                     if treat_as_int {
-                        new_value = (existing_value.parse::<i64>().unwrap_or(0)
-                            + value.parse::<i64>().unwrap_or(0))
-                        .to_string();
+                        new_value = parse_assignment_integer(existing_value)?
+                            .wrapping_add(parse_assignment_integer(value.as_str())?)
+                            .to_string();
                     } else {
                         new_value = existing_value.to_owned();
                         new_value.push_str(value.as_str());
@@ -423,15 +451,15 @@ impl ShellVariable {
 
                     let mut new_value;
                     if treat_as_int {
-                        new_value = (existing_value.parse::<i64>().unwrap_or(0)
-                            + value.parse::<i64>().unwrap_or(0))
-                        .to_string();
+                        new_value = parse_assignment_integer(existing_value)?
+                            .wrapping_add(parse_assignment_integer(value.as_str())?)
+                            .to_string();
                     } else {
                         new_value = existing_value.to_owned();
                         new_value.push_str(value.as_str());
                     }
 
-                    arr.insert(array_index, new_value.clone());
+                    arr.insert(array_index, new_value);
                 } else {
                     arr.insert(array_index, value);
                 }
@@ -444,38 +472,41 @@ impl ShellVariable {
         }
     }
 
-    fn convert_value_literal_for_assignment(&self, value: ShellValueLiteral) -> ShellValueLiteral {
+    fn convert_value_literal_for_assignment(
+        &self,
+        value: ShellValueLiteral,
+    ) -> Result<ShellValueLiteral, error::Error> {
         match value {
-            ShellValueLiteral::Scalar(s) => {
-                ShellValueLiteral::Scalar(self.convert_value_str_for_assignment(s))
-            }
-            ShellValueLiteral::Array(literals) => ShellValueLiteral::Array(ArrayLiteral(
+            ShellValueLiteral::Scalar(s) => Ok(ShellValueLiteral::Scalar(
+                self.convert_value_str_for_assignment(s)?,
+            )),
+            ShellValueLiteral::Array(literals) => Ok(ShellValueLiteral::Array(ArrayLiteral(
                 literals
                     .0
                     .into_iter()
-                    .map(|(k, v)| (k, self.convert_value_str_for_assignment(v)))
-                    .collect(),
-            )),
+                    .map(|(k, v)| Ok((k, self.convert_value_str_for_assignment(v)?)))
+                    .collect::<Result<Vec<_>, error::Error>>()?,
+            ))),
         }
     }
 
-    fn convert_value_str_for_assignment(&self, mut s: String) -> String {
+    fn convert_value_str_for_assignment(&self, mut s: String) -> Result<String, error::Error> {
         Self::apply_value_transforms(
             &mut s,
             self.is_treated_as_integer(),
             self.get_update_transform(),
-        );
+        )?;
 
-        s
+        Ok(s)
     }
 
     fn apply_value_transforms(
         s: &mut String,
         treat_as_int: bool,
         update_transform: ShellVariableUpdateTransform,
-    ) {
+    ) -> Result<(), error::Error> {
         if treat_as_int {
-            *s = (*s).parse::<i64>().unwrap_or(0).to_string();
+            *s = parse_assignment_integer(s)?.to_string();
         } else {
             match update_transform {
                 ShellVariableUpdateTransform::None => (),
@@ -485,11 +516,13 @@ impl ShellVariable {
                     // This isn't really title-case; only the first character is capitalized.
                     *s = s.to_lowercase();
                     if let Some(c) = s.chars().next() {
-                        s.replace_range(0..1, &c.to_uppercase().to_string());
+                        let first_char_len = c.len_utf8();
+                        s.replace_range(0..first_char_len, &c.to_uppercase().to_string());
                     }
                 }
             }
         }
+        Ok(())
     }
 
     /// Tries to unset the value stored at the given index in the variable. Returns
@@ -586,7 +619,7 @@ impl ShellVariable {
     }
 }
 
-/// 可动态解析的 shell 变量.
+/// 可动态解析的 shell 变量种类.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DynamicVariable {
     BashOpts,
@@ -612,6 +645,205 @@ pub enum DynamicVariable {
     SRandom,
 }
 
+const RANDOM_MULTIPLIER: u64 = 6_364_136_223_846_793_005;
+const RANDOM_INCREMENT: u64 = 1_442_695_040_888_963_407;
+
+#[derive(Debug)]
+enum DynamicValueState {
+    Stateless,
+    Random(Mutex<Option<u64>>),
+    SRandom(Mutex<Option<u64>>),
+    Seconds {
+        baseline: SystemTime,
+        offset: i64,
+    },
+    BashArgv0 {
+        value: Option<String>,
+        suffix: String,
+    },
+}
+
+impl Clone for DynamicValueState {
+    fn clone(&self) -> Self {
+        match self {
+            Self::Stateless => Self::Stateless,
+            Self::Random(state) | Self::SRandom(state) => {
+                let state = state
+                    .lock()
+                    .map_or_else(|poisoned| *poisoned.into_inner(), |state| *state);
+                match self {
+                    Self::Random(_) => Self::Random(Mutex::new(state)),
+                    Self::SRandom(_) => Self::SRandom(Mutex::new(state)),
+                    _ => unreachable!(),
+                }
+            }
+            Self::Seconds { baseline, offset } => Self::Seconds {
+                baseline: *baseline,
+                offset: *offset,
+            },
+            Self::BashArgv0 { value, suffix } => Self::BashArgv0 {
+                value: value.clone(),
+                suffix: suffix.clone(),
+            },
+        }
+    }
+}
+
+/// 动态解析且可携带独立运行状态的 shell 值.
+#[derive(Clone, Debug)]
+pub struct DynamicShellValue {
+    variable: DynamicVariable,
+    state: DynamicValueState,
+}
+
+impl DynamicShellValue {
+    /// 创建指定种类的动态 shell 值.
+    pub fn new(variable: DynamicVariable) -> Self {
+        let state = match variable {
+            DynamicVariable::Random => DynamicValueState::Random(Mutex::new(None)),
+            DynamicVariable::SRandom => DynamicValueState::SRandom(Mutex::new(None)),
+            DynamicVariable::Seconds => DynamicValueState::Seconds {
+                baseline: SystemTime::now(),
+                offset: 0,
+            },
+            DynamicVariable::BashArgv0 => DynamicValueState::BashArgv0 {
+                value: None,
+                suffix: String::new(),
+            },
+            _ => DynamicValueState::Stateless,
+        };
+        Self { variable, state }
+    }
+
+    /// 返回动态值的种类.
+    pub const fn variable(&self) -> DynamicVariable {
+        self.variable
+    }
+
+    pub(crate) fn assign(
+        &mut self,
+        value: ShellValueLiteral,
+        append: bool,
+    ) -> Result<(), error::Error> {
+        let ShellValueLiteral::Scalar(value) = value else {
+            return error::unimp("assigning an array to a dynamic variable");
+        };
+
+        match &mut self.state {
+            DynamicValueState::Random(state) => {
+                let assigned = value.parse::<i64>().unwrap_or(0);
+                let seed = if append {
+                    let current = i64::try_from(Self::next_random(state) % 32_768).unwrap_or(0);
+                    current.wrapping_add(assigned)
+                } else {
+                    assigned
+                };
+                let seed = u64::from_ne_bytes(seed.to_ne_bytes());
+                *state
+                    .get_mut()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(seed);
+                Ok(())
+            }
+            DynamicValueState::Seconds { baseline, offset } => {
+                let assigned = value.parse::<i64>().unwrap_or(0);
+                if append {
+                    *offset = Self::elapsed_seconds(*baseline).saturating_add(*offset);
+                    *offset = offset.wrapping_add(assigned);
+                } else {
+                    *offset = assigned;
+                }
+                *baseline = SystemTime::now();
+                Ok(())
+            }
+            DynamicValueState::BashArgv0 {
+                value: current,
+                suffix,
+            } => {
+                if append {
+                    if let Some(current) = current {
+                        current.push_str(&value);
+                    } else {
+                        suffix.push_str(&value);
+                    }
+                } else {
+                    *current = Some(value);
+                    suffix.clear();
+                }
+                Ok(())
+            }
+            DynamicValueState::Stateless | DynamicValueState::SRandom(_) => {
+                error::unimp("assignment is unsupported for this dynamic variable")
+            }
+        }
+    }
+
+    pub(crate) fn next_random_value(&self) -> u64 {
+        let DynamicValueState::Random(state) = &self.state else {
+            return 0;
+        };
+        Self::next_random(state) % 32_768
+    }
+
+    pub(crate) fn next_srandom_value(&self) -> u32 {
+        let DynamicValueState::SRandom(state) = &self.state else {
+            return 0;
+        };
+        let bytes = Self::next_random(state).to_ne_bytes();
+        u32::from_ne_bytes([bytes[0], bytes[1], bytes[2], bytes[3]])
+    }
+
+    pub(crate) fn seconds_value(&self) -> i64 {
+        let DynamicValueState::Seconds { baseline, offset } = &self.state else {
+            return 0;
+        };
+        Self::elapsed_seconds(*baseline).saturating_add(*offset)
+    }
+
+    pub(crate) fn bash_argv0_override(&self) -> Option<&str> {
+        let DynamicValueState::BashArgv0 { value, .. } = &self.state else {
+            return None;
+        };
+        value.as_deref()
+    }
+
+    pub(crate) fn bash_argv0_suffix(&self) -> Option<&str> {
+        let DynamicValueState::BashArgv0 { suffix, .. } = &self.state else {
+            return None;
+        };
+        Some(suffix)
+    }
+
+    fn next_random(state: &Mutex<Option<u64>>) -> u64 {
+        let mut state = state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let current = state.unwrap_or_else(initial_random_seed);
+        let next = current
+            .wrapping_mul(RANDOM_MULTIPLIER)
+            .wrapping_add(RANDOM_INCREMENT);
+        *state = Some(next);
+        next
+    }
+
+    fn elapsed_seconds(baseline: SystemTime) -> i64 {
+        let seconds = SystemTime::now()
+            .duration_since(baseline)
+            .unwrap_or_default()
+            .as_secs();
+        i64::try_from(seconds).unwrap_or(i64::MAX)
+    }
+}
+
+fn initial_random_seed() -> u64 {
+    let time_seed = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map_or(0, |duration| {
+            duration.as_secs() ^ u64::from(duration.subsec_nanos()).rotate_left(32)
+        });
+
+    (time_seed ^ u64::from(std::process::id())).max(1)
+}
+
 /// A shell value.
 #[derive(Clone, Debug)]
 pub enum ShellValue {
@@ -624,7 +856,7 @@ pub enum ShellValue {
     /// An indexed array.
     IndexedArray(BTreeMap<u64, String>),
     /// A value that is dynamically computed.
-    Dynamic(DynamicVariable),
+    Dynamic(DynamicShellValue),
 }
 
 /// The type of an unset shell value.
@@ -780,7 +1012,7 @@ impl ShellValue {
         literal_values: ArrayLiteral,
     ) {
         let mut new_key = if let Some((largest_index, _)) = existing_values.last_key_value() {
-            largest_index + 1
+            largest_index.saturating_add(1)
         } else {
             0
         };
@@ -791,7 +1023,7 @@ impl ShellValue {
             }
 
             existing_values.insert(new_key, value);
-            new_key += 1;
+            new_key = new_key.saturating_add(1);
         }
     }
 
@@ -1015,25 +1247,45 @@ impl ShellValue {
     }
 }
 
+fn parse_assignment_integer(value: &str) -> Result<i64, error::Error> {
+    if value.is_empty() {
+        return Ok(0);
+    }
+    value.parse::<i64>().map_err(|inner| {
+        error::ErrorKind::IntParseError {
+            s: value.to_owned(),
+            int_type_name: "i64",
+            radix: 10,
+            inner,
+        }
+        .into()
+    })
+}
+
 fn get_key_for_indexed_array(
     values: &BTreeMap<u64, String>,
     index_str: &str,
 ) -> Result<u64, error::Error> {
-    let mut index_value = index_str.parse::<i64>().unwrap_or(0);
+    let index_value = index_str.parse::<i64>().unwrap_or(0);
 
-    // Handle negative indices, but check for out-of-range values.
-    #[expect(clippy::cast_possible_wrap)]
     if index_value < 0 {
-        index_value += values.len() as i64;
-        if index_value < 0 {
+        let Some((&largest_index, _)) = values.last_key_value() else {
             return Err(error::ErrorKind::ArrayIndexOutOfRange(index_str.to_owned()).into());
-        }
+        };
+        let offset_from_largest = index_value.unsigned_abs() - 1;
+        return largest_index
+            .checked_sub(offset_from_largest)
+            .ok_or_else(|| error::ErrorKind::ArrayIndexOutOfRange(index_str.to_owned()).into());
     }
 
-    // Now that we've confirmed that the index is non-negative, we can safely convert it
-    // to a u64 without any fuss.
     #[expect(clippy::cast_sign_loss)]
     Ok(index_value as u64)
+}
+
+impl From<DynamicVariable> for ShellValue {
+    fn from(value: DynamicVariable) -> Self {
+        Self::Dynamic(DynamicShellValue::new(value))
+    }
 }
 
 impl From<&str> for ShellValue {
@@ -1069,5 +1321,90 @@ impl From<Vec<String>> for ShellValue {
 impl From<Vec<&str>> for ShellValue {
     fn from(values: Vec<&str>) -> Self {
         Self::indexed_array_from_strs(values.as_slice())
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn capitalize_handles_multibyte_first_characters() {
+        let mut variable = ShellVariable::new("");
+        variable.set_update_transform(ShellVariableUpdateTransform::Capitalize);
+
+        variable
+            .assign(ShellValueLiteral::Scalar("éCLAIR".to_owned()), false)
+            .unwrap();
+        assert!(matches!(variable.value(), ShellValue::String(value) if value == "Éclair"));
+
+        variable
+            .assign(ShellValueLiteral::Scalar("ßTRAẞE".to_owned()), false)
+            .unwrap();
+        assert!(matches!(variable.value(), ShellValue::String(value) if value == "SStraße"));
+    }
+
+    #[test]
+    fn indexed_array_negative_indices_are_relative_to_largest_index() {
+        let values = BTreeMap::from([(2, "two".to_owned()), (7, "seven".to_owned())]);
+
+        assert_eq!(get_key_for_indexed_array(&values, "-1").unwrap(), 7);
+        assert_eq!(get_key_for_indexed_array(&values, "-2").unwrap(), 6);
+        assert_eq!(get_key_for_indexed_array(&values, "-8").unwrap(), 0);
+        assert!(get_key_for_indexed_array(&values, "-9").is_err());
+        assert!(get_key_for_indexed_array(&BTreeMap::new(), "-1").is_err());
+    }
+
+    #[test]
+    fn readonly_dynamic_variables_return_readonly_error() {
+        let mut variable = ShellVariable::new(DynamicVariable::BashOpts);
+        variable.set_readonly();
+
+        let error = variable
+            .assign(ShellValueLiteral::Scalar("1".to_owned()), false)
+            .unwrap_err();
+        assert!(matches!(error.kind(), error::ErrorKind::ReadonlyVariable));
+
+        let error = variable
+            .assign_at_index("0".to_owned(), "1".to_owned(), false)
+            .unwrap_err();
+        assert!(matches!(error.kind(), error::ErrorKind::ReadonlyVariable));
+    }
+
+    #[test]
+    fn integer_append_uses_wrapping_addition() {
+        let mut scalar = ShellVariable::new(i64::MAX.to_string());
+        scalar.treat_as_integer();
+        scalar
+            .assign(ShellValueLiteral::Scalar("1".to_owned()), true)
+            .unwrap();
+        assert!(
+            matches!(scalar.value(), ShellValue::String(value) if value == &i64::MIN.to_string())
+        );
+
+        let mut indexed = ShellVariable::new(ShellValue::IndexedArray(BTreeMap::from([(
+            0,
+            i64::MAX.to_string(),
+        )])));
+        indexed.treat_as_integer();
+        indexed
+            .assign_at_index("0".to_owned(), "1".to_owned(), true)
+            .unwrap();
+        assert!(
+            matches!(indexed.value(), ShellValue::IndexedArray(values) if values[&0] == i64::MIN.to_string())
+        );
+
+        let mut associative = ShellVariable::new(ShellValue::AssociativeArray(BTreeMap::from([(
+            "key".to_owned(),
+            i64::MAX.to_string(),
+        )])));
+        associative.treat_as_integer();
+        associative
+            .assign_at_index("key".to_owned(), "1".to_owned(), true)
+            .unwrap();
+        assert!(
+            matches!(associative.value(), ShellValue::AssociativeArray(values) if values["key"] == i64::MIN.to_string())
+        );
     }
 }

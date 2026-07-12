@@ -294,6 +294,33 @@ impl PipelineTimed {
     }
 }
 
+/// 描述 pipeline 中相邻命令的连接方式.
+#[derive(Clone, Debug)]
+#[cfg_attr(test, derive(PartialEq, Eq, serde::Serialize, serde::Deserialize))]
+pub enum PipeKind {
+    /// 传递标准输出.
+    Stdout(SourceSpan),
+    /// 同时传递标准输出和标准错误.
+    StdoutAndStderr(SourceSpan),
+}
+
+impl PipeKind {
+    const fn operator(&self) -> &'static str {
+        match self {
+            Self::Stdout(_) => "|",
+            Self::StdoutAndStderr(_) => "|&",
+        }
+    }
+}
+
+impl SourceLocation for PipeKind {
+    fn location(&self) -> Option<SourceSpan> {
+        match self {
+            Self::Stdout(location) | Self::StdoutAndStderr(location) => Some(location.clone()),
+        }
+    }
+}
+
 /// A pipeline of commands, where each command's output is passed as standard input
 /// to the command that follows it.
 #[derive(Clone, Debug)]
@@ -312,6 +339,9 @@ pub struct Pipeline {
     pub bang: bool,
     /// The sequence of commands in the pipeline.
     pub seq: Vec<Command>,
+    /// 连接相邻命令的原始操作符.
+    #[cfg_attr(test, serde(skip))]
+    pub pipe_kinds: Vec<PipeKind>,
 }
 
 impl Node for Pipeline {}
@@ -341,7 +371,8 @@ impl Display for Pipeline {
         }
         for (i, command) in self.seq.iter().enumerate() {
             if i > 0 {
-                write!(f, " |")?;
+                let operator = self.pipe_kinds.get(i - 1).map_or("|", PipeKind::operator);
+                write!(f, " {operator} ")?;
             }
             write!(f, "{command}")?;
         }
@@ -390,7 +421,7 @@ impl Display for Command {
             Self::Compound(compound_command, redirect_list) => {
                 write!(f, "{compound_command}")?;
                 if let Some(redirect_list) = redirect_list {
-                    write!(f, "{redirect_list}")?;
+                    write!(f, " {redirect_list}")?;
                 }
                 Ok(())
             }
@@ -398,7 +429,7 @@ impl Display for Command {
             Self::ExtendedTest(extended_test_expr, redirect_list) => {
                 write!(f, "[[ {extended_test_expr} ]]")?;
                 if let Some(redirect_list) = redirect_list {
-                    write!(f, "{redirect_list}")?;
+                    write!(f, " {redirect_list}")?;
                 }
                 Ok(())
             }
@@ -964,7 +995,7 @@ impl Display for FunctionBody {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "{}", self.0)?;
         if let Some(redirect_list) = &self.1 {
-            write!(f, "{redirect_list}")?;
+            write!(f, " {redirect_list}")?;
         }
 
         Ok(())
@@ -1202,7 +1233,7 @@ impl Display for CommandPrefixOrSuffixItem {
             Self::Word(word) => write!(f, "{word}"),
             Self::AssignmentWord(_assignment, word) => write!(f, "{word}"),
             Self::ProcessSubstitution(kind, subshell_command) => {
-                write!(f, "{kind}({subshell_command})")
+                write!(f, "{kind}{subshell_command}")
             }
         }
     }
@@ -1329,7 +1360,10 @@ impl SourceLocation for RedirectList {
 
 impl Display for RedirectList {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        for item in &self.0 {
+        for (index, item) in self.0.iter().enumerate() {
+            if index > 0 {
+                write!(f, " ")?;
+            }
             write!(f, "{item}")?;
         }
         Ok(())
@@ -1357,8 +1391,11 @@ impl Node for IoRedirect {}
 
 impl SourceLocation for IoRedirect {
     fn location(&self) -> Option<SourceSpan> {
-        // TODO(source-location): complete
-        None
+        match self {
+            Self::File(_, _, target) => target.location(),
+            Self::HereDocument(_, here_document) => here_document.location(),
+            Self::HereString(_, word) | Self::OutputAndError(word, _) => word.location(),
+        }
     }
 }
 
@@ -1450,6 +1487,26 @@ pub enum IoFileRedirectTarget {
     Duplicate(Word),
 }
 
+impl SourceLocation for IoFileRedirectTarget {
+    fn location(&self) -> Option<SourceSpan> {
+        match self {
+            Self::Filename(word) | Self::Duplicate(word) => word.location(),
+            Self::ProcessSubstitution(_, command) => command.location(),
+            Self::Fd(_) => None,
+        }
+    }
+}
+
+impl IoFileRedirectTarget {
+    pub(crate) fn set_location(&mut self, location: SourceSpan) {
+        match self {
+            Self::Filename(word) | Self::Duplicate(word) => word.loc = Some(location),
+            Self::ProcessSubstitution(_, command) => command.loc = location,
+            Self::Fd(_) => {}
+        }
+    }
+}
+
 impl Display for IoFileRedirectTarget {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -1483,14 +1540,15 @@ pub struct IoHereDocument {
     pub here_end: Word,
     /// The contents of the here document.
     pub doc: Word,
+    /// 完整重定向的位置, 包含操作符和结束标签.
+    pub loc: SourceSpan,
 }
 
 impl Node for IoHereDocument {}
 
 impl SourceLocation for IoHereDocument {
     fn location(&self) -> Option<SourceSpan> {
-        // TODO(source-location): complete
-        None
+        Some(self.loc.clone())
     }
 }
 
@@ -1549,7 +1607,7 @@ impl Display for TestExpr {
             Self::Not(expr) => write!(f, "! {expr}"),
             Self::Parenthesized(expr) => write!(f, "( {expr} )"),
             Self::UnaryTest(pred, word) => write!(f, "{pred} {word}"),
-            Self::BinaryTest(left, op, right) => write!(f, "{left} {op} {right}"),
+            Self::BinaryTest(op, left, right) => write!(f, "{left} {op} {right}"),
         }
     }
 }
@@ -2180,5 +2238,77 @@ my_func
                 index: 27
             }
         );
+    }
+
+    #[test]
+    fn pipeline_display_separates_pipe_from_commands() {
+        let program = parse("echo hi | cat");
+        let pipeline = &program.complete_commands[0].0[0].0.first;
+
+        assert_eq!(pipeline.to_string(), "echo hi | cat");
+    }
+
+    #[test]
+    fn process_substitution_display_does_not_duplicate_parentheses() {
+        let program = parse("cat <(echo hi)");
+        let command = &program.complete_commands[0].0[0].0.first.seq[0];
+
+        assert_eq!(command.to_string(), "cat <( echo hi )");
+    }
+
+    #[test]
+    fn io_redirect_uses_complete_source_location() {
+        let program = parse("echo > output");
+        let Command::Simple(command) = &program.complete_commands[0].0[0].0.first.seq[0] else {
+            panic!("expected simple command");
+        };
+        let redirect = command
+            .suffix
+            .as_ref()
+            .and_then(|suffix| suffix.0.first())
+            .and_then(|item| match item {
+                CommandPrefixOrSuffixItem::IoRedirect(redirect) => Some(redirect),
+                _ => None,
+            })
+            .expect("expected I/O redirect");
+
+        assert_eq!(
+            redirect.location(),
+            Some(SourceSpan {
+                start: SourcePosition {
+                    index: 5,
+                    line: 1,
+                    column: 6,
+                },
+                end: SourcePosition {
+                    index: 13,
+                    line: 1,
+                    column: 14,
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn io_redirect_location_includes_file_descriptor() {
+        let program = parse("cat 2>file");
+        let Command::Simple(command) = &program.complete_commands[0].0[0].0.first.seq[0] else {
+            panic!("expected simple command");
+        };
+        let redirect = command
+            .suffix
+            .as_ref()
+            .and_then(|suffix| suffix.0.first())
+            .and_then(|item| match item {
+                CommandPrefixOrSuffixItem::IoRedirect(redirect) => Some(redirect),
+                _ => None,
+            })
+            .expect("expected I/O redirect");
+
+        let location = redirect
+            .location()
+            .expect("redirect should have a location");
+        assert_eq!(location.start.index, 4);
+        assert_eq!(location.end.index, 10);
     }
 }

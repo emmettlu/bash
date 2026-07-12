@@ -45,14 +45,14 @@ impl_parse_int_radix!(usize);
 /// # Examples
 ///
 /// ```
-/// use crate::engine::int_utils::parse;
+/// use bash::engine::int_utils::parse;
 ///
 /// let result: u32 = parse("42", 10)?;
 /// assert_eq!(result, 42);
 ///
 /// let result: u8 = parse("FF", 16)?;
 /// assert_eq!(result, 255);
-/// # Ok::<(), crate::engine::error::Error>(())
+/// # Ok::<(), bash::engine::Error>(())
 /// ```
 pub fn parse<T: ParseIntRadix>(s: &str, radix: u32) -> Result<T, error::Error> {
     T::from_str_radix(s, radix).map_err(|inner| {

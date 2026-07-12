@@ -8,6 +8,22 @@ use crate::parser::{ast, error};
 ///
 /// * `input` - The test command expression to parse, in string form.
 pub fn parse<S: AsRef<str>>(input: &[S]) -> Result<ast::TestExpr, error::TestCommandParseError> {
+    let mut depth = 0usize;
+    for token in input {
+        match token.as_ref() {
+            "(" => {
+                depth += 1;
+                if depth > crate::parser::nesting::MAX_NESTING_DEPTH {
+                    return Err(error::TestCommandParseError::NestingLimitExceeded {
+                        limit: crate::parser::nesting::MAX_NESTING_DEPTH,
+                    });
+                }
+            }
+            ")" => depth = depth.saturating_sub(1),
+            _ => {}
+        }
+    }
+
     let expr =
         test_command::full_expression(&input.iter().map(AsRef::as_ref).collect::<Vec<&str>>())?;
 
@@ -42,8 +58,9 @@ peg::parser! {
             ["!"] e:three_arg_expr() { ast::TestExpr::Not(Box::from(e)) }
 
         rule expression() -> ast::TestExpr = precedence! {
-            left:(@) ["-a"] right:@ { ast::TestExpr::And(Box::from(left), Box::from(right)) }
             left:(@) ["-o"] right:@ { ast::TestExpr::Or(Box::from(left), Box::from(right)) }
+            --
+            left:(@) ["-a"] right:@ { ast::TestExpr::And(Box::from(left), Box::from(right)) }
             --
             ["("] e:expression() [")"] { ast::TestExpr::Parenthesized(Box::from(e)) }
             --
@@ -101,5 +118,52 @@ peg::parser! {
             [">"]   { ast::BinaryPredicate::LeftSortsAfterRight }
 
         rule end() = ![_]
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn and_has_higher_precedence_than_or() {
+        let expression = parse(&["a", "-o", "b", "-a", "c"]).unwrap();
+
+        assert_eq!(
+            expression,
+            ast::TestExpr::Or(
+                Box::new(ast::TestExpr::Literal("a".to_owned())),
+                Box::new(ast::TestExpr::And(
+                    Box::new(ast::TestExpr::Literal("b".to_owned())),
+                    Box::new(ast::TestExpr::Literal("c".to_owned())),
+                )),
+            )
+        );
+    }
+
+    #[test]
+    fn deeply_nested_parentheses_are_rejected() {
+        let mut tokens = vec!["("; crate::parser::nesting::MAX_NESTING_DEPTH + 1];
+        tokens.push("value");
+        tokens.extend(std::iter::repeat_n(
+            ")",
+            crate::parser::nesting::MAX_NESTING_DEPTH + 1,
+        ));
+
+        assert!(matches!(
+            parse(&tokens),
+            Err(error::TestCommandParseError::NestingLimitExceeded { .. })
+        ));
+    }
+
+    #[test]
+    fn binary_test_display_uses_operand_operator_order() {
+        let expression = ast::TestExpr::BinaryTest(
+            ast::BinaryPredicate::ArithmeticEqualTo,
+            "1".to_owned(),
+            "2".to_owned(),
+        );
+
+        assert_eq!(expression.to_string(), "1 -eq 2");
     }
 }

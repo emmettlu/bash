@@ -42,3 +42,11 @@ tempfile = "3"
 [features]
 default = []
 debug-parser = ["peg/trace"]
+
+[profile.release]
+codegen-units = 1
+debug = false
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

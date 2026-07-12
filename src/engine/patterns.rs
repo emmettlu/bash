@@ -1,7 +1,10 @@
 //! Shell patterns
 
 use crate::engine::{error, regex, sys, trace_categories};
-use std::{collections::VecDeque, path::Path};
+use std::{
+    collections::VecDeque,
+    path::{Path, PathBuf},
+};
 
 /// Represents a piece of a shell pattern.
 #[derive(Clone, Debug)]
@@ -155,6 +158,13 @@ impl Pattern {
         true
     }
 
+    fn starts_with_explicit_dot(&self) -> bool {
+        self.pieces
+            .iter()
+            .find(|piece| !piece.as_str().is_empty())
+            .is_some_and(|piece| piece.as_str().starts_with('.'))
+    }
+
     /// Expands the pattern into a list of matching file paths.
     ///
     /// # Arguments
@@ -232,10 +242,10 @@ impl Pattern {
         });
 
         let prefix_to_remove;
+        let components_to_skip;
         let mut paths_so_far = if let Some(root) = absolute_root {
             prefix_to_remove = None;
-            // Skip the first component; it was consumed to determine the root.
-            components.remove(0);
+            components_to_skip = 1;
             vec![root]
         } else {
             // Build a prefix to remove after glob expansion so results are
@@ -252,33 +262,31 @@ impl Pattern {
             }
 
             prefix_to_remove = Some(working_dir_str);
+            components_to_skip = 0;
             vec![working_dir.to_path_buf()]
         };
 
-        for component in components {
+        for component in components.into_iter().skip(components_to_skip) {
             if !component.iter().any(|piece| {
                 matches!(piece, PatternPiece::Pattern(_))
                     && requires_expansion(piece.as_str(), self.enable_extended_globbing)
             }) {
-                for p in &mut paths_so_far {
-                    let flattened = component
-                        .iter()
-                        .map(|piece| piece.as_str())
-                        .collect::<String>();
-                    sys::fs::push_path_for_pattern(p, &flattened);
+                let flattened = component
+                    .iter()
+                    .map(|piece| piece.as_str())
+                    .collect::<String>();
+                for path in &mut paths_so_far {
+                    sys::fs::push_path_for_pattern(path, &flattened);
                 }
                 continue;
             }
 
             let current_paths = std::mem::take(&mut paths_so_far);
-            let subpattern = Self::from(&component)
+            let subpattern = Self::from(component)
                 .set_extended_globbing(self.enable_extended_globbing)
                 .set_case_insensitive(self.case_insensitive);
 
-            let subpattern_starts_with_dot = subpattern
-                .pieces
-                .first()
-                .is_some_and(|piece| piece.as_str().starts_with('.'));
+            let subpattern_starts_with_dot = subpattern.starts_with_explicit_dot();
 
             let allow_dot_files =
                 !options.require_dot_in_pattern_to_match_dot_files || subpattern_starts_with_dot;
@@ -342,6 +350,23 @@ impl Pattern {
         log::debug!(target: trace_categories::PATTERN, "  => results: {results:?}");
 
         Ok(PatternExpansionResult::Expanded(results))
+    }
+
+    /// 在阻塞线程中执行可能访问文件系统的模式展开。
+    pub(crate) async fn expand_async<PF>(
+        self,
+        working_dir: PathBuf,
+        path_filter: Option<PF>,
+        options: FilenameExpansionOptions,
+    ) -> Result<PatternExpansionResult, error::Error>
+    where
+        PF: Fn(&Path) -> bool + Send + 'static,
+    {
+        compio::runtime::spawn_blocking(move || {
+            self.expand(&working_dir, path_filter.as_ref(), &options)
+        })
+        .await
+        .map_err(|err| error::ErrorKind::ThreadingError(err.to_string()))?
     }
 
     /// Converts the pattern to a regular expression string.
@@ -442,6 +467,112 @@ fn pattern_to_regex_str(
     )?)
 }
 
+fn pattern_uses_extended_globbing(pattern: &Pattern) -> bool {
+    fn contains_extended_glob(value: &str) -> bool {
+        let mut chars = value.chars().peekable();
+        let mut escaped = false;
+
+        while let Some(c) = chars.next() {
+            if escaped {
+                escaped = false;
+                continue;
+            }
+            if c == '\\' {
+                escaped = true;
+                continue;
+            }
+            if matches!(c, '*' | '?' | '+' | '@' | '!') && chars.peek() == Some(&'(') {
+                return true;
+            }
+        }
+
+        false
+    }
+
+    if !pattern.enable_extended_globbing {
+        return false;
+    }
+
+    let mut contiguous_pattern = String::new();
+    for piece in &pattern.pieces {
+        match piece {
+            PatternPiece::Pattern(value) => contiguous_pattern.push_str(value),
+            PatternPiece::Literal(_) => {
+                if contains_extended_glob(&contiguous_pattern) {
+                    return true;
+                }
+                contiguous_pattern.clear();
+            }
+        }
+    }
+
+    contains_extended_glob(&contiguous_pattern)
+}
+
+fn remove_largest_matching_prefix_by_candidates<'a>(
+    s: &'a str,
+    pattern: &Pattern,
+) -> Result<&'a str, error::Error> {
+    let re = pattern.to_regex(true, true)?;
+    let indices = s.char_indices().rev();
+    let mut last_idx = s.len();
+
+    #[allow(
+        clippy::string_slice,
+        reason = "because we get the indices from char_indices()"
+    )]
+    for (idx, _) in indices {
+        let prefix = &s[0..last_idx];
+        if re.is_match(prefix)? {
+            return Ok(&s[last_idx..]);
+        }
+
+        last_idx = idx;
+    }
+
+    Ok(s)
+}
+
+fn remove_smallest_matching_prefix_by_candidates<'a>(
+    s: &'a str,
+    pattern: &Pattern,
+) -> Result<&'a str, error::Error> {
+    let re = pattern.to_regex(true, true)?;
+    let mut indices = s.char_indices();
+
+    #[allow(
+        clippy::string_slice,
+        reason = "because we get the indices from char_indices()"
+    )]
+    while indices.next().is_some() {
+        let next_index = indices.offset();
+        let prefix = &s[0..next_index];
+        if re.is_match(prefix)? {
+            return Ok(&s[next_index..]);
+        }
+    }
+
+    Ok(s)
+}
+
+fn ungreedy_prefix_regex(pattern: &Pattern) -> Result<fancy_regex::Regex, error::Error> {
+    let pattern_str = pattern.to_regex_str(false, false)?;
+    regex::compile_regex(
+        format!("^(?U:{pattern_str})"),
+        pattern.case_insensitive,
+        pattern.multiline,
+    )
+}
+
+fn smallest_suffix_boundary_regex(pattern: &Pattern) -> Result<fancy_regex::Regex, error::Error> {
+    let pattern_str = pattern.to_regex_str(false, false)?;
+    regex::compile_regex(
+        format!("(?s:.*)(?=(?s:.))(?=(?:{pattern_str})$)"),
+        pattern.case_insensitive,
+        pattern.multiline,
+    )
+}
+
 /// Removes the largest matching prefix from a string that matches the given pattern.
 ///
 /// # Arguments
@@ -452,25 +583,22 @@ pub(crate) fn remove_largest_matching_prefix<'a>(
     s: &'a str,
     pattern: Option<&Pattern>,
 ) -> Result<&'a str, error::Error> {
-    if let Some(pattern) = pattern {
-        let re = pattern.to_regex(true, true)?;
-        let indices = s.char_indices().rev();
-        let mut last_idx = s.len();
-
-        #[allow(
-            clippy::string_slice,
-            reason = "because we get the indices from char_indices()"
-        )]
-        for (idx, _) in indices {
-            let prefix = &s[0..last_idx];
-            if re.is_match(prefix)? {
-                return Ok(&s[last_idx..]);
-            }
-
-            last_idx = idx;
-        }
+    let Some(pattern) = pattern else {
+        return Ok(s);
+    };
+    if pattern_uses_extended_globbing(pattern) {
+        return remove_largest_matching_prefix_by_candidates(s, pattern);
     }
-    Ok(s)
+
+    let re = pattern.to_regex(true, false)?;
+    let Some(matched) = re.find(s)? else {
+        return Ok(s);
+    };
+    if matched.start() == matched.end() {
+        Ok(s)
+    } else {
+        Ok(&s[matched.end()..])
+    }
 }
 
 /// Removes the smallest matching prefix from a string that matches the given pattern.
@@ -483,23 +611,22 @@ pub(crate) fn remove_smallest_matching_prefix<'a>(
     s: &'a str,
     pattern: Option<&Pattern>,
 ) -> Result<&'a str, error::Error> {
-    if let Some(pattern) = pattern {
-        let re = pattern.to_regex(true, true)?;
-        let mut indices = s.char_indices();
-
-        #[allow(
-            clippy::string_slice,
-            reason = "because we get the indices from char_indices()"
-        )]
-        while indices.next().is_some() {
-            let next_index = indices.offset();
-            let prefix = &s[0..next_index];
-            if re.is_match(prefix)? {
-                return Ok(&s[next_index..]);
-            }
-        }
+    let Some(pattern) = pattern else {
+        return Ok(s);
+    };
+    if pattern_uses_extended_globbing(pattern) {
+        return remove_smallest_matching_prefix_by_candidates(s, pattern);
     }
-    Ok(s)
+
+    let re = ungreedy_prefix_regex(pattern)?;
+    let Some(matched) = re.find(s)? else {
+        return Ok(s);
+    };
+    if matched.start() == matched.end() {
+        remove_smallest_matching_prefix_by_candidates(s, pattern)
+    } else {
+        Ok(&s[matched.end()..])
+    }
 }
 
 /// Removes the largest matching suffix from a string that matches the given pattern.
@@ -512,20 +639,19 @@ pub(crate) fn remove_largest_matching_suffix<'a>(
     s: &'a str,
     pattern: Option<&Pattern>,
 ) -> Result<&'a str, error::Error> {
-    if let Some(pattern) = pattern {
-        let re = pattern.to_regex(true, true)?;
-        #[allow(
-            clippy::string_slice,
-            reason = "because we get the indices from char_indices()"
-        )]
-        for (idx, _) in s.char_indices() {
-            let suffix = &s[idx..];
-            if re.is_match(suffix)? {
-                return Ok(&s[..idx]);
-            }
-        }
+    let Some(pattern) = pattern else {
+        return Ok(s);
+    };
+
+    let re = pattern.to_regex(false, true)?;
+    let Some(matched) = re.find(s)? else {
+        return Ok(s);
+    };
+    if matched.start() == matched.end() {
+        Ok(s)
+    } else {
+        Ok(&s[..matched.start()])
     }
-    Ok(s)
 }
 
 /// Removes the smallest matching suffix from a string that matches the given pattern.
@@ -538,20 +664,15 @@ pub(crate) fn remove_smallest_matching_suffix<'a>(
     s: &'a str,
     pattern: Option<&Pattern>,
 ) -> Result<&'a str, error::Error> {
-    if let Some(pattern) = pattern {
-        let re = pattern.to_regex(true, true)?;
-        #[allow(
-            clippy::string_slice,
-            reason = "because we get the indices from char_indices()"
-        )]
-        for (idx, _) in s.char_indices().rev() {
-            let suffix = &s[idx..];
-            if re.is_match(suffix)? {
-                return Ok(&s[..idx]);
-            }
-        }
-    }
-    Ok(s)
+    let Some(pattern) = pattern else {
+        return Ok(s);
+    };
+
+    let re = smallest_suffix_boundary_regex(pattern)?;
+    let Some(prefix) = re.find(s)? else {
+        return Ok(s);
+    };
+    Ok(&s[..prefix.end()])
 }
 
 #[cfg(test)]
@@ -621,6 +742,57 @@ mod tests {
             r"^a\*b$"
         );
 
+        Ok(())
+    }
+
+    #[compio::test]
+    async fn async_expansion_returns_owned_paths() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        std::fs::write(directory.path().join("alpha.txt"), "")?;
+        std::fs::write(directory.path().join("beta.txt"), "")?;
+
+        let expanded = Pattern::from("a*")
+            .expand_async(
+                directory.path().to_owned(),
+                Some(Pattern::accept_all_expand_filter),
+                FilenameExpansionOptions::default(),
+            )
+            .await?
+            .into_paths();
+
+        assert_eq!(expanded, ["alpha.txt"]);
+        Ok(())
+    }
+
+    #[test]
+    fn dotfile_detection_skips_empty_pieces() {
+        let pattern = Pattern::from(vec![
+            PatternPiece::Literal(String::new()),
+            PatternPiece::Pattern(".hidden".into()),
+        ]);
+        assert!(pattern.starts_with_explicit_dot());
+    }
+
+    #[test]
+    fn pattern_removal_accepts_more_than_16_kib() -> Result<()> {
+        let input = "x".repeat(16 * 1024 + 1);
+
+        assert_eq!(
+            remove_smallest_matching_prefix(&input, Some(&Pattern::from("x")))?.len(),
+            16 * 1024
+        );
+        assert_eq!(
+            remove_largest_matching_prefix(&input, Some(&Pattern::from("*")))?,
+            ""
+        );
+        assert_eq!(
+            remove_smallest_matching_suffix(&input, Some(&Pattern::from("x")))?.len(),
+            16 * 1024
+        );
+        assert_eq!(
+            remove_largest_matching_suffix(&input, Some(&Pattern::from("*")))?,
+            ""
+        );
         Ok(())
     }
 

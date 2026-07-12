@@ -216,8 +216,9 @@ pub struct CreateOptions {
     pub shell_version: Option<String>,
 }
 
-impl Default for Shell {
-    fn default() -> Self {
+impl Shell {
+    /// 创建仅供 crate 内部组装和测试使用的基础 shell 状态.
+    pub(crate) fn empty() -> Self {
         Self {
             error_formatter: Arc::new(extensions::DefaultErrorFormatter),
             traps: traps::TrapHandlerConfig::default(),
@@ -238,19 +239,15 @@ impl Default for Shell {
             product_display_str: None,
             call_stack: callstack::CallStack::new(),
             directory_stack: vec![],
-            completion_config: std::sync::Arc::new(completion::Config::default()),
-            builtins: std::sync::Arc::new(HashMap::default()),
-            program_location_cache: std::sync::Arc::new(pathcache::PathCache::default()),
+            completion_config: Arc::new(completion::Config::default()),
+            builtins: Arc::new(HashMap::default()),
+            program_location_cache: Arc::new(pathcache::PathCache::default()),
             external_command_completion_cache: pathcache::ExecutableNameCache::default(),
-            last_stopwatch_time: std::time::SystemTime::now(),
-            last_stopwatch_offset: 0,
             key_bindings: None,
             history: None,
         }
     }
-}
 
-impl Shell {
     /// Create an instance of [Shell] using the builder syntax
     pub fn builder() -> ShellBuilder<shell_builder::Empty> {
         CreateOptions::builder()

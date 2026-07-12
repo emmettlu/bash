@@ -57,8 +57,9 @@ pub(crate) async fn expand_prompt(
 fn parse_prompt(
     spec: String,
 ) -> Result<Vec<crate::parser::prompt::PromptPiece>, crate::parser::WordParseError> {
+    let key_bytes = spec.len();
     PROMPT_PARSE_CACHE.with(|cache| {
-        crate::engine::cache::get_or_try_insert_with(cache, spec, |spec| {
+        crate::engine::cache::get_or_try_insert_with(cache, spec, key_bytes, |spec| {
             crate::parser::prompt::parse(spec.as_str())
         })
     })
@@ -180,4 +181,28 @@ fn format_current_working_directory(shell: &Shell, tilde_replaced: bool, basenam
     }
 
     working_dir_str
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normal_prompts_are_cached() {
+        PROMPT_PARSE_CACHE.with(|cache| cache.borrow_mut().clear());
+
+        parse_prompt(r"\u@\h:\w\$ ".to_owned()).unwrap();
+
+        PROMPT_PARSE_CACHE.with(|cache| assert_eq!(cache.borrow().len(), 1));
+    }
+
+    #[test]
+    fn oversized_prompts_are_not_cached() {
+        PROMPT_PARSE_CACHE.with(|cache| cache.borrow_mut().clear());
+        let prompt = "x".repeat(crate::engine::cache::MAX_CACHE_KEY_BYTES + 1);
+
+        parse_prompt(prompt).unwrap();
+
+        PROMPT_PARSE_CACHE.with(|cache| assert_eq!(cache.borrow().len(), 0));
+    }
 }

@@ -5,10 +5,10 @@ use crate::parser::ast::{self, SeparatorOperator, SourceLocation, maybe_location
 use crate::parser::tokenizer::Token;
 use crate::parser::word;
 
-use super::{ParserOptions, Tokens};
+use super::Tokens;
 
 peg::parser! {
-    pub grammar token_parser<'a>(parser_options: &ParserOptions) for Tokens<'a> {
+    pub grammar token_parser<'a>() for Tokens<'a> {
         pub(crate) rule program() -> ast::Program =
             linebreak() c:complete_commands() linebreak() { ast::Program { complete_commands: c } } /
             linebreak() { ast::Program { complete_commands: vec![] } }
@@ -48,17 +48,18 @@ peg::parser! {
             specific_operator("||") { ast::AndOr::Or }
 
         rule pipeline() -> ast::Pipeline =
-            timed:pipeline_timed()? bang:bang()* seq:pipe_sequence() {?
+            timed:pipeline_timed()? bang:bang()* pipeline:pipe_sequence() {?
+                let (seq, pipe_kinds) = pipeline;
                 if timed.is_none() && bang.is_empty() && seq.is_empty() {
                     Err("empty pipeline")
                 } else {
                     let invert = bang.len() % 2 == 1;
-                    Ok(ast::Pipeline { timed, bang: invert, seq })
+                    Ok(ast::Pipeline { timed, bang: invert, seq, pipe_kinds })
                 }
             }
 
         rule pipeline_timed() -> ast::PipelineTimed =
-            non_posix_extensions_enabled() s:specific_word("time") posix_output:specific_word("-p")? {
+            s:specific_word("time") posix_output:specific_word("-p")? {
                 let start = s.location();
                 if let Some(end) = posix_output {
                     ast::PipelineTimed::TimedWithPosixOutput(SourceSpan::within(start, end.location()))
@@ -69,23 +70,28 @@ peg::parser! {
 
         rule bang() -> bool = specific_word("!") { true }
 
-        pub(crate) rule pipe_sequence() -> Vec<ast::Command> =
-            c:(c:command() r:&pipe_extension_redirection()? {? // check for `|&` without consuming the stream.
-                let mut c = c;
-                if r.is_some() {
-                    add_pipe_extension_redirection(&mut c)?;
+        pub(crate) rule pipe_sequence() -> (Vec<ast::Command>, Vec<ast::PipeKind>) =
+            first:command() additional:(kind:pipe_operator() linebreak() command:command() { (kind, command) })* {
+                let mut commands = Vec::with_capacity(additional.len() + 1);
+                let mut pipe_kinds = Vec::with_capacity(additional.len());
+                commands.push(first);
+
+                for (kind, command) in additional {
+                    if matches!(kind, ast::PipeKind::StdoutAndStderr(_)) {
+                        add_pipe_extension_redirection(
+                            commands.last_mut().expect("a pipeline always has a preceding command")
+                        );
+                    }
+                    pipe_kinds.push(kind);
+                    commands.push(command);
                 }
-                Ok(c)
-            }) ** (pipe_operator() linebreak()) {
-                c
+
+                (commands, pipe_kinds)
             }
 
-        rule pipe_operator() =
-            specific_operator("|") /
-            pipe_extension_redirection()
-
-        rule pipe_extension_redirection() -> &'input Token  =
-            non_posix_extensions_enabled() p:specific_operator("|&") { p }
+        rule pipe_operator() -> ast::PipeKind =
+            p:specific_operator("|") { ast::PipeKind::Stdout(p.location().clone()) } /
+            p:specific_operator("|&") { ast::PipeKind::StdoutAndStderr(p.location().clone()) }
 
         // N.B. We needed to move the function definition branch up to avoid conflicts with array assignment syntax.
         rule command() -> ast::Command =
@@ -93,14 +99,14 @@ peg::parser! {
             c:simple_command() { ast::Command::Simple(c) } /
             c:compound_command() r:redirect_list()? { ast::Command::Compound(c, r) } /
             // N.B. Extended test commands are bash extensions.
-            non_posix_extensions_enabled() c:extended_test_command() r:redirect_list()? { ast::Command::ExtendedTest(c, r) } /
+            c:extended_test_command() r:redirect_list()? { ast::Command::ExtendedTest(c, r) } /
             expected!("command")
 
         // N.B. The arithmetic command is a non-sh extension.
         // N.B. The arithmetic for clause command is a non-sh extension.
         pub(crate) rule compound_command() -> ast::CompoundCommand =
-            non_posix_extensions_enabled() a:arithmetic_command() { ast::CompoundCommand::Arithmetic(a) } /
-            non_posix_extensions_enabled() c:coproc_clause() { ast::CompoundCommand::Coprocess(c) } /
+            a:arithmetic_command() { ast::CompoundCommand::Arithmetic(a) } /
+            c:coproc_clause() { ast::CompoundCommand::Coprocess(c) } /
             b:brace_group() { ast::CompoundCommand::BraceGroup(b) } /
             s:subshell() { ast::CompoundCommand::Subshell(s) } /
             f:for_clause() { ast::CompoundCommand::ForClause(f) } /
@@ -108,7 +114,7 @@ peg::parser! {
             i:if_clause() { ast::CompoundCommand::IfClause(i) } /
             w:while_clause() { ast::CompoundCommand::WhileClause(w) } /
             u:until_clause() { ast::CompoundCommand::UntilClause(u) } /
-            non_posix_extensions_enabled() c:arithmetic_for_clause() { ast::CompoundCommand::ArithmeticForClause(c) } /
+            c:arithmetic_for_clause() { ast::CompoundCommand::ArithmeticForClause(c) } /
             expected!("compound command")
 
         pub(crate) rule arithmetic_command() -> ast::ArithmeticCommand =
@@ -345,10 +351,10 @@ peg::parser! {
             s:specific_operator(";;") {
                 (ast::CaseItemPostAction::ExitCase, s.location())
             } /
-            non_posix_extensions_enabled() s:specific_operator(";;&") {
+            s:specific_operator(";;&") {
                 (ast::CaseItemPostAction::ContinueEvaluatingCases, s.location())
             } /
-            non_posix_extensions_enabled() s:specific_operator(";&") {
+            s:specific_operator(";&") {
                 (ast::CaseItemPostAction::UnconditionallyExecuteNextCaseItem, s.location())
             }
 
@@ -486,10 +492,13 @@ peg::parser! {
             expected!("simple command")
 
         rule cmd_name() -> &'input Token =
-            non_reserved_word()
+            !overflowing_io_number() w:non_reserved_word() { w }
 
         rule cmd_word() -> &'input Token =
-            !assignment_word() w:non_reserved_word() { w }
+            !overflowing_io_number() !assignment_word() w:non_reserved_word() { w }
+
+        rule command_word() -> &'input Token =
+            !overflowing_io_number() w:word() { w }
 
         rule cmd_prefix() -> ast::CommandPrefix =
             p:(
@@ -502,7 +511,7 @@ peg::parser! {
 
         rule cmd_suffix() -> ast::CommandSuffix =
             s:(
-                non_posix_extensions_enabled() sub:process_substitution() {
+                sub:process_substitution() {
                     let (kind, subshell) = sub;
                     ast::CommandPrefixOrSuffixItem::ProcessSubstitution(kind, subshell)
                 } /
@@ -513,7 +522,7 @@ peg::parser! {
                     let (assignment, word) = assignment_and_word;
                     ast::CommandPrefixOrSuffixItem::AssignmentWord(assignment, word)
                 } /
-                w:word() {
+                w:command_word() {
                     ast::CommandPrefixOrSuffixItem::Word(ast::Word::from(w))
                 }
             )+ { ast::CommandSuffix(s) }
@@ -525,33 +534,55 @@ peg::parser! {
         // N.B. here strings are extensions to the POSIX standard.
         rule io_redirect() -> ast::IoRedirect =
             n:io_number()? f:io_file() {
-                    let (kind, target) = f;
-                    ast::IoRedirect::File(n, kind, target)
-                } /
-            non_posix_extensions_enabled() specific_operator("&>>") target:filename() { ast::IoRedirect::OutputAndError(ast::Word::from(target), true) } /
-            non_posix_extensions_enabled() specific_operator("&>") target:filename() { ast::IoRedirect::OutputAndError(ast::Word::from(target), false) } /
-            non_posix_extensions_enabled() n:io_number()? specific_operator("<<<") w:word() { ast::IoRedirect::HereString(n, ast::Word::from(w)) } /
-            n:io_number()? h:io_here() { ast::IoRedirect::HereDocument(n, h) } /
+                let (kind, mut target, operator_location) = f;
+                let (fd, start) = n.map_or((None, operator_location), |(fd, location)| {
+                    (Some(fd), location)
+                });
+                if let Some(end) = target.location() {
+                    target.set_location(SourceSpan::within(start, &end));
+                }
+                ast::IoRedirect::File(fd, kind, target)
+            } /
+            operator:specific_operator("&>>") target:filename() {
+                let location = SourceSpan::within(operator.location(), target.location());
+                ast::IoRedirect::OutputAndError(ast::Word::with_location(target.to_str(), &location), true)
+            } /
+            operator:specific_operator("&>") target:filename() {
+                let location = SourceSpan::within(operator.location(), target.location());
+                ast::IoRedirect::OutputAndError(ast::Word::with_location(target.to_str(), &location), false)
+            } /
+            n:io_number()? operator:specific_operator("<<<") w:word() {
+                let (fd, start) = n.map_or((None, operator.location()), |(fd, location)| {
+                    (Some(fd), location)
+                });
+                let location = SourceSpan::within(start, w.location());
+                ast::IoRedirect::HereString(fd, ast::Word::with_location(w.to_str(), &location))
+            } /
+            n:io_number()? h:io_here() {
+                let mut h = h;
+                let fd = n.map(|(fd, location)| {
+                    h.loc.start = location.start;
+                    fd
+                });
+                ast::IoRedirect::HereDocument(fd, h)
+            } /
             expected!("I/O redirect")
 
         // N.B. Process substitution forms are extensions to the POSIX standard.
-        rule io_file() -> (ast::IoFileRedirectKind, ast::IoFileRedirectTarget) =
-            specific_operator("<")  f:io_filename() { (ast::IoFileRedirectKind::Read, f) } /
-            specific_operator("<&") f:io_fd_duplication_source() { (ast::IoFileRedirectKind::DuplicateInput, f) } /
-            specific_operator(">")  f:io_filename() { (ast::IoFileRedirectKind::Write, f) } /
-            specific_operator(">&") f:io_fd_duplication_source() { (ast::IoFileRedirectKind::DuplicateOutput, f) } /
-            specific_operator(">>") f:io_filename() { (ast::IoFileRedirectKind::Append, f) } /
-            specific_operator("<>") f:io_filename() { (ast::IoFileRedirectKind::ReadAndWrite, f) } /
-            specific_operator(">|") f:io_filename() { (ast::IoFileRedirectKind::Clobber, f) }
+        rule io_file() -> (ast::IoFileRedirectKind, ast::IoFileRedirectTarget, &'input SourceSpan) =
+            op:specific_operator("<")  f:io_filename() { (ast::IoFileRedirectKind::Read, f, op.location()) } /
+            op:specific_operator("<&") f:io_fd_duplication_source() { (ast::IoFileRedirectKind::DuplicateInput, f, op.location()) } /
+            op:specific_operator(">")  f:io_filename() { (ast::IoFileRedirectKind::Write, f, op.location()) } /
+            op:specific_operator(">&") f:io_fd_duplication_source() { (ast::IoFileRedirectKind::DuplicateOutput, f, op.location()) } /
+            op:specific_operator(">>") f:io_filename() { (ast::IoFileRedirectKind::Append, f, op.location()) } /
+            op:specific_operator("<>") f:io_filename() { (ast::IoFileRedirectKind::ReadAndWrite, f, op.location()) } /
+            op:specific_operator(">|") f:io_filename() { (ast::IoFileRedirectKind::Clobber, f, op.location()) }
 
         rule io_fd_duplication_source() -> ast::IoFileRedirectTarget =
             w:word() { ast::IoFileRedirectTarget::Duplicate(ast::Word::from(w)) }
 
-        rule io_fd() -> u32 =
-            w:[Token::Word(_, _)] {? w.to_str().parse().or(Err("io_fd u32")) }
-
         rule io_filename() -> ast::IoFileRedirectTarget =
-            non_posix_extensions_enabled() sub:process_substitution() {
+            sub:process_substitution() {
                 let (kind, subshell) = sub;
                 ast::IoFileRedirectTarget::ProcessSubstitution(kind, subshell)
             } /
@@ -561,22 +592,24 @@ peg::parser! {
             word()
 
         pub(crate) rule io_here() -> ast::IoHereDocument =
-           specific_operator("<<-") here_tag:here_tag() doc:[_] closing_tag:here_tag() {
+           operator:specific_operator("<<-") here_tag:here_tag() doc:[_] closing_tag:here_tag() {
                 let requires_expansion = !here_tag.to_str().contains(['\'', '"', '\\']);
                 ast::IoHereDocument {
                     remove_tabs: true,
                     requires_expansion,
                     here_end: ast::Word::from(here_tag),
-                    doc: ast::Word::from(doc)
+                    doc: ast::Word::from(doc),
+                    loc: SourceSpan::within(operator.location(), closing_tag.location()),
                 }
             } /
-            specific_operator("<<") here_tag:here_tag() doc:[_] closing_tag:here_tag() {
+            operator:specific_operator("<<") here_tag:here_tag() doc:[_] closing_tag:here_tag() {
                 let requires_expansion = !here_tag.to_str().contains(['\'', '"', '\\']);
                 ast::IoHereDocument {
                     remove_tabs: false,
                     requires_expansion,
                     here_end: ast::Word::from(here_tag),
-                    doc: ast::Word::from(doc)
+                    doc: ast::Word::from(doc),
+                    loc: SourceSpan::within(operator.location(), closing_tag.location()),
                 }
             }
 
@@ -638,7 +671,7 @@ peg::parser! {
             )] /
 
             // N.B. bash also treats the following as reserved.
-            non_posix_extensions_enabled() token:non_posix_reserved_word_token() { token }
+            token:non_posix_reserved_word_token() { token }
 
         rule non_posix_reserved_word_token() -> &'input Token =
             specific_word("[[") /
@@ -652,17 +685,26 @@ peg::parser! {
         }
 
         pub(crate) rule assignment_word() -> (ast::Assignment, ast::Word) =
-            non_posix_extensions_enabled() [Token::Word(w, l)] specific_operator("(") elements:array_elements() end:specific_operator(")") {?
-                let mut parsed = word::parse_array_assignment(w.as_str(), elements.as_slice())?;
+            [Token::Word(w, l)] open:specific_operator("(") elements:array_elements() end:specific_operator(")") {?
+                let element_values = elements.iter().map(|element| element.to_str()).collect::<Vec<_>>();
+                let mut parsed = word::parse_array_assignment(w.as_str(), &element_values)?;
 
                 let mut all_as_word = w.to_owned();
                 all_as_word.push('(');
-                for (i, e) in elements.iter().enumerate() {
-                    if i > 0 {
-                        all_as_word.push(' ');
-                    }
-                    all_as_word.push_str(e);
+                let mut previous_end = open.location().end.index;
+                for element in elements {
+                    let location = element.location();
+                    all_as_word.extend(std::iter::repeat_n(
+                        ' ',
+                        location.start.index.saturating_sub(previous_end),
+                    ));
+                    all_as_word.push_str(element.to_str());
+                    previous_end = location.end.index;
                 }
+                all_as_word.extend(std::iter::repeat_n(
+                    ' ',
+                    end.location().start.index.saturating_sub(previous_end),
+                ));
                 all_as_word.push(')');
 
                 let loc = SourceSpan::within(l, end.location());
@@ -675,25 +717,33 @@ peg::parser! {
                 Ok((parsed, ast::Word::with_location(w, l)))
             }
 
-        rule array_elements() -> Vec<&'input str> =
+        rule array_elements() -> Vec<&'input Token> =
              linebreak() e:array_element()* { e }
 
-        rule array_element() -> &'input str =
-            linebreak() [Token::Word(e, _)] linebreak() { e.as_str() }
+        rule array_element() -> &'input Token =
+            linebreak() element:[Token::Word(_, _)] linebreak() { element }
 
         // N.B. An I/O number must be a string of only digits, and it must be
         // followed by a '<' or '>' character (but not consume them). We also
         // need to make sure that there was no space between the number and the
         // redirection operator; unfortunately we don't have the space anymore
         // but we can infer it by looking at the tokens' locations.
-        rule io_number() -> ast::IoFd =
+        rule io_number() -> (ast::IoFd, &'input SourceSpan) =
             [Token::Word(w, num_loc) if w.chars().all(|c: char| c.is_ascii_digit())]
             &([Token::Operator(o, redir_loc) if
                     o.starts_with(['<', '>']) &&
-                    locations_are_contiguous(num_loc, redir_loc)]) {
+                    locations_are_contiguous(num_loc, redir_loc)]) {?
 
-                w.parse().unwrap()
+                let fd = w.parse::<ast::IoFd>().map_err(|_| "I/O file descriptor out of range")?;
+                Ok((fd, num_loc))
             }
+
+        rule overflowing_io_number() =
+            [Token::Word(w, num_loc) if
+                w.chars().all(|c: char| c.is_ascii_digit()) &&
+                w.parse::<ast::IoFd>().is_err()]
+            &([Token::Operator(o, redir_loc) if
+                o.starts_with(['<', '>']) && locations_are_contiguous(num_loc, redir_loc)])
 
         //
         // Helpers
@@ -704,13 +754,12 @@ peg::parser! {
         rule specific_word(expected: &str) -> &'input Token =
             [Token::Word(w, _) if w.as_str() == expected]
 
-        rule non_posix_extensions_enabled() -> () =
-            &[_] { }
+
     }
 }
 
 // add `2>&1` to the command if the pipeline is `|&`
-fn add_pipe_extension_redirection(c: &mut ast::Command) -> Result<(), &'static str> {
+fn add_pipe_extension_redirection(c: &mut ast::Command) {
     fn add_to_redirect_list(l: &mut Option<ast::RedirectList>, r: ast::IoRedirect) {
         if let Some(l) = l {
             l.0.push(r);
@@ -737,10 +786,8 @@ fn add_pipe_extension_redirection(c: &mut ast::Command) -> Result<(), &'static s
         }
         ast::Command::Compound(_, l) => add_to_redirect_list(l, r),
         ast::Command::Function(f) => add_to_redirect_list(&mut f.body.1, r),
-        ast::Command::ExtendedTest(..) => return Err("|& unimplemented for extended tests"),
+        ast::Command::ExtendedTest(_, l) => add_to_redirect_list(l, r),
     }
-
-    Ok(())
 }
 
 #[inline]
@@ -788,8 +835,8 @@ impl<'a> peg::ParseSlice<'a> for Tokens<'a> {
     /// Reconstructs a source string from a slice of tokens.
     ///
     /// Uses each token's source position to detect whether whitespace existed
-    /// between adjacent tokens in the original source, preserving it as a
-    /// single space. This matters for constructs like `[[ x =~ (a| *) ]]`
+    /// between adjacent tokens in the original source, preserving its exact
+    /// character count as spaces. This matters for constructs like `[[ x =~ (a| *) ]]`
     /// where the space inside the regex group is significant.
     ///
     /// N.B. This relies on tokens having accurate, contiguous source
@@ -808,7 +855,7 @@ impl<'a> peg::ParseSlice<'a> for Tokens<'a> {
             if let Some(prev_end) = prev_end_index
                 && loc.start.index > prev_end
             {
-                result.push(' ');
+                result.extend(std::iter::repeat_n(' ', loc.start.index - prev_end));
             }
 
             result.push_str(token.to_str());

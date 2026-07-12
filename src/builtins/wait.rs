@@ -57,7 +57,7 @@ impl builtins::Command for WaitCommand {
                 if id.starts_with('%') {
                     // It's a job spec.
                     if let Some(job) = context.shell.jobs_mut().resolve_job_spec(id) {
-                        job.wait().await?;
+                        record_wait_result(&mut result, job.wait().await?);
                     } else {
                         writeln!(
                             context.stderr(),
@@ -88,6 +88,10 @@ impl builtins::Command for WaitCommand {
     }
 }
 
+fn record_wait_result(result: &mut ExecutionResult, waited: ExecutionResult) {
+    *result = waited;
+}
+
 fn parse_wait_args(
     args: &mut builtins::BuiltinArgs,
     command: &mut WaitCommand,
@@ -108,4 +112,16 @@ fn parse_wait_args(
         }
         _ => Err(format!("wait: -{flag}: invalid option")),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn specified_job_status_replaces_previous_result() {
+        let mut result = ExecutionResult::success();
+        record_wait_result(&mut result, ExecutionResult::new(7));
+        assert_eq!(result.exit_code, 7);
+    }
 }

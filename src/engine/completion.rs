@@ -164,22 +164,6 @@ pub struct Config {
     pub fallback_options: FallbackOptions,
 }
 
-struct CompletionOptionsSession {
-    previous_options: Option<GenerationOptions>,
-}
-
-impl CompletionOptionsSession {
-    fn start(config: &mut Config, options: GenerationOptions) -> Self {
-        Self {
-            previous_options: config.current_completion_options.replace(options),
-        }
-    }
-
-    fn finish(self, config: &mut Config) {
-        config.current_completion_options = self.previous_options;
-    }
-}
-
 /// Options for fallback completions.
 #[derive(Clone, Debug)]
 pub struct FallbackOptions {
@@ -324,13 +308,14 @@ impl Spec {
         shell: &mut Shell,
         context: &Context<'_>,
     ) -> Result<Answer, crate::engine::error::Error> {
-        let session =
-            CompletionOptionsSession::start(shell.completion_config_mut(), self.options.clone());
-        let result = self
-            .get_completions_with_current_options(shell, context)
-            .await;
-        session.finish(shell.completion_config_mut());
-        result
+        // 完成函数可修改 shell 状态, future 取消时又无法安全执行异步恢复. 因此将整个
+        // 生成过程隔离到 subshell, 让成功、错误和取消路径都不会污染父 shell.
+        let mut completion_shell = shell.try_fork_subshell()?;
+        completion_shell
+            .completion_config_mut()
+            .current_completion_options = Some(self.options.clone());
+        self.get_completions_with_current_options(&mut completion_shell, context)
+            .await
     }
 
     #[expect(clippy::too_many_lines)]
@@ -366,11 +351,12 @@ impl Spec {
                 .set_case_insensitive(shell.options().case_insensitive_pathname_expansion);
 
             let expansions = pattern
-                .expand(
-                    shell.working_dir(),
-                    Some(&patterns::Pattern::accept_all_expand_filter),
-                    &patterns::FilenameExpansionOptions::default(),
-                )?
+                .expand_async(
+                    shell.working_dir().to_owned(),
+                    Some(patterns::Pattern::accept_all_expand_filter),
+                    patterns::FilenameExpansionOptions::default(),
+                )
+                .await?
                 .into_paths();
 
             for expansion in expansions {
@@ -452,7 +438,7 @@ impl Spec {
                 context.token_to_complete,
                 /* must_be_dir */ true,
             )
-            .await;
+            .await?;
             candidates.append(&mut dir_candidates);
         }
 
@@ -473,7 +459,7 @@ impl Spec {
             let must_be_dir = options.dir_names;
 
             let mut default_candidates =
-                get_file_completions(shell, context.token_to_complete, must_be_dir).await;
+                get_file_completions(shell, context.token_to_complete, must_be_dir).await?;
             candidates.append(&mut default_candidates);
 
             if shell.completion_config().fallback_options.mark_directories {
@@ -550,7 +536,7 @@ impl Spec {
                 }
                 CompleteAction::Directory => {
                     let mut file_completions =
-                        get_file_completions(shell, context.token_to_complete, true).await;
+                        get_file_completions(shell, context.token_to_complete, true).await?;
                     candidates.append(&mut file_completions);
                 }
                 CompleteAction::Disabled => {
@@ -576,7 +562,7 @@ impl Spec {
                 }
                 CompleteAction::File => {
                     let mut file_completions =
-                        get_file_completions(shell, context.token_to_complete, false).await;
+                        get_file_completions(shell, context.token_to_complete, false).await?;
                     candidates.append(&mut file_completions);
                 }
                 CompleteAction::Function => {
@@ -696,7 +682,7 @@ impl Spec {
         context: &Context<'_>,
     ) -> Result<Vec<String>, error::Error> {
         // Move to a subshell so we can start filling out variables.
-        let mut shell = shell.fork_subshell();
+        let mut shell = shell.try_fork_subshell()?;
 
         let vars_and_values: Vec<(&str, ShellValueLiteral)> = vec![
             ("COMP_LINE", context.input_line.into()),
@@ -758,7 +744,6 @@ impl Spec {
         function_name: &str,
         context: &Context<'_>,
     ) -> Result<Answer, error::Error> {
-        // TODO(completions): Don't pollute the persistent environment with these?
         let vars_and_values: Vec<(&str, ShellValueLiteral)> = vec![
             ("COMP_LINE", context.input_line.into()),
             ("COMP_POINT", context.cursor_index.to_string().into()),
@@ -779,7 +764,6 @@ impl Spec {
         log::debug!(target: trace_categories::COMPLETION, "[calling completion func '{function_name}']: {}",
             vars_and_values.iter().map(|(k, v)| std::format!("{k}={v}")).collect::<Vec<String>>().join(" "));
 
-        let mut vars_to_remove = Vec::with_capacity(vars_and_values.len());
         for (var, value) in vars_and_values {
             shell.env_mut().update_or_add(
                 var,
@@ -788,9 +772,10 @@ impl Spec {
                 env::EnvironmentLookup::Anywhere,
                 env::EnvironmentScope::Global,
             )?;
-
-            vars_to_remove.push(var);
         }
+
+        // 旧 COMPREPLY 不能被误当作本次结果. 当前 shell 是仅用于完成的隔离副本.
+        shell.env_mut().unset("COMPREPLY")?;
 
         let mut args = vec![
             context.command_name.unwrap_or(""),
@@ -800,27 +785,16 @@ impl Spec {
             args.push(preceding_token);
         }
 
-        // Suppress trap delivery during completion function invocation.
-        // N.B. We use manual acquire/release rather than an RAII guard because an
-        // RAII guard would need to hold `&mut Shell`, preventing the mutable borrow
-        // required by `invoke_function()`. This is safe because `invoke_result` is
-        // captured into a variable (never early-returned with `?`), so
-        // `release_trap_delivery_block()` always runs.
+        // 捕获调用结果后再释放 trap block, 保证成功和错误路径都执行收尾. 若 future
+        // 被取消, 仅隔离 subshell 的计数会随整个副本一起丢弃.
         shell.acquire_trap_delivery_block();
-
         let params = shell.default_exec_params();
         let invoke_result = shell
             .invoke_function(function_name, args.iter(), &params)
             .await;
-
-        log::debug!(target: trace_categories::COMPLETION, "[completion function '{function_name}' returned: {invoke_result:?}]");
-
         shell.release_trap_delivery_block();
 
-        // Make a best-effort attempt to unset the temporary variables.
-        for var_name in vars_to_remove {
-            let _ = shell.env_mut().unset(var_name);
-        }
+        log::debug!(target: trace_categories::COMPLETION, "[completion function '{function_name}' returned: {invoke_result:?}]");
 
         let result = invoke_result.unwrap_or_else(|e| {
             log::warn!(target: trace_categories::COMPLETION, "error while running completion function '{function_name}': {e}");
@@ -829,29 +803,26 @@ impl Spec {
 
         // When the function returns the special value 124, then it's a request
         // for us to restart the completion process.
-        if result == 124 {
-            Ok(Answer::RestartCompletionProcess)
-        } else {
-            if let Some(reply) = shell.env_mut().unset("COMPREPLY")? {
-                log::debug!(target: trace_categories::COMPLETION, "[completion function yielded: {reply:?}]");
+        let answer = if result == 124 {
+            Answer::RestartCompletionProcess
+        } else if let Some(reply) = shell.env_mut().unset("COMPREPLY")? {
+            log::debug!(target: trace_categories::COMPLETION, "[completion function yielded: {reply:?}]");
 
-                match reply.value() {
-                    variables::ShellValue::IndexedArray(values) => {
-                        return Ok(Answer::Candidates(
-                            values.values().map(|v| v.to_owned()).collect(),
-                            ProcessingOptions::default(),
-                        ));
-                    }
-                    variables::ShellValue::String(s) => {
-                        let candidates = vec![s.to_owned()];
-                        return Ok(Answer::Candidates(candidates, ProcessingOptions::default()));
-                    }
-                    _ => (),
+            match reply.value() {
+                variables::ShellValue::IndexedArray(values) => Answer::Candidates(
+                    values.values().map(|v| v.to_owned()).collect(),
+                    ProcessingOptions::default(),
+                ),
+                variables::ShellValue::String(s) => {
+                    Answer::Candidates(vec![s.to_owned()], ProcessingOptions::default())
                 }
+                _ => Answer::Candidates(Vec::new(), ProcessingOptions::default()),
             }
+        } else {
+            Answer::Candidates(Vec::new(), ProcessingOptions::default())
+        };
 
-            Ok(Answer::Candidates(Vec::new(), ProcessingOptions::default()))
-        }
+        Ok(answer)
     }
 }
 
@@ -1138,7 +1109,7 @@ impl Config {
 
             result = self
                 .get_completions_for_token(shell, completion_context)
-                .await;
+                .await?;
 
             restart_count += 1;
         }
@@ -1172,7 +1143,11 @@ impl Config {
         simple_tokenize_by_delimiters(input, delimiter_str.as_ref())
     }
 
-    async fn get_completions_for_token(&self, shell: &mut Shell, context: Context<'_>) -> Answer {
+    async fn get_completions_for_token(
+        &self,
+        shell: &mut Shell,
+        context: Context<'_>,
+    ) -> Result<Answer, error::Error> {
         // See if we can find a completion spec matching the current command.
         let mut found_spec: Option<&Spec> = None;
 
@@ -1207,10 +1182,7 @@ impl Config {
 
         // Try to generate completions.
         if let Some(spec) = found_spec {
-            spec.to_owned()
-                .get_completions(shell, &context)
-                .await
-                .unwrap_or_else(|_err| Answer::Candidates(Vec::new(), ProcessingOptions::default()))
+            spec.to_owned().get_completions(shell, &context).await
         } else {
             // If we didn't find a spec, then fall back to basic completion.
             get_completions_using_basic_lookup(shell, &context).await
@@ -1222,9 +1194,9 @@ async fn get_file_completions(
     shell: &Shell,
     token_to_complete: &str,
     must_be_dir: bool,
-) -> Vec<String> {
+) -> Result<Vec<String>, error::Error> {
     // Basic-expand the token-to-be-completed; it won't have been expanded to this point.
-    let mut throwaway_shell = shell.fork_subshell();
+    let mut throwaway_shell = shell.try_fork_subshell()?;
     let params = throwaway_shell.default_exec_params();
     let options = expansion::ExpanderOptions {
         execute_command_substitutions: false,
@@ -1246,18 +1218,29 @@ async fn get_file_completions(
 
     let glob = std::format!("{expanded_token}*");
 
-    let path_filter = |path: &Path| !must_be_dir || shell.absolute_path(path).is_dir();
+    let working_dir = shell.working_dir().to_owned();
+    let filter_working_dir = working_dir.clone();
+    let path_filter = move |path: &Path| {
+        !must_be_dir
+            || if path.as_os_str().is_empty() || path.is_absolute() {
+                path.to_owned()
+            } else {
+                filter_working_dir.join(path)
+            }
+            .is_dir()
+    };
 
     let pattern = patterns::Pattern::from(glob)
         .set_extended_globbing(shell.options().extended_globbing)
         .set_case_insensitive(shell.options().case_insensitive_pathname_expansion);
 
     let mut completions: Vec<String> = pattern
-        .expand(
-            shell.working_dir(),
-            Some(&path_filter),
-            &patterns::FilenameExpansionOptions::default(),
+        .expand_async(
+            working_dir,
+            Some(path_filter),
+            patterns::FilenameExpansionOptions::default(),
         )
+        .await
         .unwrap_or_default()
         .into_paths()
         .into_iter()
@@ -1280,7 +1263,7 @@ async fn get_file_completions(
 
     completions.sort();
     completions.dedup();
-    completions
+    Ok(completions)
 }
 
 fn get_external_command_completions(shell: &mut Shell, prefix: &str) -> Vec<String> {
@@ -1377,12 +1360,15 @@ fn add_command_completions(shell: &mut Shell, prefix: &str, candidates: &mut Vec
     }
 }
 
-async fn get_completions_using_basic_lookup(shell: &mut Shell, context: &Context<'_>) -> Answer {
+async fn get_completions_using_basic_lookup(
+    shell: &mut Shell,
+    context: &Context<'_>,
+) -> Result<Answer, error::Error> {
     let token = context.token_to_complete;
 
     // Try variable completion first (e.g., $HO -> $HOME, ${HO -> ${HOME})
     if let Some(answer) = try_get_variable_completions(shell, token) {
-        return answer;
+        return Ok(answer);
     }
 
     let directory_only = matches!(context.command_name, Some("cd")) && context.token_index > 0;
@@ -1390,7 +1376,7 @@ async fn get_completions_using_basic_lookup(shell: &mut Shell, context: &Context
     // Only perform file/dir completion for cd arguments.
     // General file completion on tab is removed.
     let mut candidates: Vec<String> = if directory_only {
-        get_file_completions(shell, token, /*must_be_dir*/ true).await
+        get_file_completions(shell, token, /*must_be_dir*/ true).await?
     } else {
         Vec::new()
     };
@@ -1405,7 +1391,7 @@ async fn get_completions_using_basic_lookup(shell: &mut Shell, context: &Context
         candidates.sort();
     }
 
-    Answer::Candidates(candidates, ProcessingOptions::default())
+    Ok(Answer::Candidates(candidates, ProcessingOptions::default()))
 }
 
 /// Tokenizes input by splitting on delimiter characters. Words (non-delimiter sequences)
@@ -1544,37 +1530,74 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_matches;
 
-    #[test]
-    fn completion_options_session_restores_previous_options() {
-        let mut config = Config {
-            current_completion_options: Some(GenerationOptions {
-                no_sort: true,
-                ..GenerationOptions::default()
-            }),
-            ..Config::default()
-        };
+    #[compio::test]
+    async fn completion_generation_isolates_parent_state() -> anyhow::Result<()> {
+        let mut shell = Shell::builder().build().await?;
+        shell.completion_config_mut().current_completion_options = Some(GenerationOptions {
+            no_sort: true,
+            ..GenerationOptions::default()
+        });
+        shell.env_mut().update_or_add(
+            "COMP_LINE",
+            "old line".into(),
+            |_| Ok(()),
+            env::EnvironmentLookup::Anywhere,
+            env::EnvironmentScope::Global,
+        )?;
+        shell.env_mut().update_or_add(
+            "COMPREPLY",
+            "old reply".into(),
+            |_| Ok(()),
+            env::EnvironmentLookup::Anywhere,
+            env::EnvironmentScope::Global,
+        )?;
+        shell.define_func_from_str(
+            "complete_in_isolation",
+            "() { COMP_LINE='changed'; PERSISTED='changed'; COMPREPLY='candidate'; }",
+        )?;
 
-        let session = CompletionOptionsSession::start(
-            &mut config,
-            GenerationOptions {
+        let command_token = CompletionToken {
+            text: "command",
+            start: 0,
+        };
+        let tokens = [&command_token];
+        let context = Context {
+            token_to_complete: "",
+            command_name: Some("command"),
+            preceding_token: Some("command"),
+            token_index: 1,
+            input_line: "command ",
+            cursor_index: 8,
+            tokens: &tokens,
+            trigger: CompletionTrigger::InteractiveComplete,
+        };
+        let spec = Spec {
+            options: GenerationOptions {
                 no_space: true,
                 ..GenerationOptions::default()
             },
-        );
+            function_name: Some("complete_in_isolation".into()),
+            ..Spec::default()
+        };
 
-        assert_eq!(
-            config
-                .current_completion_options
-                .as_ref()
-                .map(|o| o.no_space),
-            Some(true)
-        );
+        let answer = spec.get_completions(&mut shell, &context).await?;
+        let Answer::Candidates(candidates, options) = answer else {
+            panic!("expected completion candidates");
+        };
+        assert_eq!(candidates, ["candidate"]);
+        assert!(options.no_trailing_space_at_end_of_line);
 
-        session.finish(&mut config);
+        let parent_options = shell
+            .completion_config()
+            .current_completion_options
+            .as_ref();
+        assert_eq!(parent_options.map(|o| o.no_sort), Some(true));
+        assert_eq!(parent_options.map(|o| o.no_space), Some(false));
+        assert_eq!(shell.env_str("COMP_LINE").as_deref(), Some("old line"));
+        assert_eq!(shell.env_str("COMPREPLY").as_deref(), Some("old reply"));
+        assert!(shell.env_var("PERSISTED").is_none());
 
-        let restored = config.current_completion_options.as_ref();
-        assert_eq!(restored.map(|o| o.no_sort), Some(true));
-        assert_eq!(restored.map(|o| o.no_space), Some(false));
+        Ok(())
     }
 
     #[test]

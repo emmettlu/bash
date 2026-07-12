@@ -19,14 +19,18 @@ pub struct ParserOptions {
 impl Default for ParserOptions {
     fn default() -> Self {
         Self {
-            enable_extended_globbing: true,
-            tilde_expansion_at_word_start: true,
-            tilde_expansion_after_colon: false,
+            enable_extended_globbing: Self::DEFAULT_ENABLE_EXTENDED_GLOBBING,
+            tilde_expansion_at_word_start: Self::DEFAULT_TILDE_EXPANSION_AT_WORD_START,
+            tilde_expansion_after_colon: Self::DEFAULT_TILDE_EXPANSION_AFTER_COLON,
         }
     }
 }
 
 impl ParserOptions {
+    const DEFAULT_ENABLE_EXTENDED_GLOBBING: bool = true;
+    const DEFAULT_TILDE_EXPANSION_AT_WORD_START: bool = true;
+    const DEFAULT_TILDE_EXPANSION_AFTER_COLON: bool = false;
+
     /// Returns the tokenizer options implied by these parser options.
     pub const fn tokenizer_options(&self) -> TokenizerOptions {
         TokenizerOptions {
@@ -68,13 +72,13 @@ impl<R: std::io::BufRead> Parser<R> {
         #[builder(finish_fn)]
         reader: R,
 
-        #[builder(default = true)]
+        #[builder(default = ParserOptions::DEFAULT_ENABLE_EXTENDED_GLOBBING)]
         /// Whether or not to enable extended globbing (a.k.a. `extglob`).
         enable_extended_globbing: bool,
-        #[builder(default = true)]
+        #[builder(default = ParserOptions::DEFAULT_TILDE_EXPANSION_AT_WORD_START)]
         /// Whether or not to perform tilde expansion for tildes at the start of words.
         tilde_expansion_at_word_start: bool,
-        #[builder(default = false)]
+        #[builder(default = ParserOptions::DEFAULT_TILDE_EXPANSION_AFTER_COLON)]
         /// Whether or not to perform tilde expansion for tildes after colons.
         tilde_expansion_after_colon: bool,
     ) -> Self {
@@ -105,8 +109,7 @@ impl<R: std::io::BufRead> Parser<R> {
         &mut self,
     ) -> Result<ast::FunctionBody, crate::parser::error::ParseError> {
         let tokens = self.tokenize()?;
-        let parse_result =
-            peg::token_parser::function_parens_and_body(&Tokens { tokens: &tokens }, &self.options);
+        let parse_result = peg::token_parser::function_parens_and_body(&Tokens { tokens: &tokens });
         parse_result_to_error(parse_result, &tokens)
     }
 
@@ -145,17 +148,19 @@ impl<R: std::io::BufRead> Parser<R> {
     }
 }
 
-/// Parses a sequence of tokens into the abstract syntax tree (AST) of a shell program.
-///
-/// # Arguments
-///
-/// * `tokens` - The tokens to parse.
-/// * `options` - The options to use when parsing.
-pub fn parse_tokens(
+/// 将 tokenizer 生成的 token 解析为 shell 程序.
+pub(crate) fn parse_tokens(
     tokens: &[Token],
-    options: &ParserOptions,
+    _options: &ParserOptions,
 ) -> Result<ast::Program, crate::parser::error::ParseError> {
-    let parse_result = peg::token_parser::program(&Tokens { tokens }, options);
+    if let Err((position, _depth)) = crate::parser::nesting::check_tokens(tokens) {
+        return Err(crate::parser::error::ParseError::NestingLimitExceeded {
+            limit: crate::parser::nesting::MAX_NESTING_DEPTH,
+            position,
+        });
+    }
+
+    let parse_result = peg::token_parser::program(&Tokens { tokens });
     parse_result_to_error(parse_result, tokens)
 }
 

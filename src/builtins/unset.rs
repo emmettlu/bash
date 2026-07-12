@@ -74,18 +74,14 @@ impl builtins::Command for UnsetCommand {
         &self,
         context: crate::engine::ExecutionContext<'_>,
     ) -> Result<crate::engine::ExecutionResult, Self::Error> {
-        //
-        // TODO(nameref): implement nameref
-        //
-        if self.name_interpretation.name_references {
-            return crate::engine::error::unimp("unset: name references are not yet implemented");
-        }
-
         let unspecified = self.name_interpretation.unspecified();
 
         #[expect(clippy::needless_continue)]
         for name in &self.names {
-            if unspecified || self.name_interpretation.shell_variables {
+            if unspecified
+                || self.name_interpretation.shell_variables
+                || self.name_interpretation.name_references
+            {
                 // Try to parse the name as a parameter. If we can't, don't bail; it may not be a
                 // valid variable name/parameter but could still be a function name.
                 if let Ok(parameter) =
@@ -95,9 +91,16 @@ impl builtins::Command for UnsetCommand {
                         crate::parser::word::Parameter::Positional(_) => continue,
                         crate::parser::word::Parameter::Special(_) => continue,
                         crate::parser::word::Parameter::Named(name) => {
-                            context.shell.env_mut().unset(name.as_str())?.is_some()
+                            if self.name_interpretation.name_references {
+                                context.shell.env_mut().unset_raw(name.as_str())?.is_some()
+                            } else {
+                                context.shell.env_mut().unset(name.as_str())?.is_some()
+                            }
                         }
                         crate::parser::word::Parameter::NamedWithIndex { name, index } => {
+                            if self.name_interpretation.name_references {
+                                continue;
+                            }
                             unset_array_index(context.shell, name.as_str(), index.as_str())?
                         }
                         crate::parser::word::Parameter::NamedWithAllIndices {
@@ -129,8 +132,16 @@ fn unset_array_index(
     name: &str,
     index: &str,
 ) -> Result<bool, crate::engine::Error> {
+    let target = shell.env().resolve_target(name)?;
+    if target.index.is_some() {
+        return Err(crate::engine::ErrorKind::BadSubstitution(
+            "combining an explicit array index with an array-element nameref is unsupported".into(),
+        )
+        .into());
+    }
+
     // First check to see if it's an associative array.
-    let is_assoc_array = if let Some((_, var)) = shell.env().get(name) {
+    let is_assoc_array = if let Some((_, var)) = shell.env().get(target.name.as_str()) {
         matches!(
             var.value(),
             ShellValue::AssociativeArray(_)

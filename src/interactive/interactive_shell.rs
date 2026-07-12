@@ -96,95 +96,118 @@ impl<'a, IB: InputBackend> InteractiveShell<'a, IB> {
     pub async fn run_interactively(&mut self) -> Result<(), ShellError> {
         let mut announce_exit =
             self.options.interactive_session && self.shell.options().interactive;
+        let mut session_started = false;
 
-        if self.options.interactive_session {
-            self.shell.start_interactive_session()?;
-        }
+        let mut final_result = async {
+            if self.options.interactive_session {
+                self.shell.start_interactive_session()?;
+                session_started = true;
+            }
 
-        loop {
-            let result = self.run_interactively_once().await?;
-            match result {
-                InteractiveExecutionResult::Executed(crate::engine::ExecutionResult {
-                    next_control_flow: crate::engine::results::ExecutionControlFlow::ExitShell,
-                    ..
-                }) => {
+            loop {
+                let result = self.run_interactively_once().await?;
+                match result {
+                    InteractiveExecutionResult::Executed(crate::engine::ExecutionResult {
+                        next_control_flow: crate::engine::results::ExecutionControlFlow::ExitShell,
+                        ..
+                    })
+                    | InteractiveExecutionResult::Eof => break,
+                    InteractiveExecutionResult::Executed(crate::engine::ExecutionResult {
+                        next_control_flow:
+                            crate::engine::results::ExecutionControlFlow::ReturnFromFunctionOrScript,
+                        ..
+                    }) => {
+                        log::error!("return from non-function/script");
+                    }
+                    InteractiveExecutionResult::Executed(_) => {}
+                    InteractiveExecutionResult::Failed(err) => {
+                        let mut stderr = self.shell.stderr();
+                        let _ = self.shell.display_error(&mut stderr, &err);
+                    }
+                }
+
+                if self.shell.options().exit_after_one_command {
+                    announce_exit = false;
                     break;
                 }
-                InteractiveExecutionResult::Executed(crate::engine::ExecutionResult {
-                    next_control_flow:
-                        crate::engine::results::ExecutionControlFlow::ReturnFromFunctionOrScript,
-                    ..
-                }) => {
-                    log::error!("return from non-function/script");
-                }
-                InteractiveExecutionResult::Executed(_) => {}
-                InteractiveExecutionResult::Failed(err) => {
-                    // Report the error, but continue to execute.
-                    let mut stderr = self.shell.stderr();
-                    let _ = self.shell.display_error(&mut stderr, &err);
-                }
-                InteractiveExecutionResult::Eof => {
-                    break;
-                }
             }
 
-            if self.shell.options().exit_after_one_command {
-                announce_exit = false;
-                break;
+            Ok(())
+        }
+        .await;
+
+        let loop_succeeded = final_result.is_ok();
+        if session_started {
+            Self::retain_first_error(
+                &mut final_result,
+                self.shell.end_interactive_session().map_err(Into::into),
+            );
+
+            if loop_succeeded && announce_exit {
+                let announce_result = writeln!(self.shell.stderr(), "exit").map_err(Into::into);
+                Self::retain_first_error(&mut final_result, announce_result);
             }
         }
 
-        if self.options.interactive_session {
-            self.shell.end_interactive_session()?;
-
-            if announce_exit {
-                writeln!(self.shell.stderr(), "exit")?;
-            }
-
-            if let Err(e) = self.shell.save_history() {
-                // N.B. This seems like the sort of thing that's worth being noisy about,
-                // but bash doesn't do that -- and probably for a reason.
-                log::debug!("couldn't save history: {e}");
+        if self.options.interactive_session
+            && let Err(err) = self.shell.save_history()
+        {
+            log::warn!("couldn't save history: {err}");
+            let mut stderr = self.shell.stderr();
+            if let Err(display_err) = writeln!(stderr, "bash: failed to save history: {err}") {
+                log::warn!("couldn't display history save error: {display_err}");
             }
         }
 
-        // Give the shell an opportunity to perform any on-exit operations.
-        self.shell.on_exit().await?;
-
-        Ok(())
+        let on_exit_result = self.shell.on_exit().await.map_err(Into::into);
+        Self::retain_first_error(&mut final_result, on_exit_result);
+        final_result
     }
 
     /// 运行非交互 stdin 输入循环, 直到 EOF 或 shell 退出。
     pub async fn run_stdin_input_loop(&mut self) -> Result<(), ShellError> {
-        loop {
-            let result = self.run_stdin_input_loop_once().await?;
-            match result {
-                InteractiveExecutionResult::Executed(crate::engine::ExecutionResult {
-                    next_control_flow: crate::engine::results::ExecutionControlFlow::ExitShell,
-                    ..
-                })
-                | InteractiveExecutionResult::Eof => break,
-                InteractiveExecutionResult::Executed(crate::engine::ExecutionResult {
-                    next_control_flow:
-                        crate::engine::results::ExecutionControlFlow::ReturnFromFunctionOrScript,
-                    ..
-                }) => {
-                    log::error!("return from non-function/script");
+        let mut final_result = async {
+            loop {
+                let result = self.run_stdin_input_loop_once().await?;
+                match result {
+                    InteractiveExecutionResult::Executed(crate::engine::ExecutionResult {
+                        next_control_flow: crate::engine::results::ExecutionControlFlow::ExitShell,
+                        ..
+                    })
+                    | InteractiveExecutionResult::Eof => break,
+                    InteractiveExecutionResult::Executed(crate::engine::ExecutionResult {
+                        next_control_flow:
+                            crate::engine::results::ExecutionControlFlow::ReturnFromFunctionOrScript,
+                        ..
+                    }) => {
+                        log::error!("return from non-function/script");
+                    }
+                    InteractiveExecutionResult::Executed(_) => {}
+                    InteractiveExecutionResult::Failed(err) => {
+                        let mut stderr = self.shell.stderr();
+                        let _ = self.shell.display_error(&mut stderr, &err);
+                    }
                 }
-                InteractiveExecutionResult::Executed(_) => {}
-                InteractiveExecutionResult::Failed(err) => {
-                    let mut stderr = self.shell.stderr();
-                    let _ = self.shell.display_error(&mut stderr, &err);
-                }
-            }
 
-            if self.shell.options().exit_after_one_command {
-                break;
+                if self.shell.options().exit_after_one_command {
+                    break;
+                }
             }
+            Ok(())
         }
+        .await;
 
-        self.shell.on_exit().await?;
-        Ok(())
+        let on_exit_result = self.shell.on_exit().await.map_err(Into::into);
+        Self::retain_first_error(&mut final_result, on_exit_result);
+        final_result
+    }
+
+    fn retain_first_error(result: &mut Result<(), ShellError>, next: Result<(), ShellError>) {
+        if result.is_ok() {
+            *result = next;
+        } else if let Err(err) = next {
+            log::debug!("additional interactive cleanup error: {err}");
+        }
     }
 
     /// Runs the interactive shell loop once, reading a single command from standard input.
@@ -200,7 +223,7 @@ impl<'a, IB: InputBackend> InteractiveShell<'a, IB> {
         };
 
         // Read input.
-        match self.input.read_line(self.shell, prompt)? {
+        match self.input.read_line(self.shell, prompt).await? {
             ReadResult::Input(read_result) => {
                 // We got a line of input -- execute it.
                 self.execute_line(read_result, true /* user input */).await
@@ -227,7 +250,7 @@ impl<'a, IB: InputBackend> InteractiveShell<'a, IB> {
     ) -> Result<InteractiveExecutionResult, ShellError> {
         let prompt = Self::empty_prompt();
 
-        match self.input.read_line(self.shell, prompt)? {
+        match self.input.read_line(self.shell, prompt).await? {
             ReadResult::Input(read_result) | ReadResult::BoundCommand(read_result) => {
                 self.execute_line(read_result, false /* user input */).await
             }
@@ -474,12 +497,13 @@ impl<'a, IB: InputBackend> InteractiveShell<'a, IB> {
         // Run the command.
         let params = shell.default_exec_params();
         let source_info = crate::engine::SourceInfo::from("PROMPT_COMMAND");
-        shell.run_string(prompt_cmd, &source_info, &params).await?;
+        let result = shell.run_string(prompt_cmd, &source_info, &params).await;
 
-        // Restore the last exit status.
+        // 错误路径也必须恢复 prompt 前的退出状态.
         *shell.last_pipeline_statuses_mut() = prev_last_pipeline_statuses;
         shell.set_last_exit_status(prev_last_result);
 
+        result?;
         Ok(())
     }
 }
@@ -497,5 +521,114 @@ impl crate::interactive::term_detection::TerminalEnvironment for HostEnvironment
     /// * `name` - The name of the environment variable to get.
     fn get_env_var(&self, name: &str) -> Option<String> {
         std::env::var(name).ok()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::future::{Future, ready};
+
+    use super::*;
+
+    struct FailingInputBackend;
+
+    impl InputBackend for FailingInputBackend {
+        fn read_line<'a>(
+            &'a mut self,
+            _shell: &'a mut crate::engine::Shell,
+            _prompt: InteractivePrompt,
+        ) -> impl Future<Output = Result<ReadResult, ShellError>> + 'a {
+            ready(Err(std::io::Error::other("测试输入错误").into()))
+        }
+    }
+
+    struct EofInputBackend;
+
+    impl InputBackend for EofInputBackend {
+        fn read_line<'a>(
+            &'a mut self,
+            _shell: &'a mut crate::engine::Shell,
+            _prompt: InteractivePrompt,
+        ) -> impl Future<Output = Result<ReadResult, ShellError>> + 'a {
+            ready(Ok(ReadResult::Eof))
+        }
+    }
+
+    #[compio::test]
+    async fn input_error_still_ends_session_and_runs_exit_trap() -> anyhow::Result<()> {
+        let mut shell = crate::engine::Shell::builder()
+            .builtins(crate::builtins::default_builtins())
+            .build()
+            .await?;
+        let params = shell.default_exec_params();
+        shell
+            .run_string(
+                "trap 'CLEANUP_RAN=yes' EXIT",
+                &crate::engine::SourceInfo::from("(test)"),
+                &params,
+            )
+            .await?;
+
+        let options = crate::interactive::UIOptions::builder()
+            .terminal_control(false)
+            .display_prompt(false)
+            .run_prompt_command(false)
+            .build();
+        let mut input = FailingInputBackend;
+        let result = InteractiveShell::new(&mut shell, &mut input, &options)?
+            .run_interactively()
+            .await;
+
+        assert!(result.is_err());
+        assert!(shell.end_interactive_session().is_err());
+        assert!(matches!(
+            shell.env_var("CLEANUP_RAN").map(|variable| variable.value()),
+            Some(crate::engine::ShellValue::String(value)) if value == "yes"
+        ));
+        Ok(())
+    }
+
+    #[compio::test]
+    async fn history_save_error_is_visible_without_changing_exit_status() -> anyhow::Result<()> {
+        let scratch = tempfile::tempdir()?;
+        let history_path = scratch.path().join("history-directory");
+        std::fs::create_dir(&history_path)?;
+        let stderr_path = scratch.path().join("stderr");
+        let stderr_file = std::fs::File::create(&stderr_path)?;
+        let mut shell = crate::engine::Shell::builder()
+            .interactive(true)
+            .do_not_inherit_env(true)
+            .build()
+            .await?;
+        shell.set_env_global(
+            "HISTFILE",
+            crate::engine::ShellVariable::new(history_path.to_string_lossy().to_string()),
+        )?;
+        shell.add_to_history("echo visible")?;
+        shell.set_last_exit_status(23);
+        shell.replace_open_files(
+            [(
+                crate::engine::openfiles::OpenFiles::STDERR_FD,
+                stderr_file.into(),
+            )]
+            .into_iter(),
+        );
+
+        let options = crate::interactive::UIOptions::builder()
+            .terminal_control(false)
+            .display_prompt(false)
+            .run_prompt_command(false)
+            .build();
+        let mut input = EofInputBackend;
+        let result = InteractiveShell::new(&mut shell, &mut input, &options)?
+            .run_interactively()
+            .await;
+        shell.replace_open_files(std::iter::empty());
+
+        assert!(result.is_ok());
+        assert_eq!(shell.last_exit_status(), 23);
+        assert!(shell.history().unwrap().iter().any(|item| item.dirty));
+        assert!(std::fs::read_to_string(stderr_path)?.contains("failed to save history"));
+        Ok(())
     }
 }

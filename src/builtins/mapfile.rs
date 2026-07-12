@@ -149,11 +149,14 @@ impl builtins::Command for MapFileCommand {
         }
 
         let input_file = context
-            .try_fd(self.fd)
+            .try_clone_fd(self.fd)?
             .ok_or_else(|| ErrorKind::BadFileDescriptor(self.fd))?;
 
-        // Read!
-        let results = self.read_entries(input_file)?;
+        // worker 持有输入 fd 并完成整个阻塞读取循环, 数组赋值仍在 async 线程执行。
+        let reader = MapFileReader::from(self);
+        let results = compio::runtime::spawn_blocking(move || reader.read_entries(input_file))
+            .await
+            .map_err(|err| ErrorKind::ThreadingError(err.to_string()))??;
 
         if let Some(origin) = self.origin {
             // -O: preserve existing array, assign at offset.
@@ -191,7 +194,25 @@ fn parse_i64_option(option: &str, value: &str) -> Result<i64, String> {
         .map_err(|_| format!("{option}: invalid number: {value}"))
 }
 
-impl MapFileCommand {
+struct MapFileReader {
+    delimiter: Option<String>,
+    max_count: i64,
+    skip_count: i64,
+    remove_delimiter: bool,
+}
+
+impl From<&MapFileCommand> for MapFileReader {
+    fn from(command: &MapFileCommand) -> Self {
+        Self {
+            delimiter: command.delimiter.clone(),
+            max_count: command.max_count,
+            skip_count: command.skip_count,
+            remove_delimiter: command.remove_delimiter,
+        }
+    }
+}
+
+impl MapFileReader {
     fn read_entries(
         &self,
         mut input_file: crate::engine::openfiles::OpenFile,
@@ -256,15 +277,44 @@ impl MapFileCommand {
 fn setup_terminal_settings(
     file: &crate::engine::openfiles::OpenFile,
 ) -> Result<Option<crate::engine::terminal::AutoModeGuard>, crate::engine::Error> {
-    let mode = crate::engine::terminal::AutoModeGuard::new(file.to_owned()).ok();
+    let mode = crate::engine::terminal::AutoModeGuard::new(file.try_clone()?).ok();
     if let Some(mode) = &mode {
-        let config = crate::engine::terminal::Settings::builder()
-            .line_input(false)
-            .interrupt_signals(false)
-            .build();
-
-        mode.apply_settings(&config)?;
+        mode.apply_settings(&crate::engine::terminal::Settings::character_input())?;
     }
 
     Ok(mode)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[compio::test]
+    async fn blocking_worker_returns_owned_entries() -> anyhow::Result<()> {
+        let (reader, mut writer) = std::io::pipe()?;
+        let writer_task =
+            compio::runtime::spawn_blocking(move || writer.write_all(b"skip\nfirst\nsecond\n"));
+        let worker = MapFileReader {
+            delimiter: None,
+            max_count: 2,
+            skip_count: 1,
+            remove_delimiter: true,
+        };
+
+        let entries = compio::runtime::spawn_blocking(move || worker.read_entries(reader.into()))
+            .await
+            .map_err(|err| anyhow::anyhow!("mapfile worker panicked: {err:?}"))??;
+        writer_task
+            .await
+            .map_err(|err| anyhow::anyhow!("writer worker panicked: {err:?}"))??;
+
+        assert_eq!(
+            entries.0,
+            vec![
+                (None, String::from("first")),
+                (None, String::from("second")),
+            ]
+        );
+        Ok(())
+    }
 }

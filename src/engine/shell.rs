@@ -80,7 +80,7 @@ pub struct Shell {
     /// The status of each of the commands in the last pipeline.
     last_pipeline_statuses: Vec<u8>,
 
-    /// Clone depth from the original ancestor shell.
+    /// 子 shell 相对初始 shell 的嵌套深度.
     depth: usize,
 
     /// Shell name
@@ -113,70 +113,11 @@ pub struct Shell {
     /// Cached executable names used for interactive command completion.
     external_command_completion_cache: pathcache::ExecutableNameCache,
 
-    /// Last "SECONDS" captured time.
-    last_stopwatch_time: std::time::SystemTime,
-
-    /// Last "SECONDS" offset requested.
-    last_stopwatch_offset: u32,
-
     /// Key bindings for the shell, optionally implemented by an interactive shell.
     key_bindings: Option<KeyBindingsHelper>,
 
     /// History of commands executed in the shell.
     history: Option<crate::engine::history::History>,
-}
-
-impl Clone for Shell {
-    fn clone(&self) -> Self {
-        Self {
-            error_formatter: self.error_formatter.clone(),
-            traps: self.traps.clone(),
-            open_files: self.open_files.clone(),
-            working_dir: self.working_dir.clone(),
-            env: self.env.clone(),
-            funcs: self.funcs.clone(),
-            options: self.options.clone(),
-            jobs: jobs::JobManager::new(),
-            aliases: self.aliases.clone(),
-            last_exit_status: self.last_exit_status,
-            last_exit_status_change_count: self.last_exit_status_change_count,
-            last_pipeline_statuses: self.last_pipeline_statuses.clone(),
-            name: self.name.clone(),
-            args: self.args.clone(),
-            version: self.version.clone(),
-            product_display_str: self.product_display_str.clone(),
-            call_stack: {
-                // Subshells must not inherit the parent's "currently handling signal X"
-                // state; otherwise a trap handler that spawns a subshell would see itself
-                // as already inside that handler and skip re-entrant delivery.
-                let mut cs = self.call_stack.clone();
-                cs.clear_active_trap_signals();
-                cs
-            },
-            directory_stack: self.directory_stack.clone(),
-            completion_config: self.completion_config.clone(),
-            builtins: self.builtins.clone(),
-            program_location_cache: self.program_location_cache.clone(),
-            external_command_completion_cache: self.external_command_completion_cache.clone(),
-            last_stopwatch_time: self.last_stopwatch_time,
-            last_stopwatch_offset: self.last_stopwatch_offset,
-            key_bindings: None,
-            history: self.history.clone(),
-            depth: self.depth + 1,
-        }
-    }
-}
-
-impl Shell {
-    /// 创建一个用于子 shell 语义的 shell 副本。
-    ///
-    /// 这不是普通值复制: 子 shell 会继承大部分运行状态, 但会重置作业表,
-    /// 清理正在处理的 trap 状态, 并递增 clone depth。调用点应优先使用此方法,
-    /// 避免把 `Clone` 误认为无语义的简单复制。
-    #[must_use]
-    pub(crate) fn fork_subshell(&self) -> Self {
-        self.clone()
-    }
 }
 
 impl AsRef<Self> for Shell {
@@ -216,7 +157,7 @@ impl Shell {
             working_dir: options.working_dir.map_or_else(std::env::current_dir, Ok)?,
             builtins: Arc::new(options.builtins),
             key_bindings: options.key_bindings,
-            ..Self::default()
+            ..Self::empty()
         };
 
         // Add in any open files provided.
@@ -364,24 +305,35 @@ impl Shell {
         &self.last_pipeline_statuses
     }
 
-    /// 返回上次 SECONDS 计时的起始时刻.
-    pub fn last_stopwatch_time(&self) -> std::time::SystemTime {
-        self.last_stopwatch_time
-    }
-
-    /// 返回上次 SECONDS 的偏移量.
-    pub fn last_stopwatch_offset(&self) -> u32 {
-        self.last_stopwatch_offset
-    }
-
-    /// 返回当前 shell 名称 ($0), 受调用栈影响.
+    /// 返回当前 shell 名称 ($0), 受调用栈和 BASH_ARGV0 赋值影响.
     pub fn current_shell_name(&self) -> Option<Cow<'_, str>> {
+        if let Some((_, variable)) = self.env.get("BASH_ARGV0")
+            && let crate::engine::variables::ShellValue::Dynamic(dynamic) = variable.value()
+        {
+            if let Some(name) = dynamic.bash_argv0_override() {
+                return Some(Cow::Borrowed(name));
+            }
+            if let Some(suffix) = dynamic.bash_argv0_suffix()
+                && !suffix.is_empty()
+            {
+                return self.base_current_shell_name().map(|name| {
+                    let mut name = name.into_owned();
+                    name.push_str(suffix);
+                    Cow::Owned(name)
+                });
+            }
+        }
+
+        self.base_current_shell_name()
+    }
+
+    fn base_current_shell_name(&self) -> Option<Cow<'_, str>> {
         for frame in self.call_stack.iter() {
             if frame.frame_type.is_run_script() {
                 return Some(frame.frame_type.name());
             }
         }
-        self.name.as_deref().map(|name| name.into())
+        self.name.as_deref().map(Into::into)
     }
 
     /// 返回当前工作目录.

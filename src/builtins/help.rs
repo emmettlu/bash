@@ -49,13 +49,15 @@ impl builtins::Command for HelpCommand {
     ) -> Result<crate::engine::ExecutionResult, Self::Error> {
         if self.topic_patterns.is_empty() {
             Self::display_general_help(&context)?;
-        } else {
-            for topic_pattern in &self.topic_patterns {
-                self.display_help_for_topic_pattern(&context, topic_pattern)?;
-            }
+            return Ok(ExecutionResult::success());
         }
 
-        Ok(ExecutionResult::success())
+        let mut found_all = true;
+        for topic_pattern in &self.topic_patterns {
+            found_all &= self.display_help_for_topic_pattern(&context, topic_pattern)?;
+        }
+
+        Ok(help_result(found_all))
     }
 }
 
@@ -95,7 +97,7 @@ impl HelpCommand {
         &self,
         context: &crate::engine::ExecutionContext<'_>,
         topic_pattern: &str,
-    ) -> Result<(), crate::engine::Error> {
+    ) -> Result<bool, crate::engine::Error> {
         let pattern = crate::engine::patterns::Pattern::from(topic_pattern)
             .set_extended_globbing(context.shell.options().extended_globbing)
             .set_case_insensitive(context.shell.options().case_insensitive_pathname_expansion);
@@ -116,7 +118,7 @@ impl HelpCommand {
             writeln!(context.stderr(), "No help topics match '{topic_pattern}'")?;
         }
 
-        Ok(())
+        Ok(found_count > 0)
     }
 
     fn display_help_for_builtin(
@@ -133,7 +135,8 @@ impl HelpCommand {
             builtins::ContentType::DetailedHelp
         };
 
-        let Some(mut stdout) = context.try_fd(crate::engine::openfiles::OpenFiles::STDOUT_FD)
+        let Some(mut stdout) =
+            context.try_clone_fd(crate::engine::openfiles::OpenFiles::STDOUT_FD)?
         else {
             // If there's no stdout, nothing to do.
             return Ok(());
@@ -153,6 +156,14 @@ impl HelpCommand {
     }
 }
 
+fn help_result(found_all: bool) -> ExecutionResult {
+    if found_all {
+        ExecutionResult::success()
+    } else {
+        ExecutionResult::general_error()
+    }
+}
+
 fn get_builtins_sorted_by_name<'a>(
     context: &'a crate::engine::ExecutionContext<'_>,
 ) -> Vec<(&'a String, &'a builtins::Registration)> {
@@ -162,4 +173,15 @@ fn get_builtins_sorted_by_name<'a>(
         .iter()
         .sorted_by_key(|(name, _)| *name)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_help_topic_returns_failure() {
+        assert!(!help_result(false).is_success());
+        assert!(help_result(true).is_success());
+    }
 }

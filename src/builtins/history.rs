@@ -271,7 +271,7 @@ fn display_history(
     _stderr: impl Write,
 ) -> Result<(), crate::engine::Error> {
     let item_count = history.count();
-    let skip_count = item_count - max_entries.unwrap_or(item_count);
+    let skip_count = item_count.saturating_sub(max_entries.unwrap_or(item_count));
 
     for (i, item) in history.iter().skip(skip_count).enumerate() {
         let mut formatted_timestamp = String::new();
@@ -322,6 +322,25 @@ mod tests {
     use super::*;
     use anyhow::Result;
     use pretty_assertions::{assert_eq, assert_matches};
+
+    #[test]
+    fn display_count_larger_than_history_does_not_underflow() -> Result<()> {
+        let mut history = history::History::default();
+        history.add(history::Item::new("echo one"))?;
+        history.add(history::Item::new("echo two"))?;
+        let config = HistoryConfig {
+            default_history_file_path: None,
+            time_format: None,
+        };
+        let mut output = Vec::new();
+
+        display_history(&history, &config, Some(10), &mut output, Vec::new())?;
+
+        let output = String::from_utf8(output)?;
+        assert!(output.contains("    1  echo one"));
+        assert!(output.contains("    2  echo two"));
+        Ok(())
+    }
 
     #[test]
     fn test_parse_dash_a() -> Result<()> {

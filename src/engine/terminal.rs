@@ -70,6 +70,18 @@ pub struct Settings {
     pub output_nl_as_nlcr: Option<bool>,
 }
 
+impl Settings {
+    /// 返回合法的逐字符输入模式.
+    pub(crate) fn character_input() -> Self {
+        Self {
+            echo_input: Some(false),
+            line_input: Some(false),
+            interrupt_signals: Some(false),
+            output_nl_as_nlcr: None,
+        }
+    }
+}
+
 /// Guard that automatically restores terminal settings on drop.
 pub struct AutoModeGuard {
     initial: sys::terminal::Config,
@@ -93,16 +105,35 @@ impl AutoModeGuard {
     ///
     /// * `settings` - The terminal settings to apply.
     pub fn apply_settings(&self, settings: &Settings) -> Result<(), error::Error> {
-        let mut config = sys::terminal::Config::from_term(&self.file)?;
+        let mut config = self.initial.clone();
         config.update(settings);
         config.apply_to_term(&self.file)?;
 
         Ok(())
     }
+
+    fn restore(&self) -> Result<(), error::Error> {
+        self.initial.apply_to_term(&self.file)
+    }
 }
 
 impl Drop for AutoModeGuard {
     fn drop(&mut self) {
-        let _ = self.initial.apply_to_term(&self.file);
+        let _ = self.restore();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Settings;
+
+    #[test]
+    fn character_input_mode_disables_line_input_and_echo() {
+        let settings = Settings::character_input();
+
+        assert_eq!(settings.line_input, Some(false));
+        assert_eq!(settings.echo_input, Some(false));
+        assert_eq!(settings.interrupt_signals, Some(false));
+        assert_eq!(settings.output_nl_as_nlcr, None);
     }
 }

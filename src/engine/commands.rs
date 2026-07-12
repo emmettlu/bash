@@ -17,9 +17,9 @@ use crate::engine::{
     ErrorKind, ExecutionControlFlow, ExecutionParameters, ExecutionResult, Shell, ShellFd,
     builtins, commands, env, error, escape, functions,
     interp::{self, Execute, ProcessGroupPolicy},
-    openfiles::{self, OpenFile, OpenFiles},
+    openfiles::{self, OpenFile, OpenFileEntry, OpenFiles},
     pathsearch, processes,
-    results::ExecutionSpawnResult,
+    results::{ExecutionSpawnResult, ExecutionTask},
     sys, trace_categories, traps, variables,
 };
 
@@ -435,38 +435,47 @@ pub fn compose_std_command<S: AsRef<OsStr>>(
         }
     }
 
-    // Redirect stdin, if applicable.
-    match context.try_clone_fd(OpenFiles::STDIN_FD)? {
-        Some(OpenFile::Stdin(_)) | None => (),
-        Some(stdin_file) => {
-            let as_stdio: Stdio = stdin_file.into();
-            cmd.stdin(as_stdio);
+    // 保留 stdio 的三态: 未指定时继承, 显式关闭时连接 null, 打开时复制一次.
+    let fd_overlay = context.params.fd_overlay(context.shell);
+    match fd_overlay.fd_entry(OpenFiles::STDIN_FD) {
+        OpenFileEntry::Open(OpenFile::Stdin(_)) | OpenFileEntry::NotSpecified => {}
+        OpenFileEntry::NotPresent => {
+            cmd.stdin(Stdio::null());
+        }
+        OpenFileEntry::Open(file) => {
+            cmd.stdin(Stdio::from(file.try_clone()?));
         }
     }
 
-    // Redirect stdout, if applicable.
-    match context.try_clone_fd(OpenFiles::STDOUT_FD)? {
-        Some(OpenFile::Stdout(_)) | None => (),
-        Some(stdout_file) => {
-            let as_stdio: Stdio = stdout_file.into();
-            cmd.stdout(as_stdio);
+    match fd_overlay.fd_entry(OpenFiles::STDOUT_FD) {
+        OpenFileEntry::Open(OpenFile::Stdout(_)) | OpenFileEntry::NotSpecified => {}
+        OpenFileEntry::NotPresent => {
+            cmd.stdout(Stdio::null());
+        }
+        OpenFileEntry::Open(file) => {
+            cmd.stdout(Stdio::from(file.try_clone()?));
         }
     }
 
-    // Redirect stderr, if applicable.
-    match context.try_clone_fd(OpenFiles::STDERR_FD)? {
-        Some(OpenFile::Stderr(_)) | None => {}
-        Some(stderr_file) => {
-            let as_stdio: Stdio = stderr_file.into();
-            cmd.stderr(as_stdio);
+    match fd_overlay.fd_entry(OpenFiles::STDERR_FD) {
+        OpenFileEntry::Open(OpenFile::Stderr(_)) | OpenFileEntry::NotSpecified => {}
+        OpenFileEntry::NotPresent => {
+            cmd.stderr(Stdio::null());
+        }
+        OpenFileEntry::Open(file) => {
+            cmd.stderr(Stdio::from(file.try_clone()?));
         }
     }
 
-    // Inject any other fds.
-    let other_files = context.iter_fds()?.into_iter().filter(|(fd, _)| {
-        *fd != OpenFiles::STDIN_FD && *fd != OpenFiles::STDOUT_FD && *fd != OpenFiles::STDERR_FD
-    });
-    cmd.inject_fds(other_files)?;
+    // 先过滤 stdio 再复制, 避免为三个标准句柄做第二轮无用复制.
+    let other_files = fd_overlay
+        .iter_fds()
+        .filter(|(fd, _)| {
+            *fd != OpenFiles::STDIN_FD && *fd != OpenFiles::STDOUT_FD && *fd != OpenFiles::STDERR_FD
+        })
+        .map(|(fd, file)| Ok((fd, file.try_clone()?)))
+        .collect::<Result<Vec<_>, std::io::Error>>()?;
+    cmd.inject_fds(other_files.into_iter())?;
 
     Ok(cmd)
 }
@@ -671,12 +680,13 @@ impl<'a> SimpleCommand<'a> {
 
     fn execute_via_builtin_in_owned_shell(
         mut shell: Shell,
-        params: ExecutionParameters,
+        mut params: ExecutionParameters,
         builtin: builtins::Registration,
         command_name: String,
         args: Vec<CommandArg>,
     ) -> ExecutionSpawnResult {
         let last_arg = Self::take_last_arg(&args);
+        let cancellation = params.install_task_cancellation();
         let join_handle = compio::runtime::spawn(async move {
             let cmd_context = ExecutionContext {
                 shell: &mut shell,
@@ -692,7 +702,7 @@ impl<'a> SimpleCommand<'a> {
             result
         });
 
-        ExecutionSpawnResult::StartedTask(join_handle)
+        ExecutionSpawnResult::StartedTask(ExecutionTask::new(join_handle, cancellation))
     }
 
     async fn execute_via_builtin_in_parent_shell(
@@ -733,39 +743,102 @@ impl<'a> SimpleCommand<'a> {
         self,
         func_registration: functions::Registration,
     ) -> Result<ExecutionSpawnResult, error::Error> {
-        let Self {
-            mut shell,
-            params,
-            command_name,
-            args,
-            post_execute,
-            ..
-        } = self;
-        let last_arg = Self::take_last_arg(&args);
+        if self.shell.is_owned() {
+            let Self {
+                shell,
+                params,
+                command_name,
+                args,
+                post_execute,
+                ..
+            } = self;
+            let (owned_shell, _) = shell.into_owned_and_parent();
+            let Some(target) = owned_shell else {
+                unreachable!("owned shell expected")
+            };
 
-        let cmd_context = ExecutionContext {
-            shell: shell.target_mut(),
-            command_name,
-            params,
-        };
+            Ok(Self::execute_via_function_in_owned_shell(
+                *target,
+                params,
+                func_registration,
+                command_name,
+                args,
+                post_execute,
+            ))
+        } else {
+            let Self {
+                mut shell,
+                params,
+                command_name,
+                args,
+                post_execute,
+                ..
+            } = self;
+            let last_arg = Self::take_last_arg(&args);
 
-        // Strip the function name off args.
-        let result = invoke_shell_function(func_registration, cmd_context, &args[1..]).await;
+            let cmd_context = ExecutionContext {
+                shell: shell.target_mut(),
+                command_name,
+                params,
+            };
 
-        // $_ is reset *after* the function body runs, to the last argument of
-        // the invocation (or the function name itself if zero args). Any
-        // mutations made inside the body are overwritten — this matches bash,
-        // where the caller observes only the invocation's last argument.
-        shell.target_mut().update_last_arg_variable(last_arg);
+            // Strip the function name off args.
+            let result = invoke_shell_function(func_registration, cmd_context, &args[1..]).await;
 
-        if let Some(post_execute) = post_execute {
-            let _ = post_execute(shell.target_mut());
+            // $_ is reset *after* the function body runs, to the last argument of
+            // the invocation (or the function name itself if zero args). Any
+            // mutations made inside the body are overwritten — this matches bash,
+            // where the caller observes only the invocation's last argument.
+            shell.target_mut().update_last_arg_variable(last_arg);
+
+            if let Some(post_execute) = post_execute {
+                let _ = post_execute(shell.target_mut());
+            }
+
+            result
         }
+    }
 
-        result
+    #[allow(clippy::type_complexity)]
+    fn execute_via_function_in_owned_shell(
+        mut shell: Shell,
+        mut params: ExecutionParameters,
+        func_registration: functions::Registration,
+        command_name: String,
+        args: Vec<CommandArg>,
+        post_execute: Option<fn(&mut Shell) -> Result<(), error::Error>>,
+    ) -> ExecutionSpawnResult {
+        let last_arg = Self::take_last_arg(&args);
+        let cancellation = params.install_task_cancellation();
+        let join_handle = compio::runtime::spawn(async move {
+            let cmd_context = ExecutionContext {
+                shell: &mut shell,
+                command_name,
+                params,
+            };
+
+            let result = invoke_shell_function(func_registration, cmd_context, &args[1..]).await;
+
+            shell.update_last_arg_variable(last_arg);
+            if let Some(post_execute) = post_execute {
+                let _ = post_execute(&mut shell);
+            }
+
+            let spawn_result = result?;
+            Ok(ExecutionResult::from(spawn_result.wait().await?))
+        });
+
+        ExecutionSpawnResult::StartedTask(ExecutionTask::new(join_handle, cancellation))
     }
 
     fn execute_via_external(self, path: &Path) -> Result<ExecutionSpawnResult, error::Error> {
+        if cfg!(windows) && self.params.has_process_substitutions() {
+            return Err(error::ErrorKind::NotSupported(
+                "process substitution with external commands on Windows",
+            )
+            .into());
+        }
+
         let Self {
             mut shell,
             params,
@@ -892,9 +965,18 @@ pub(crate) fn execute_external_command(
                 log::warn!("could not retrieve pid for child process");
             }
 
-            Ok(ExecutionSpawnResult::StartedProcess(
-                processes::ChildProcess::new(child, pid, actual_pgid),
-            ))
+            let pid = pid.ok_or_else(|| {
+                error::ErrorKind::InternalError("could not retrieve child process id".into())
+            })?;
+            let process = processes::ChildProcess::new(child, pid, actual_pgid)?;
+            if let Err(err) = context.params.register_process_for_cancellation(&process) {
+                if let Err(cleanup_err) = process.terminate_and_reap() {
+                    log::debug!("failed to clean up unregistered process: {cleanup_err}");
+                }
+                return Err(err);
+            }
+
+            Ok(ExecutionSpawnResult::StartedProcess(process))
         }
         Err(spawn_err) => {
             if context.shell.options().interactive && sys::terminal::supports_foreground_control() {
@@ -1001,7 +1083,7 @@ pub(crate) async fn invoke_command_in_subshell_and_get_output(
     s: String,
 ) -> Result<String, error::Error> {
     // Instantiate a subshell to run the command in.
-    let mut subshell = shell.fork_subshell();
+    let mut subshell = shell.try_fork_subshell()?;
 
     // Command substitutions don't inherit errexit by default. Only inherit it when
     // command_subst_inherits_errexit is enabled, otherwise disable errexit in the subshell.
@@ -1116,5 +1198,52 @@ fn try_unwrap_bare_input_redir_program(program: &ast::Program) -> Option<&ast::I
             ast::IoFileRedirectTarget::Filename(..),
         ) if fd.is_none_or(|fd| fd == openfiles::OpenFiles::STDIN_FD) => Some(redir),
         _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use anyhow::Result;
+
+    #[compio::test]
+    async fn explicitly_closed_stdout_is_not_inherited() -> Result<()> {
+        let mut shell = Shell::builder().build().await?;
+        shell.replace_open_files(std::iter::empty());
+
+        let inherited_params = shell.default_exec_params();
+        let inherited_context = ExecutionContext {
+            shell: &mut shell,
+            command_name: "cmd.exe".into(),
+            params: inherited_params,
+        };
+        let inherited = compose_std_command(
+            &inherited_context,
+            "cmd.exe",
+            "cmd.exe",
+            &["/D", "/C", "echo visible"],
+            true,
+        )?
+        .output()?;
+        assert!(String::from_utf8_lossy(&inherited.stdout).contains("visible"));
+
+        let mut closed_params = shell.default_exec_params();
+        closed_params.remove_fd(OpenFiles::STDOUT_FD);
+        let closed_context = ExecutionContext {
+            shell: &mut shell,
+            command_name: "cmd.exe".into(),
+            params: closed_params,
+        };
+        let closed = compose_std_command(
+            &closed_context,
+            "cmd.exe",
+            "cmd.exe",
+            &["/D", "/C", "echo hidden"],
+            true,
+        )?
+        .output()?;
+        assert!(closed.stdout.is_empty());
+
+        Ok(())
     }
 }

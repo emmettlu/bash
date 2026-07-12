@@ -8,11 +8,11 @@ pub trait InputBackend: Send {
     ///
     /// * `shell` - The shell instance for which input is being read.
     /// * `prompt` - The prompt to display to the user.
-    fn read_line(
-        &mut self,
-        shell: &mut crate::engine::Shell,
+    fn read_line<'a>(
+        &'a mut self,
+        shell: &'a mut crate::engine::Shell,
         prompt: InteractivePrompt,
-    ) -> Result<ReadResult, ShellError>;
+    ) -> impl Future<Output = Result<ReadResult, ShellError>> + 'a;
 
     /// Returns the current contents of the read buffer and the current cursor
     /// position within the buffer; None is returned if the read buffer is
@@ -39,7 +39,24 @@ pub(crate) fn normalize_line_ending(input: &mut String) {
     }
 }
 
+/// 判断输入是否已经形成完整 shell 语法。
+pub(crate) fn is_complete_input(shell: &crate::engine::Shell, input: &str) -> bool {
+    match shell.parse_string(input.to_owned()) {
+        Err(crate::parser::ParseError::Tokenizing { inner, position: _ })
+            if inner.is_incomplete() =>
+        {
+            false
+        }
+        Err(
+            crate::parser::ParseError::ParsingAtEndOfInput
+            | crate::parser::ParseError::ParsingAtEndOfInputWithExpected { .. },
+        ) => false,
+        _ => true,
+    }
+}
+
 /// Result of a read operation.
+#[derive(Debug, Eq, PartialEq)]
 pub enum ReadResult {
     /// The user entered a line of input.
     Input(String),
@@ -59,4 +76,21 @@ pub struct InteractivePrompt {
     pub alt_side_prompt: String,
     /// Prompt to display on a continuation line of input.
     pub continuation_prompt: String,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_complete_input;
+
+    #[compio::test]
+    async fn complete_input_distinguishes_continuations_from_errors() -> anyhow::Result<()> {
+        let shell = crate::engine::Shell::builder().build().await?;
+
+        assert!(!is_complete_input(&shell, "echo 'unterminated\n"));
+        assert!(!is_complete_input(&shell, "if true; then\n"));
+        assert!(is_complete_input(&shell, "echo complete\n"));
+        assert!(is_complete_input(&shell, "if ; then\n"));
+
+        Ok(())
+    }
 }

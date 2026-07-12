@@ -129,11 +129,7 @@ impl builtins::Command for ReadCommand {
                 }
                 't' => {
                     let value = args.option_value(flags, rest_start, "-t")?;
-                    command.timeout_in_seconds = Some(
-                        value
-                            .parse()
-                            .map_err(|_| format!("-t: invalid timeout: {value}"))?,
-                    );
+                    command.timeout_in_seconds = Some(parse_timeout_option(&value)?);
                     Ok(builtins::ShortOptionDisposition::StopParsingArgument)
                 }
                 'u' => {
@@ -175,7 +171,7 @@ impl builtins::Command for ReadCommand {
 
         // Retrieve the file.
         let input_stream = context
-            .try_fd(fd_num)
+            .try_clone_fd(fd_num)?
             .ok_or_else(|| ErrorKind::BadFileDescriptor(fd_num))?;
 
         // Retrieve effective value of IFS for splitting.
@@ -186,8 +182,14 @@ impl builtins::Command for ReadCommand {
         // Convert timeout to Duration.
         let timeout = self.timeout_in_seconds.map(Duration::from_secs_f64);
 
-        // Perform the read operation (potentially with timeout).
-        let read_result = self.read_line(input_stream, context.stderr(), timeout)?;
+        // 将完整读取循环移到阻塞线程, worker 仅返回 owned 读取结果。
+        let worker = ReadWorker::from(self);
+        let stderr = context.stderr();
+        let read_result = compio::runtime::spawn_blocking(move || {
+            worker.read_line(input_stream, stderr, timeout)
+        })
+        .await
+        .map_err(|err| ErrorKind::ThreadingError(err.to_string()))??;
 
         // Determine whether to skip IFS splitting (for -N option).
         let skip_ifs_splitting = self.return_after_n_chars_no_delimiter.is_some();
@@ -230,6 +232,17 @@ fn parse_usize_option(option: &str, value: &str) -> Result<usize, String> {
     value
         .parse()
         .map_err(|_| format!("{option}: invalid count: {value}"))
+}
+
+fn parse_timeout_option(value: &str) -> Result<f64, String> {
+    let timeout = value
+        .parse::<f64>()
+        .map_err(|_| format!("-t: invalid timeout: {value}"))?;
+    if timeout.is_finite() {
+        Ok(timeout)
+    } else {
+        Err(format!("-t: invalid timeout: {value}"))
+    }
 }
 
 /// Assigns read input to shell variables based on the specified options.
@@ -377,14 +390,8 @@ struct InputReader {
     input: crate::engine::openfiles::OpenFile,
     /// Optional deadline for timeout.
     deadline: Option<Instant>,
-    /// Single-byte read buffer.
-    ///
-    /// TODO(utf-8): This only handles ASCII correctly. Multi-byte UTF-8 characters
-    /// will be read as separate bytes and incorrectly interpreted. To fix this,
-    /// we would need to buffer up to 4 bytes and decode incrementally using
-    /// `std::str::from_utf8`. Note that bash's `-n` counts bytes, not Unicode
-    /// codepoints, so the fix needs to preserve that behavior.
-    buffer: [u8; 1],
+    /// UTF-8 字符读取缓冲区。
+    buffer: [u8; 4],
     /// Terminal mode guard - kept alive for RAII cleanup on drop.
     /// The guard restores original terminal settings when dropped, even though
     /// we don't access the field directly after construction.
@@ -408,6 +415,12 @@ enum InputEvent {
     CtrlD,
 }
 
+enum ByteEvent {
+    Byte(u8),
+    Eof,
+    Timeout,
+}
+
 impl InputReader {
     /// Creates a new input reader with optional timeout.
     fn new(
@@ -418,7 +431,7 @@ impl InputReader {
         Self {
             input,
             deadline: timeout.map(|t| Instant::now() + t),
-            buffer: [0; 1],
+            buffer: [0; 4],
             _term_mode: term_mode,
         }
     }
@@ -429,37 +442,82 @@ impl InputReader {
         crate::engine::sys::poll::poll_for_input(&self.input, Duration::ZERO).unwrap_or(false)
     }
 
-    /// Reads the next input event, handling timeout and control characters.
-    fn read_event(&mut self) -> Result<InputEvent, crate::engine::Error> {
-        // Check timeout before attempting read.
+    fn read_byte_event(&mut self) -> Result<ByteEvent, crate::engine::Error> {
         if let Some(deadline) = self.deadline {
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
-                return Ok(InputEvent::Timeout);
+                return Ok(ByteEvent::Timeout);
             }
 
-            // Poll for input with remaining timeout.
             match crate::engine::sys::poll::poll_for_input(&self.input, remaining) {
-                Ok(true) => { /* Data available, proceed. */ }
-                Ok(false) => return Ok(InputEvent::Timeout),
+                Ok(true) => {}
+                Ok(false) => return Ok(ByteEvent::Timeout),
                 Err(e) => return Err(e.into()),
             }
         }
 
-        let n = self.input.read(&mut self.buffer)?;
-        if n == 0 {
-            return Ok(InputEvent::Eof);
-        }
-
-        let ch = self.buffer[0] as char;
-
-        // Map control characters to events.
-        Ok(match ch {
-            CTRL_C => InputEvent::CtrlC,
-            CTRL_D => InputEvent::CtrlD,
-            _ => InputEvent::Char(ch),
+        let mut byte = [0];
+        let n = self.input.read(&mut byte)?;
+        Ok(if n == 0 {
+            ByteEvent::Eof
+        } else {
+            ByteEvent::Byte(byte[0])
         })
     }
+
+    /// Reads the next input event, handling timeout and control characters.
+    fn read_event(&mut self) -> Result<InputEvent, crate::engine::Error> {
+        let first = match self.read_byte_event()? {
+            ByteEvent::Byte(byte) => byte,
+            ByteEvent::Eof => return Ok(InputEvent::Eof),
+            ByteEvent::Timeout => return Ok(InputEvent::Timeout),
+        };
+
+        if first.is_ascii() {
+            let ch = char::from(first);
+            return Ok(match ch {
+                CTRL_C => InputEvent::CtrlC,
+                CTRL_D => InputEvent::CtrlD,
+                _ => InputEvent::Char(ch),
+            });
+        }
+
+        let width = utf8_char_width(first).ok_or_else(invalid_utf8_input)?;
+        self.buffer[0] = first;
+        for index in 1..width {
+            self.buffer[index] = match self.read_byte_event()? {
+                ByteEvent::Byte(byte) => byte,
+                ByteEvent::Eof => return Err(invalid_utf8_input().into()),
+                ByteEvent::Timeout => return Ok(InputEvent::Timeout),
+            };
+        }
+
+        Ok(InputEvent::Char(decode_utf8_char(&self.buffer[..width])?))
+    }
+}
+
+fn utf8_char_width(first: u8) -> Option<usize> {
+    match first {
+        0x00..=0x7f => Some(1),
+        0xc2..=0xdf => Some(2),
+        0xe0..=0xef => Some(3),
+        0xf0..=0xf4 => Some(4),
+        _ => None,
+    }
+}
+
+fn decode_utf8_char(bytes: &[u8]) -> Result<char, crate::engine::Error> {
+    std::str::from_utf8(bytes)
+        .ok()
+        .and_then(|value| value.chars().next())
+        .ok_or_else(|| invalid_utf8_input().into())
+}
+
+fn invalid_utf8_input() -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::InvalidData,
+        "read input is not valid UTF-8",
+    )
 }
 
 /// Configuration for line reading behavior.
@@ -484,9 +542,16 @@ struct LineReaderConfig {
 fn read_line_with_reader(
     reader: &mut InputReader,
     config: &LineReaderConfig,
+    stderr: &mut impl Write,
+    manual_echo: bool,
 ) -> Result<ReadResult, crate::engine::Error> {
     let mut line = String::new();
+    let mut output_char_count = 0;
     let mut pending_backslash = false;
+
+    if config.char_limit == Some(0) {
+        return Ok(ReadResult::Line(line));
+    }
 
     loop {
         let event = reader.read_event()?;
@@ -528,6 +593,11 @@ fn read_line_with_reader(
             }
 
             InputEvent::Char(ch) => {
+                if manual_echo {
+                    write!(stderr, "{ch}")?;
+                    stderr.flush()?;
+                }
+
                 // Handle backslash escape processing (when enabled).
                 if config.process_escapes {
                     if pending_backslash {
@@ -541,12 +611,12 @@ fn read_line_with_reader(
                         }
 
                         // For other chars, add char literally (backslash consumed).
-                        line.push(ch);
-
-                        // Check character limit (based on output length).
-                        if let Some(limit) = config.char_limit
-                            && line.len() >= limit
-                        {
+                        if push_output_char(
+                            &mut line,
+                            &mut output_char_count,
+                            ch,
+                            config.char_limit,
+                        ) {
                             return Ok(ReadResult::Line(line));
                         }
                         continue;
@@ -570,12 +640,7 @@ fn read_line_with_reader(
                     continue;
                 }
 
-                line.push(ch);
-
-                // Check character limit (based on output length).
-                if let Some(limit) = config.char_limit
-                    && line.len() >= limit
-                {
+                if push_output_char(&mut line, &mut output_char_count, ch, config.char_limit) {
                     return Ok(ReadResult::Line(line));
                 }
             }
@@ -583,7 +648,40 @@ fn read_line_with_reader(
     }
 }
 
-impl ReadCommand {
+fn push_output_char(
+    line: &mut String,
+    output_char_count: &mut usize,
+    ch: char,
+    char_limit: Option<usize>,
+) -> bool {
+    line.push(ch);
+    *output_char_count += 1;
+    char_limit.is_some_and(|limit| *output_char_count >= limit)
+}
+
+struct ReadWorker {
+    delimiter: Option<String>,
+    prompt: Option<String>,
+    return_after_n_chars: Option<usize>,
+    return_after_n_chars_no_delimiter: Option<usize>,
+    raw_mode: bool,
+    silent: bool,
+}
+
+impl From<&ReadCommand> for ReadWorker {
+    fn from(command: &ReadCommand) -> Self {
+        Self {
+            delimiter: command.delimiter.clone(),
+            prompt: command.prompt.clone(),
+            return_after_n_chars: command.return_after_n_chars,
+            return_after_n_chars_no_delimiter: command.return_after_n_chars_no_delimiter,
+            raw_mode: command.raw_mode,
+            silent: command.silent,
+        }
+    }
+}
+
+impl ReadWorker {
     /// Reads a line of input, optionally with a timeout.
     ///
     /// Handles backslash escape processing:
@@ -596,7 +694,8 @@ impl ReadCommand {
         mut stderr_file: impl std::io::Write,
         timeout: Option<Duration>,
     ) -> Result<ReadResult, crate::engine::Error> {
-        let term_mode = self.setup_terminal_settings(&input_file)?;
+        let manual_echo = should_manually_echo(input_file.is_terminal(), self.silent);
+        let term_mode = setup_terminal_settings(&input_file)?;
 
         // Display prompt on stderr, but only if input is from a terminal (per bash behavior).
         if let Some(prompt) = &self.prompt
@@ -642,27 +741,22 @@ impl ReadCommand {
             process_escapes: !self.raw_mode,
         };
 
-        read_line_with_reader(&mut reader, &config)
+        read_line_with_reader(&mut reader, &config, &mut stderr_file, manual_echo)
+    }
+}
+
+fn setup_terminal_settings(
+    file: &crate::engine::openfiles::OpenFile,
+) -> Result<Option<crate::engine::terminal::AutoModeGuard>, crate::engine::Error> {
+    let mode = crate::engine::terminal::AutoModeGuard::new(file.try_clone()?).ok();
+    if let Some(mode) = &mode {
+        mode.apply_settings(&crate::engine::terminal::Settings::character_input())?;
     }
 
-    fn setup_terminal_settings(
-        &self,
-        file: &crate::engine::openfiles::OpenFile,
-    ) -> Result<Option<crate::engine::terminal::AutoModeGuard>, crate::engine::Error> {
-        let mode = crate::engine::terminal::AutoModeGuard::new(file.to_owned()).ok();
-        if let Some(mode) = &mode {
-            let config = crate::engine::terminal::Settings::builder()
-                .line_input(false)
-                .interrupt_signals(false)
-                .echo_input(!self.silent)
-                .build();
+    Ok(mode)
+}
 
-            mode.apply_settings(&config)?;
-        }
-
-        Ok(mode)
-    }
-
+impl ReadCommand {
     /// Validates the timeout value and returns an error result if invalid.
     ///
     /// Returns `Ok(Some(result))` if the timeout is invalid (caller should return early),
@@ -685,6 +779,10 @@ impl ReadCommand {
         }
         Ok(None)
     }
+}
+
+fn should_manually_echo(input_is_terminal: bool, silent: bool) -> bool {
+    input_is_terminal && !silent
 }
 
 /// Splits a line by IFS (Internal Field Separator) according to shell rules.
@@ -773,6 +871,72 @@ mod tests {
     use itertools::assert_equal;
 
     use super::*;
+
+    #[compio::test]
+    async fn blocking_worker_reads_complete_utf8_line() -> anyhow::Result<()> {
+        let (reader, mut writer) = std::io::pipe()?;
+        let writer_task =
+            compio::runtime::spawn_blocking(move || writer.write_all("界a\n".as_bytes()));
+        let worker = ReadWorker {
+            delimiter: None,
+            prompt: None,
+            return_after_n_chars: None,
+            return_after_n_chars_no_delimiter: None,
+            raw_mode: false,
+            silent: false,
+        };
+
+        let result = compio::runtime::spawn_blocking(move || {
+            worker.read_line(reader.into(), Vec::<u8>::new(), None)
+        })
+        .await
+        .map_err(|err| anyhow::anyhow!("read worker panicked: {err:?}"))??;
+        writer_task
+            .await
+            .map_err(|err| anyhow::anyhow!("writer worker panicked: {err:?}"))??;
+
+        match result {
+            ReadResult::Line(line) => assert_eq!(line, "界a"),
+            _ => anyhow::bail!("unexpected read result"),
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn rejects_non_finite_timeouts() {
+        assert!(parse_timeout_option("NaN").is_err());
+        assert!(parse_timeout_option("inf").is_err());
+        assert!(parse_timeout_option("-inf").is_err());
+        assert_eq!(parse_timeout_option("0.25"), Ok(0.25));
+    }
+
+    #[test]
+    fn selects_manual_echo_only_for_non_silent_terminal_input() {
+        assert!(should_manually_echo(true, false));
+        assert!(!should_manually_echo(true, true));
+        assert!(!should_manually_echo(false, false));
+        assert!(!should_manually_echo(false, true));
+    }
+
+    #[test]
+    fn decodes_utf8_and_counts_characters_for_n_options() {
+        assert_eq!(decode_utf8_char("界".as_bytes()).unwrap(), '界');
+
+        let mut line = String::new();
+        let mut count = 0;
+        assert!(!push_output_char(&mut line, &mut count, '界', Some(2)));
+        assert!(push_output_char(&mut line, &mut count, 'a', Some(2)));
+        assert_eq!(line, "界a");
+        assert_eq!(count, 2);
+
+        let command =
+            <ReadCommand as builtins::Command>::new(["read", "-n", "2"].map(String::from)).unwrap();
+        assert_eq!(command.return_after_n_chars, Some(2));
+
+        let command =
+            <ReadCommand as builtins::Command>::new(["read", "-N", "2"].map(String::from)).unwrap();
+        assert_eq!(command.return_after_n_chars_no_delimiter, Some(2));
+    }
 
     // ==================== split_line_by_ifs tests ====================
 

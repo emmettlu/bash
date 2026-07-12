@@ -21,8 +21,8 @@ use crate::parser::error;
 type WordParseCacheKey = (String, ParserOptions);
 
 thread_local! {
-    static WORD_PARSE_CACHE: RefCell<crate::engine::cache::FixedCache<WordParseCacheKey, Vec<WordPieceWithSource>>> =
-        RefCell::new(crate::engine::cache::FixedCache::new(64));
+    static WORD_PARSE_CACHE: RefCell<crate::parser::cache::FixedCache<WordParseCacheKey, Vec<WordPieceWithSource>>> =
+        const { RefCell::new(crate::parser::cache::FixedCache::new(64)) };
 }
 
 /// Encapsulates a `WordPiece` together with its position in the string it came from.
@@ -503,6 +503,7 @@ pub fn parse(
     word: &str,
     options: &ParserOptions,
 ) -> Result<Vec<WordPieceWithSource>, error::WordParseError> {
+    check_nesting(word)?;
     cacheable_parse(word.to_owned(), options.to_owned())
 }
 
@@ -510,19 +511,67 @@ fn cacheable_parse(
     word: String,
     options: ParserOptions,
 ) -> Result<Vec<WordPieceWithSource>, error::WordParseError> {
+    let input_bytes = word.len();
     WORD_PARSE_CACHE.with(|cache| {
-        crate::engine::cache::get_or_try_insert_with(cache, (word, options), |key| {
-            let (word, options) = key;
-            log::debug!(target: "expansion", "Parsing word '{}'", word);
+        crate::parser::cache::get_or_try_insert_with(
+            cache,
+            (word, options),
+            input_bytes,
+            |pieces| estimate_pieces_bytes(pieces),
+            |key| {
+                let (word, options) = key;
+                log::debug!(target: "expansion", "Parsing word '{}'", word);
 
-            let pieces = expansion_parser::unexpanded_word(word.as_str(), options)
-                .map_err(|err| error::WordParseError::Word(word.clone(), err.into()))?;
+                let pieces = expansion_parser::unexpanded_word(word.as_str(), options)
+                    .map_err(|err| error::WordParseError::Word(word.clone(), err.into()))?;
 
-            log::debug!(target: "expansion", "Parsed word '{}' => {{{:?}}}", word, pieces);
+                log::debug!(target: "expansion", "Parsed word '{}' => {{{:?}}}", word, pieces);
 
-            Ok(pieces)
-        })
+                Ok(pieces)
+            },
+        )
     })
+}
+
+fn check_nesting(word: &str) -> Result<(), error::WordParseError> {
+    crate::parser::nesting::check_delimiters(word)
+        .and_then(|()| crate::parser::nesting::check_expansions(word))
+        .map_err(|limit| nesting_limit_error(word, limit))
+}
+
+fn check_heredoc_nesting(word: &str) -> Result<(), error::WordParseError> {
+    crate::parser::nesting::check_heredoc_expansions(word)
+        .map_err(|limit| nesting_limit_error(word, limit))
+}
+
+fn nesting_limit_error(
+    word: &str,
+    limit: crate::parser::nesting::NestingLimitError,
+) -> error::WordParseError {
+    error::WordParseError::NestingLimitExceeded {
+        limit: crate::parser::nesting::MAX_NESTING_DEPTH,
+        position: crate::parser::nesting::span_at(word, limit.index).start,
+    }
+}
+
+fn estimate_pieces_bytes(pieces: &[WordPieceWithSource]) -> usize {
+    pieces
+        .iter()
+        .map(|piece| {
+            std::mem::size_of::<WordPieceWithSource>()
+                + match &piece.piece {
+                    WordPiece::Text(value)
+                    | WordPiece::SingleQuotedText(value)
+                    | WordPiece::AnsiCQuotedText(value)
+                    | WordPiece::CommandSubstitution(value)
+                    | WordPiece::BackquotedCommandSubstitution(value)
+                    | WordPiece::EscapeSequence(value) => value.len(),
+                    WordPiece::DoubleQuotedSequence(inner)
+                    | WordPiece::GettextDoubleQuotedSequence(inner) => estimate_pieces_bytes(inner),
+                    _ => 0,
+                }
+        })
+        .sum()
 }
 
 /// Parse a heredoc body, treating `"` and `'` as literal characters.
@@ -535,6 +584,7 @@ pub fn parse_heredoc(
     word: &str,
     options: &ParserOptions,
 ) -> Result<Vec<WordPieceWithSource>, error::WordParseError> {
+    check_heredoc_nesting(word)?;
     expansion_parser::unexpanded_heredoc_word(word, options)
         .map_err(|err| error::WordParseError::Word(word.to_owned(), err.into()))
 }
@@ -549,6 +599,7 @@ pub fn parse_parameter(
     word: &str,
     options: &ParserOptions,
 ) -> Result<Parameter, error::WordParseError> {
+    check_nesting(word)?;
     expansion_parser::parameter(word, options)
         .map_err(|err| error::WordParseError::Parameter(word.to_owned(), err.into()))
 }
@@ -563,6 +614,7 @@ pub fn parse_brace_expansions(
     word: &str,
     options: &ParserOptions,
 ) -> Result<Option<Vec<BraceExpressionOrText>>, error::WordParseError> {
+    check_nesting(word)?;
     expansion_parser::brace_expansions(word, options)
         .map_err(|err| error::WordParseError::BraceExpansion(word.to_owned(), err.into()))
 }
@@ -682,10 +734,10 @@ peg::parser! {
                 BraceExpressionMember::CharSequence { start, end, increment: increment.unwrap_or(1) }
             }
 
-        rule number() -> i64 = sign:number_sign()? n:$(['0'..='9']+) {
-            let sign = sign.unwrap_or(1);
-            let num: i64 = n.parse().unwrap();
-            num * sign
+        rule number() -> i64 = sign:number_sign()? n:$(['0'..='9']+) {?
+            let sign = i128::from(sign.unwrap_or(1));
+            let magnitude = n.parse::<i128>().map_err(|_| "brace sequence number out of range")?;
+            i64::try_from(magnitude * sign).map_err(|_| "brace sequence number out of range")
         }
 
         rule number_sign() -> i64 =
@@ -882,13 +934,19 @@ peg::parser! {
         rule tilde_expression_piece() -> WordPiece =
             "~" expr:tilde_expression() { WordPiece::TildeExpansion(expr) }
 
-        rule tilde_expression() -> TildeExpr =
+        pub(crate) rule tilde_expression() -> TildeExpr =
             &tilde_terminator() { TildeExpr::Home } /
             "+" &tilde_terminator() { TildeExpr::WorkingDir } /
-            plus:("+"?) n:$(['0'..='9']*) &tilde_terminator() { TildeExpr::NthDirFromTopOfDirStack { n: n.parse().unwrap(), plus_used: plus.is_some() } } /
+            plus:("+"?) n:$(['0'..='9']+) &tilde_terminator() {?
+                let n = n.parse().map_err(|_| "directory stack index out of range")?;
+                Ok(TildeExpr::NthDirFromTopOfDirStack { n, plus_used: plus.is_some() })
+            } /
             "-" &tilde_terminator() { TildeExpr::OldWorkingDir } /
-            "-" n:$(['0'..='9']*) &tilde_terminator() { TildeExpr::NthDirFromBottomOfDirStack { n: n.parse().unwrap() } } /
-            user:$(portable_filename_char()*) &tilde_terminator() { TildeExpr::UserHome(user.to_owned()) }
+            "-" n:$(['0'..='9']+) &tilde_terminator() {?
+                let n = n.parse().map_err(|_| "directory stack index out of range")?;
+                Ok(TildeExpr::NthDirFromBottomOfDirStack { n })
+            } /
+            !("-" ['0'..='9']) user:$(portable_filename_char()*) &tilde_terminator() { TildeExpr::UserHome(user.to_owned()) }
 
         rule tilde_terminator() = ['/' | ':' | ';' | '}'] / ![_]
 
@@ -936,7 +994,7 @@ peg::parser! {
                 ParameterExpr::RemoveSmallestPrefixPattern { parameter, indirect, pattern }
             } /
             // N.B. The following case is for non-sh extensions.
-            non_posix_extensions_enabled() e:non_posix_parameter_expression() { e } /
+            e:non_posix_parameter_expression() { e } /
             indirect:parameter_indirection() parameter:parameter() {
                 ParameterExpr::Parameter { parameter, indirect }
             }
@@ -995,7 +1053,7 @@ peg::parser! {
             }
 
         rule parameter_indirection() -> bool =
-            non_posix_extensions_enabled() "!" { true } /
+            "!" { true } /
             { false }
 
         rule non_posix_parameter_transformation_op() -> ParameterTransformOp =
@@ -1020,9 +1078,9 @@ peg::parser! {
         pub(crate) rule parameter() -> Parameter =
             p:positional_parameter() { Parameter::Positional(p) } /
             p:special_parameter() { Parameter::Special(p) } /
-            non_posix_extensions_enabled() p:variable_name() "[@]" { Parameter::NamedWithAllIndices { name: p.to_owned(), concatenate: false } } /
-            non_posix_extensions_enabled() p:variable_name() "[*]" { Parameter::NamedWithAllIndices { name: p.to_owned(), concatenate: true } } /
-            non_posix_extensions_enabled() p:variable_name() "[" index:array_index() "]" {?
+            p:variable_name() "[@]" { Parameter::NamedWithAllIndices { name: p.to_owned(), concatenate: false } } /
+            p:variable_name() "[*]" { Parameter::NamedWithAllIndices { name: p.to_owned(), concatenate: true } } /
+            p:variable_name() "[" index:array_index() "]" {?
                 Ok(Parameter::NamedWithIndex { name: p.to_owned(), index: index.to_owned() })
             } /
             p:variable_name() { Parameter::Named(p.to_owned()) }
@@ -1088,9 +1146,6 @@ peg::parser! {
 
         rule extglob_enabled() -> () =
             &[_] {? if parser_options.enable_extended_globbing { Ok(()) } else { Err("no extglob") } }
-
-        rule non_posix_extensions_enabled() -> () =
-            &[_] { }
 
         rule tilde_exprs_at_word_start_enabled() -> () =
             &[_] {? if parser_options.tilde_expansion_at_word_start { Ok(()) } else { Err("no tilde expansion at word start") } }
@@ -1197,6 +1252,92 @@ mod tests {
         assert_matches!(parsed[1].piece, WordPiece::TildeExpansion(_));
 
         Ok(())
+    }
+
+    #[test]
+    fn parameter_expansion_preserves_embedded_whitespace() {
+        let pieces = parse("${value:-a\t  b}", &ParserOptions::default()).unwrap();
+        let [
+            WordPieceWithSource {
+                piece:
+                    WordPiece::ParameterExpansion(ParameterExpr::UseDefaultValues {
+                        default_value: Some(default_value),
+                        ..
+                    }),
+                ..
+            },
+        ] = pieces.as_slice()
+        else {
+            panic!("expected a default-value parameter expansion");
+        };
+
+        assert_eq!(default_value, "a\t  b");
+    }
+
+    #[test]
+    fn deeply_nested_words_are_rejected() {
+        let word = std::format!(
+            "{}x{}",
+            "$(".repeat(crate::parser::nesting::MAX_NESTING_DEPTH + 1),
+            ")".repeat(crate::parser::nesting::MAX_NESTING_DEPTH + 1),
+        );
+
+        assert!(matches!(
+            parse(&word, &ParserOptions::default()),
+            Err(error::WordParseError::NestingLimitExceeded { .. })
+        ));
+    }
+
+    #[test]
+    fn heredoc_json_braces_do_not_count_toward_nesting_limit() {
+        let depth = crate::parser::nesting::MAX_NESTING_DEPTH + 1;
+        let word = std::format!(
+            "{}\"${{value}}\"{}",
+            r#"{"nested":"#.repeat(depth),
+            "}".repeat(depth),
+        );
+
+        let pieces = parse_heredoc(&word, &ParserOptions::default()).unwrap();
+
+        assert!(pieces.iter().any(|piece| matches!(
+            &piece.piece,
+            WordPiece::ParameterExpansion(ParameterExpr::Parameter {
+                parameter: Parameter::Named(name),
+                ..
+            }) if name == "value"
+        )));
+    }
+
+    #[test]
+    fn deeply_nested_heredoc_expansions_are_rejected() {
+        let depth = crate::parser::nesting::MAX_NESTING_DEPTH + 1;
+        let word = std::format!("{}x{}", "$(".repeat(depth), ")".repeat(depth));
+
+        assert!(matches!(
+            parse_heredoc(&word, &ParserOptions::default()),
+            Err(error::WordParseError::NestingLimitExceeded { .. })
+        ));
+    }
+
+    #[test]
+    fn reject_overflowing_brace_sequence_numbers() {
+        let options = ParserOptions::default();
+
+        assert!(
+            expansion_parser::brace_sequence_expr("999999999999999999999999..1", &options).is_err()
+        );
+        assert!(
+            expansion_parser::brace_sequence_expr("-999999999999999999999999..1", &options)
+                .is_err()
+        );
+    }
+
+    #[test]
+    fn reject_overflowing_tilde_stack_index() {
+        let options = ParserOptions::default();
+
+        assert!(expansion_parser::tilde_expression("+999999999999999999999999", &options).is_err());
+        assert!(expansion_parser::tilde_expression("-999999999999999999999999", &options).is_err());
     }
 
     #[test]

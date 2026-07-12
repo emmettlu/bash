@@ -2,6 +2,10 @@ use std::io::Write;
 
 use crate::engine::{ErrorKind, ExecutionResult, builtins, escape, expansion};
 
+// 限制单个格式字段, 避免用户输入导致无界输出或分配.
+const MAX_FORMAT_FIELD_SIZE: usize = 1024 * 1024;
+const WRITE_CHUNK_SIZE: usize = 8 * 1024;
+
 /// Format a string.
 pub(crate) struct PrintfCommand {
     /// If specified, the output of the command is assigned to this variable.
@@ -156,36 +160,115 @@ fn expand_format_escapes(format_string: &str) -> Result<String, crate::engine::E
         .map_err(|_| ErrorKind::PrintfInvalidUsage("invalid UTF-8 format string".into()).into())
 }
 
+#[derive(Clone, Copy, Default)]
+struct FormatSpecifier {
+    conversion: char,
+    left_justify: bool,
+    force_sign: bool,
+    space_sign: bool,
+    alternate: bool,
+    zero_pad: bool,
+    width: Option<usize>,
+    precision: Option<usize>,
+}
+
 fn read_format_specifier(
     chars: &mut std::iter::Peekable<std::str::Chars<'_>>,
-) -> Result<char, crate::engine::Error> {
-    for ch in chars.by_ref() {
-        if ch.is_ascii_alphabetic() || ch == '%' {
-            return Ok(ch);
+) -> Result<FormatSpecifier, crate::engine::Error> {
+    let mut spec = FormatSpecifier::default();
+
+    while let Some(flag) = chars.peek().copied() {
+        match flag {
+            '-' => spec.left_justify = true,
+            '+' => spec.force_sign = true,
+            ' ' => spec.space_sign = true,
+            '#' => spec.alternate = true,
+            '0' => spec.zero_pad = true,
+            _ => break,
         }
+        let _ = chars.next();
     }
 
-    Err(ErrorKind::PrintfInvalidUsage("missing format specifier".into()).into())
+    spec.width = parse_format_number(chars, "width")?;
+    if chars.next_if_eq(&'.').is_some() {
+        spec.precision = Some(parse_format_number(chars, "precision")?.unwrap_or(0));
+    }
+
+    let Some(conversion) = chars.next() else {
+        return Err(ErrorKind::PrintfInvalidUsage("missing format specifier".into()).into());
+    };
+    if !conversion.is_ascii_alphabetic() {
+        return Err(ErrorKind::PrintfInvalidUsage(format!(
+            "unsupported format modifier: {conversion}"
+        ))
+        .into());
+    }
+    spec.conversion = conversion;
+    Ok(spec)
+}
+
+fn parse_format_number(
+    chars: &mut std::iter::Peekable<std::str::Chars<'_>>,
+    field_name: &str,
+) -> Result<Option<usize>, crate::engine::Error> {
+    let mut value = None::<usize>;
+    while let Some(digit) = chars.peek().and_then(|ch| ch.to_digit(10)) {
+        let _ = chars.next();
+        let next_value = value
+            .unwrap_or(0)
+            .checked_mul(10)
+            .and_then(|value| value.checked_add(digit as usize))
+            .ok_or_else(|| {
+                ErrorKind::PrintfInvalidUsage(format!("format {field_name} is too large"))
+            })?;
+        if next_value > MAX_FORMAT_FIELD_SIZE {
+            return Err(ErrorKind::PrintfInvalidUsage(format!(
+                "format {field_name} exceeds the maximum of {MAX_FORMAT_FIELD_SIZE}"
+            ))
+            .into());
+        }
+        value = Some(next_value);
+    }
+    Ok(value)
 }
 
 fn write_formatted_arg(
     mut writer: impl Write,
-    spec: char,
+    spec: FormatSpecifier,
     arg: &str,
 ) -> Result<(), crate::engine::Error> {
-    match spec {
-        's' => write!(writer, "{arg}")?,
-        'q' => write!(
-            writer,
-            "{}",
-            escape::quote_if_needed(arg, escape::QuoteMode::BackslashEscape)
+    match spec.conversion {
+        's' => write_padded_text(
+            &mut writer,
+            truncate_to_precision(arg, spec.precision),
+            spec,
         )?,
-        'c' => write!(writer, "{}", arg.chars().next().unwrap_or('\0'))?,
-        'd' | 'i' => write!(writer, "{}", parse_i64_arg(arg)?)?,
-        'u' => write!(writer, "{}", parse_u64_arg(arg)?)?,
-        'o' => write!(writer, "{:o}", parse_u64_arg(arg)?)?,
-        'x' => write!(writer, "{:x}", parse_u64_arg(arg)?)?,
-        'X' => write!(writer, "{:X}", parse_u64_arg(arg)?)?,
+        'q' => {
+            let value = truncate_to_precision(arg, spec.precision);
+            let escaped = escape::quote_if_needed(&value, escape::QuoteMode::BackslashEscape);
+            write_padded_text(&mut writer, escaped.as_ref().to_owned(), spec)?;
+        }
+        'c' => write_padded_text(
+            &mut writer,
+            arg.chars().next().unwrap_or('\0').to_string(),
+            spec,
+        )?,
+        'd' | 'i' => {
+            let value = parse_i64_arg(arg)?;
+            let sign = if value.is_negative() {
+                Some('-')
+            } else if spec.force_sign {
+                Some('+')
+            } else if spec.space_sign {
+                Some(' ')
+            } else {
+                None
+            };
+            write_number(&mut writer, value.unsigned_abs(), 10, sign, spec)?;
+        }
+        'u' => write_number(&mut writer, parse_u64_arg(arg)?, 10, None, spec)?,
+        'o' => write_number(&mut writer, parse_u64_arg(arg)?, 8, None, spec)?,
+        'x' | 'X' => write_number(&mut writer, parse_u64_arg(arg)?, 16, None, spec)?,
         other => {
             return Err(ErrorKind::PrintfInvalidUsage(format!(
                 "unsupported format specifier: %{other}"
@@ -194,6 +277,96 @@ fn write_formatted_arg(
         }
     }
 
+    Ok(())
+}
+
+fn truncate_to_precision(value: &str, precision: Option<usize>) -> String {
+    precision.map_or_else(
+        || value.to_owned(),
+        |precision| value.chars().take(precision).collect(),
+    )
+}
+
+fn write_padded_text(
+    mut writer: impl Write,
+    value: String,
+    spec: FormatSpecifier,
+) -> Result<(), crate::engine::Error> {
+    let padding = spec
+        .width
+        .unwrap_or(0)
+        .saturating_sub(value.chars().count());
+    if !spec.left_justify {
+        write_repeated_byte(&mut writer, b' ', padding)?;
+    }
+    write!(writer, "{value}")?;
+    if spec.left_justify {
+        write_repeated_byte(&mut writer, b' ', padding)?;
+    }
+    Ok(())
+}
+
+fn write_repeated_byte(
+    mut writer: impl Write,
+    byte: u8,
+    mut count: usize,
+) -> Result<(), std::io::Error> {
+    let chunk = [byte; WRITE_CHUNK_SIZE];
+    while count > 0 {
+        let chunk_len = count.min(chunk.len());
+        writer.write_all(&chunk[..chunk_len])?;
+        count -= chunk_len;
+    }
+    Ok(())
+}
+
+fn write_number(
+    mut writer: impl Write,
+    value: u64,
+    radix: u32,
+    sign: Option<char>,
+    spec: FormatSpecifier,
+) -> Result<(), crate::engine::Error> {
+    let mut digits = match (radix, spec.conversion) {
+        (8, _) => format!("{value:o}"),
+        (16, 'X') => format!("{value:X}"),
+        (16, _) => format!("{value:x}"),
+        _ => value.to_string(),
+    };
+
+    if spec.precision == Some(0) && value == 0 {
+        digits.clear();
+    }
+    let precision_zeroes = spec.precision.unwrap_or(0).saturating_sub(digits.len());
+
+    let prefix = if spec.alternate {
+        match spec.conversion {
+            'o' if precision_zeroes == 0 && !digits.starts_with('0') => "0",
+            'x' if value != 0 => "0x",
+            'X' if value != 0 => "0X",
+            _ => "",
+        }
+    } else {
+        ""
+    };
+    let content_len = usize::from(sign.is_some()) + prefix.len() + precision_zeroes + digits.len();
+    let padding = spec.width.unwrap_or(0).saturating_sub(content_len);
+
+    if !(spec.left_justify || spec.zero_pad && spec.precision.is_none()) {
+        write_repeated_byte(&mut writer, b' ', padding)?;
+    }
+    if let Some(sign) = sign {
+        write!(writer, "{sign}")?;
+    }
+    write!(writer, "{prefix}")?;
+    if !spec.left_justify && spec.zero_pad && spec.precision.is_none() {
+        write_repeated_byte(&mut writer, b'0', padding)?;
+    }
+    write_repeated_byte(&mut writer, b'0', precision_zeroes)?;
+    write!(writer, "{digits}")?;
+    if spec.left_justify {
+        write_repeated_byte(&mut writer, b' ', padding)?;
+    }
     Ok(())
 }
 
@@ -255,5 +428,44 @@ mod tests {
         assert_eq!(sprintf("%s|", &["x", "y"])?, "x|y|");
 
         Ok(())
+    }
+
+    #[test]
+    fn test_sprintf_honors_format_modifiers() -> Result<()> {
+        assert_eq!(sprintf("%05d", &["12"])?, "00012");
+        assert_eq!(sprintf("%-05d", &["12"])?, "12   ");
+        assert_eq!(sprintf("%05.3d", &["12"])?, "  012");
+        assert_eq!(sprintf("%-5s", &["xy"])?, "xy   ");
+        assert_eq!(sprintf("%05s", &["xy"])?, "   xy");
+        assert_eq!(sprintf("%.2s", &["世界a"])?, "世界");
+        assert_eq!(sprintf("%#05x", &["16"])?, "0x010");
+        assert_eq!(sprintf("%#5.0x", &["0"])?, "     ");
+        assert_eq!(sprintf("% d", &["3"])?, " 3");
+        assert_eq!(sprintf("% +d", &["3"])?, "+3");
+        assert_eq!(sprintf("%+d", &["3"])?, "+3");
+        Ok(())
+    }
+
+    #[test]
+    fn test_sprintf_honors_alternate_octal_form() -> Result<()> {
+        assert_eq!(sprintf("%#o", &["0"])?, "0");
+        assert_eq!(sprintf("%#.0o", &["0"])?, "0");
+        assert_eq!(sprintf("%#5.0o", &["0"])?, "    0");
+        assert_eq!(sprintf("%#.3o", &["8"])?, "010");
+        assert_eq!(sprintf("%#05o", &["8"])?, "00010");
+        Ok(())
+    }
+
+    #[test]
+    fn test_sprintf_rejects_excessive_width_and_precision() {
+        assert!(sprintf("%1048577s", &["x"]).is_err());
+        assert!(sprintf("%.1048577d", &["1"]).is_err());
+        assert!(sprintf("%999999999999999999999999s", &["x"]).is_err());
+        assert!(sprintf("%.999999999999999999999999d", &["1"]).is_err());
+    }
+
+    #[test]
+    fn test_sprintf_rejects_unsupported_modifier() {
+        assert!(sprintf("%*s", &["5", "x"]).is_err());
     }
 }

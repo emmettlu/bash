@@ -1,13 +1,2 @@
-[build]
-rustflags = ["-C", "target-cpu=znver3"]
-
 [target.'cfg(windows)']
 rustflags = ["--cfg", "windows_slim_errors"]
-
-[profile.release]
-codegen-units = 1
-debug = false
-lto = true
-opt-level = "s"
-panic = "abort"
-strip = true

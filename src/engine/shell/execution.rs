@@ -1,14 +1,84 @@
 //! Execution support for shell.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use crate::engine::{
     ExecutionControlFlow, ExecutionParameters, ExecutionResult, ProcessGroupPolicy, SourceInfo,
-    arithmetic::Evaluatable as _, callstack, error, interp::Execute as _, openfiles,
+    arithmetic::Evaluatable as _, callstack, error, interp::Execute as _, jobs, openfiles, sys,
     trace_categories,
 };
 
+fn script_fd(path: &Path) -> Option<crate::engine::ShellFd> {
+    if path.parent() != Some(Path::new("/dev/fd")) {
+        return None;
+    }
+
+    path.file_name()?.to_string_lossy().parse().ok()
+}
+
+fn open_and_parse_script(
+    requested_path: PathBuf,
+    absolute_path: PathBuf,
+    inherited_file: Option<openfiles::OpenFile>,
+    parser_options: crate::parser::ParserOptions,
+    source_name: String,
+) -> Result<Result<crate::parser::ast::Program, crate::parser::ParseError>, std::io::Error> {
+    let opened_file = if let Some(file) = inherited_file {
+        file
+    } else if let Some(result) = sys::fs::try_open_special_file(&requested_path) {
+        result?.into()
+    } else {
+        std::fs::File::open(absolute_path)?.into()
+    };
+
+    if opened_file.is_dir() {
+        return Err(std::io::ErrorKind::IsADirectory.into());
+    }
+
+    log::debug!(target: trace_categories::PARSE, "Parsing sourced file: {source_name}");
+    let reader = std::io::BufReader::new(opened_file);
+    let mut parser = crate::parser::Parser::new(reader, &parser_options);
+    Ok(parser.parse_program())
+}
+
 impl crate::engine::Shell {
+    /// 尝试创建用于子 shell 语义的 shell 副本.
+    ///
+    /// fd 复制失败会作为错误返回. 子 shell 不继承交互 history、key bindings
+    /// 或 executable completion cache, 避免复制与执行语义无关的状态.
+    pub(crate) fn try_fork_subshell(&self) -> Result<Self, error::Error> {
+        let mut call_stack = self.call_stack.clone();
+        call_stack.clear_active_trap_signals();
+
+        Ok(Self {
+            error_formatter: self.error_formatter.clone(),
+            traps: self.traps.clone(),
+            open_files: self.open_files.try_clone()?,
+            working_dir: self.working_dir.clone(),
+            env: self.env.clone(),
+            funcs: self.funcs.clone(),
+            options: self.options.clone(),
+            jobs: jobs::JobManager::new(),
+            aliases: self.aliases.clone(),
+            last_exit_status: self.last_exit_status,
+            last_exit_status_change_count: self.last_exit_status_change_count,
+            last_pipeline_statuses: self.last_pipeline_statuses.clone(),
+            depth: self.depth + 1,
+            name: self.name.clone(),
+            args: self.args.clone(),
+            version: self.version.clone(),
+            product_display_str: self.product_display_str.clone(),
+            call_stack,
+            directory_stack: self.directory_stack.clone(),
+            completion_config: self.completion_config.clone(),
+            builtins: self.builtins.clone(),
+            program_location_cache: self.program_location_cache.clone(),
+            external_command_completion_cache: Default::default(),
+            key_bindings: None,
+            history: None,
+        })
+    }
+
     /// Returns the default execution parameters for this shell.
     pub fn default_exec_params(&self) -> ExecutionParameters {
         let mut params = ExecutionParameters::default();
@@ -27,9 +97,13 @@ impl crate::engine::Shell {
         path: impl AsRef<Path>,
         params: &ExecutionParameters,
     ) -> Result<bool, error::Error> {
-        let path = path.as_ref();
-        if path.exists() {
-            self.source_script(path, std::iter::empty::<String>(), params)
+        let path = path.as_ref().to_owned();
+        let worker_path = path.clone();
+        let exists = compio::runtime::spawn_blocking(move || worker_path.exists())
+            .await
+            .map_err(|err| error::ErrorKind::ThreadingError(err.to_string()))?;
+        if exists {
+            self.source_script(&path, std::iter::empty::<String>(), params)
                 .await?;
             Ok(true)
         } else {
@@ -63,31 +137,32 @@ impl crate::engine::Shell {
         params: &ExecutionParameters,
         call_type: callstack::ScriptCallType,
     ) -> Result<ExecutionResult, error::Error> {
-        let path = path.as_ref();
+        let path = path.as_ref().to_owned();
         log::debug!("sourcing: {}", path.display());
 
-        let mut options = std::fs::File::options();
-        options.read(true);
+        let absolute_path = self.absolute_path(&path);
+        let inherited_file = script_fd(&absolute_path)
+            .and_then(|fd| params.fd_overlay(self).try_fd(fd))
+            .map(openfiles::OpenFile::try_clone)
+            .transpose()
+            .map_err(|err| error::ErrorKind::FailedSourcingFile(path.clone(), err))?;
+        let parser_options = self.parser_options();
+        let source_info = crate::engine::SourceInfo::from(path.clone());
+        let source_name = source_info.source.clone();
+        let worker_path = path.clone();
 
-        let opened_file: openfiles::OpenFile = self
-            .open_file(&options, path, params)
-            .map_err(|e| error::ErrorKind::FailedSourcingFile(path.to_owned(), e))?;
-
-        if opened_file.is_dir() {
-            return Err(error::ErrorKind::FailedSourcingFile(
-                path.to_owned(),
-                std::io::Error::from(std::io::ErrorKind::IsADirectory),
+        let parse_result = compio::runtime::spawn_blocking(move || {
+            open_and_parse_script(
+                worker_path,
+                absolute_path,
+                inherited_file,
+                parser_options,
+                source_name,
             )
-            .into());
-        }
-
-        let source_info = crate::engine::SourceInfo::from(path.to_owned());
-
-        let mut reader = std::io::BufReader::new(opened_file);
-        let mut parser = crate::parser::Parser::new(&mut reader, &self.parser_options());
-
-        log::debug!(target: trace_categories::PARSE, "Parsing sourced file: {}", source_info.source);
-        let parse_result = parser.parse_program();
+        })
+        .await
+        .map_err(|err| error::ErrorKind::ThreadingError(err.to_string()))?
+        .map_err(|err| error::ErrorKind::FailedSourcingFile(path, err))?;
 
         let script_positional_args = args.map(Into::into);
         self.call_stack
@@ -235,5 +310,69 @@ impl crate::engine::Shell {
         expr: &crate::parser::ast::ArithmeticExpr,
     ) -> Result<i64, error::Error> {
         Ok(expr.eval(self)?)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::open_and_parse_script;
+    use crate::engine::Shell;
+
+    #[compio::test]
+    async fn script_worker_returns_owned_parse_result() -> anyhow::Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("script.sh");
+        std::fs::write(&path, "value=worker\n")?;
+        let requested_path = path.clone();
+        let absolute_path = path;
+
+        let parse_result = compio::runtime::spawn_blocking(move || {
+            open_and_parse_script(
+                requested_path,
+                absolute_path,
+                None,
+                crate::parser::ParserOptions::default(),
+                String::from("script.sh"),
+            )
+        })
+        .await
+        .map_err(|err| anyhow::anyhow!("script worker panicked: {err:?}"))??;
+
+        assert!(parse_result.is_ok());
+        Ok(())
+    }
+
+    #[test]
+    fn subshell_fork_omits_interactive_state() {
+        let mut shell = Shell::empty();
+        shell.history = Some(Default::default());
+        let parent_names = shell.external_command_completion_cache.get_or_update(
+            "parent-path".into(),
+            ".EXE".into(),
+            true,
+            |_, _, _| vec!["parent.exe".into()],
+        );
+        assert_eq!(parent_names, ["parent.exe"]);
+
+        let mut subshell = shell.try_fork_subshell().unwrap();
+
+        assert_eq!(subshell.depth, shell.depth + 1);
+        assert!(subshell.history.is_none());
+        assert!(subshell.key_bindings.is_none());
+        let subshell_names = subshell.external_command_completion_cache.get_or_update(
+            "parent-path".into(),
+            ".EXE".into(),
+            true,
+            |_, _, _| vec!["subshell.exe".into()],
+        );
+        assert_eq!(subshell_names, ["subshell.exe"]);
+
+        let parent_names = shell.external_command_completion_cache.get_or_update(
+            "parent-path".into(),
+            ".EXE".into(),
+            true,
+            |_, _, _| vec!["unexpected.exe".into()],
+        );
+        assert_eq!(parent_names, ["parent.exe"]);
     }
 }

@@ -1,9 +1,8 @@
 use std::collections::BTreeMap;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use crate::engine::variables::{self, DynamicVariable};
+use crate::engine::variables::{self, DynamicShellValue, DynamicVariable};
 use crate::engine::{Shell, ShellValue, ShellVariable, error, sys};
 
 const BASH_MAJOR: u32 = 5;
@@ -14,10 +13,6 @@ const BASH_RELEASE: &str = "release";
 const BASH_MACHINE: &str = "unknown";
 
 const DEFAULT_LINENO: usize = 1;
-const RANDOM_MULTIPLIER: u64 = 6_364_136_223_846_793_005;
-const RANDOM_INCREMENT: u64 = 1_442_695_040_888_963_407;
-
-static RANDOM_STATE: AtomicU64 = AtomicU64::new(0);
 
 /// Inherit environment variables from the host process into the shell's environment.
 ///
@@ -66,7 +61,7 @@ pub(crate) fn init_well_known_vars(shell: &mut Shell) -> Result<(), error::Error
     }
 
     // BASHOPTS
-    let mut bashopts_var = ShellVariable::new(ShellValue::Dynamic(DynamicVariable::BashOpts));
+    let mut bashopts_var = ShellVariable::new(DynamicVariable::BashOpts);
     bashopts_var.set_readonly();
     shell.env_mut().set_global("BASHOPTS", bashopts_var)?;
 
@@ -78,32 +73,28 @@ pub(crate) fn init_well_known_vars(shell: &mut Shell) -> Result<(), error::Error
     // BASH_ALIASES
     shell.env_mut().set_global(
         "BASH_ALIASES",
-        ShellVariable::new(ShellValue::Dynamic(DynamicVariable::BashAliases)),
+        ShellVariable::new(DynamicVariable::BashAliases),
     )?;
 
     // BASH_ARGC
-    shell.env_mut().set_global(
-        "BASH_ARGC",
-        ShellVariable::new(ShellValue::Dynamic(DynamicVariable::BashArgc)),
-    )?;
+    shell
+        .env_mut()
+        .set_global("BASH_ARGC", ShellVariable::new(DynamicVariable::BashArgc))?;
 
     // BASH_ARGV
-    shell.env_mut().set_global(
-        "BASH_ARGV",
-        ShellVariable::new(ShellValue::Dynamic(DynamicVariable::BashArgv)),
-    )?;
+    shell
+        .env_mut()
+        .set_global("BASH_ARGV", ShellVariable::new(DynamicVariable::BashArgv))?;
 
     // BASH_ARGV0
-    shell.env_mut().set_global(
-        "BASH_ARGV0",
-        ShellVariable::new(ShellValue::Dynamic(DynamicVariable::BashArgv0)),
-    )?;
+    shell
+        .env_mut()
+        .set_global("BASH_ARGV0", ShellVariable::new(DynamicVariable::BashArgv0))?;
 
     // TODO(vars): implement mutation of BASH_CMDS
-    shell.env_mut().set_global(
-        "BASH_CMDS",
-        ShellVariable::new(ShellValue::Dynamic(DynamicVariable::BashCmds)),
-    )?;
+    shell
+        .env_mut()
+        .set_global("BASH_CMDS", ShellVariable::new(DynamicVariable::BashCmds))?;
 
     // TODO(vars): implement BASH_COMMAND
     // TODO(vars): implement BASH_EXECUTION_STRING
@@ -111,19 +102,19 @@ pub(crate) fn init_well_known_vars(shell: &mut Shell) -> Result<(), error::Error
     // BASH_LINENO
     shell.env_mut().set_global(
         "BASH_LINENO",
-        ShellVariable::new(ShellValue::Dynamic(DynamicVariable::BashLineno)),
+        ShellVariable::new(DynamicVariable::BashLineno),
     )?;
 
     // BASH_SOURCE
     shell.env_mut().set_global(
         "BASH_SOURCE",
-        ShellVariable::new(ShellValue::Dynamic(DynamicVariable::BashSource)),
+        ShellVariable::new(DynamicVariable::BashSource),
     )?;
 
     // BASH_SUBSHELL
     shell.env_mut().set_global(
         "BASH_SUBSHELL",
-        ShellVariable::new(ShellValue::Dynamic(DynamicVariable::BashSubshell)),
+        ShellVariable::new(DynamicVariable::BashSubshell),
     )?;
 
     // BASH_VERSINFO
@@ -164,21 +155,20 @@ pub(crate) fn init_well_known_vars(shell: &mut Shell) -> Result<(), error::Error
     )?;
 
     // DIRSTACK
-    shell.env_mut().set_global(
-        "DIRSTACK",
-        ShellVariable::new(ShellValue::Dynamic(DynamicVariable::DirStack)),
-    )?;
+    shell
+        .env_mut()
+        .set_global("DIRSTACK", ShellVariable::new(DynamicVariable::DirStack))?;
 
     // EPOCHREALTIME
     shell.env_mut().set_global(
         "EPOCHREALTIME",
-        ShellVariable::new(ShellValue::Dynamic(DynamicVariable::EpochRealtime)),
+        ShellVariable::new(DynamicVariable::EpochRealtime),
     )?;
 
     // EPOCHSECONDS
     shell.env_mut().set_global(
         "EPOCHSECONDS",
-        ShellVariable::new(ShellValue::Dynamic(DynamicVariable::EpochSeconds)),
+        ShellVariable::new(DynamicVariable::EpochSeconds),
     )?;
 
     // EUID
@@ -189,21 +179,19 @@ pub(crate) fn init_well_known_vars(shell: &mut Shell) -> Result<(), error::Error
     }
 
     // FUNCNAME
-    shell.env_mut().set_global(
-        "FUNCNAME",
-        ShellVariable::new(ShellValue::Dynamic(DynamicVariable::FuncName)),
-    )?;
+    shell
+        .env_mut()
+        .set_global("FUNCNAME", ShellVariable::new(DynamicVariable::FuncName))?;
 
     // GROUPS
     // N.B. We could compute this up front, but we choose to make it dynamic so that we
     // don't have to make costly system calls if the user never accesses it.
-    shell.env_mut().set_global(
-        "GROUPS",
-        ShellVariable::new(ShellValue::Dynamic(DynamicVariable::Groups)),
-    )?;
+    shell
+        .env_mut()
+        .set_global("GROUPS", ShellVariable::new(DynamicVariable::Groups))?;
 
     // HISTCMD
-    let mut histcmd_var = ShellVariable::new(ShellValue::Dynamic(DynamicVariable::HistCmd));
+    let mut histcmd_var = ShellVariable::new(DynamicVariable::HistCmd);
     histcmd_var.treat_as_integer();
     shell.env_mut().set_global("HISTCMD", histcmd_var)?;
 
@@ -241,10 +229,9 @@ pub(crate) fn init_well_known_vars(shell: &mut Shell) -> Result<(), error::Error
         .set_global("IFS", ShellVariable::new(" \t\n"))?;
 
     // LINENO
-    shell.env_mut().set_global(
-        "LINENO",
-        ShellVariable::new(ShellValue::Dynamic(DynamicVariable::LineNo)),
-    )?;
+    shell
+        .env_mut()
+        .set_global("LINENO", ShellVariable::new(DynamicVariable::LineNo))?;
 
     // MACHTYPE
     shell
@@ -303,7 +290,7 @@ pub(crate) fn init_well_known_vars(shell: &mut Shell) -> Result<(), error::Error
     // TODO(well-known-vars): Investigate if this needs to be saved/preserved across prompt display.
     shell.env_mut().set_global(
         "PIPESTATUS",
-        ShellVariable::new(ShellValue::Dynamic(DynamicVariable::PipeStatus)),
+        ShellVariable::new(DynamicVariable::PipeStatus),
     )?;
 
     // PPID
@@ -314,15 +301,14 @@ pub(crate) fn init_well_known_vars(shell: &mut Shell) -> Result<(), error::Error
     }
 
     // RANDOM
-    let mut random_var = ShellVariable::new(ShellValue::Dynamic(DynamicVariable::Random));
+    let mut random_var = ShellVariable::new(DynamicVariable::Random);
     random_var.treat_as_integer();
     shell.env_mut().set_global("RANDOM", random_var)?;
 
     // SECONDS
-    shell.env_mut().set_global(
-        "SECONDS",
-        ShellVariable::new(ShellValue::Dynamic(DynamicVariable::Seconds)),
-    )?;
+    shell
+        .env_mut()
+        .set_global("SECONDS", ShellVariable::new(DynamicVariable::Seconds))?;
 
     // SHELL (if not already set)
     if !shell.env().is_set("SHELL") {
@@ -336,7 +322,7 @@ pub(crate) fn init_well_known_vars(shell: &mut Shell) -> Result<(), error::Error
     }
 
     // SHELLOPTS
-    let mut shellopts_var = ShellVariable::new(ShellValue::Dynamic(DynamicVariable::ShellOpts));
+    let mut shellopts_var = ShellVariable::new(DynamicVariable::ShellOpts);
     shellopts_var.set_readonly();
     shell.env_mut().set_global("SHELLOPTS", shellopts_var)?;
 
@@ -348,7 +334,7 @@ pub(crate) fn init_well_known_vars(shell: &mut Shell) -> Result<(), error::Error
     shell.env_mut().set_global("SHLVL", shlvl_var)?;
 
     // SRANDOM
-    let mut random_var = ShellVariable::new(ShellValue::Dynamic(DynamicVariable::SRandom));
+    let mut random_var = ShellVariable::new(DynamicVariable::SRandom);
     random_var.treat_as_integer();
     shell.env_mut().set_global("SRANDOM", random_var)?;
 
@@ -396,11 +382,11 @@ pub(crate) fn init_well_known_vars(shell: &mut Shell) -> Result<(), error::Error
     Ok(())
 }
 
-impl DynamicVariable {
-    pub(crate) fn resolve(self, shell: &Shell) -> ShellValue {
-        match self {
-            Self::BashOpts => shell.options().shopt_optstr().into(),
-            Self::BashAliases => {
+impl DynamicShellValue {
+    pub(crate) fn resolve(&self, shell: &Shell) -> ShellValue {
+        match self.variable() {
+            DynamicVariable::BashOpts => shell.options().shopt_optstr().into(),
+            DynamicVariable::BashAliases => {
                 let values = variables::ArrayLiteral(
                     shell
                         .aliases()
@@ -412,60 +398,53 @@ impl DynamicVariable {
                 ShellValue::associative_array_from_literals(values)
                     .unwrap_or_else(|_error| ShellValue::AssociativeArray(BTreeMap::new()))
             }
-            Self::BashArgc => get_bash_argc_value(shell),
-            Self::BashArgv => get_bash_argv_value(shell),
-            Self::BashArgv0 => {
+            DynamicVariable::BashArgc => get_bash_argc_value(shell),
+            DynamicVariable::BashArgv => get_bash_argv_value(shell),
+            DynamicVariable::BashArgv0 => {
                 let argv0 = shell.current_shell_name().unwrap_or_default();
                 argv0.to_string().into()
             }
-            Self::BashCmds => shell
+            DynamicVariable::BashCmds => shell
                 .program_location_cache()
                 .to_value()
                 .unwrap_or_else(|_error| ShellValue::AssociativeArray(BTreeMap::new())),
-            Self::BashLineno => get_bash_lineno_value(shell),
-            Self::BashSource => get_bash_source_value(shell),
-            Self::BashSubshell => shell.depth().to_string().into(),
-            Self::DirStack => shell
+            DynamicVariable::BashLineno => get_bash_lineno_value(shell),
+            DynamicVariable::BashSource => get_bash_source_value(shell),
+            DynamicVariable::BashSubshell => shell.depth().to_string().into(),
+            DynamicVariable::DirStack => shell
                 .directory_stack()
                 .iter()
                 .map(|p| p.to_string_lossy().to_string())
                 .collect::<Vec<_>>()
                 .into(),
-            Self::EpochRealtime => {
+            DynamicVariable::EpochRealtime => {
                 let now = SystemTime::now();
                 let since_epoch = now.duration_since(UNIX_EPOCH).unwrap_or_default();
                 since_epoch.as_secs_f64().to_string().into()
             }
-            Self::EpochSeconds => {
+            DynamicVariable::EpochSeconds => {
                 let now = SystemTime::now();
                 let since_epoch = now.duration_since(UNIX_EPOCH).unwrap_or_default();
                 since_epoch.as_secs().to_string().into()
             }
-            Self::FuncName => get_funcname_value(shell),
-            Self::Groups => {
+            DynamicVariable::FuncName => get_funcname_value(shell),
+            DynamicVariable::Groups => {
                 let groups = get_current_user_gids();
                 ShellValue::indexed_array_from_strings(
                     groups.into_iter().map(|gid| gid.to_string()),
                 )
             }
-            Self::HistCmd => shell
+            DynamicVariable::HistCmd => shell
                 .history()
                 .map_or_else(|| "0".into(), |h| h.count().to_string().into()),
-            Self::LineNo => get_lineno(shell).to_string().into(),
-            Self::PipeStatus => ShellValue::indexed_array_from_strings(
+            DynamicVariable::LineNo => get_lineno(shell).to_string().into(),
+            DynamicVariable::PipeStatus => ShellValue::indexed_array_from_strings(
                 shell.last_pipeline_statuses().iter().map(|s| s.to_string()),
             ),
-            Self::Random => get_random_value(),
-            Self::Seconds => {
-                let now = SystemTime::now();
-                let since_last = now
-                    .duration_since(shell.last_stopwatch_time())
-                    .unwrap_or_default();
-                let total_seconds = since_last.as_secs() + u64::from(shell.last_stopwatch_offset());
-                total_seconds.to_string().into()
-            }
-            Self::ShellOpts => shell.options().seto_optstr().into(),
-            Self::SRandom => get_srandom_value(),
+            DynamicVariable::Random => self.next_random_value().to_string().into(),
+            DynamicVariable::Seconds => self.seconds_value().to_string().into(),
+            DynamicVariable::ShellOpts => shell.options().seto_optstr().into(),
+            DynamicVariable::SRandom => self.next_srandom_value().to_string().into(),
         }
     }
 }
@@ -486,47 +465,6 @@ fn get_current_user_gids() -> Vec<u32> {
     }
 
     groups
-}
-
-fn get_random_value() -> ShellValue {
-    let num = next_random_u64() % 32_768;
-    num.to_string().into()
-}
-
-fn get_srandom_value() -> ShellValue {
-    let num = next_random_u64() as u32;
-    num.to_string().into()
-}
-
-fn next_random_u64() -> u64 {
-    loop {
-        let state = RANDOM_STATE.load(Ordering::Relaxed);
-        let current = if state == 0 {
-            initial_random_seed()
-        } else {
-            state
-        };
-        let next = current
-            .wrapping_mul(RANDOM_MULTIPLIER)
-            .wrapping_add(RANDOM_INCREMENT);
-
-        if RANDOM_STATE
-            .compare_exchange(state, next, Ordering::Relaxed, Ordering::Relaxed)
-            .is_ok()
-        {
-            return next;
-        }
-    }
-}
-
-fn initial_random_seed() -> u64 {
-    let time_seed = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map_or(0, |duration| {
-            duration.as_secs() ^ u64::from(duration.subsec_nanos()).rotate_left(32)
-        });
-
-    (time_seed ^ u64::from(std::process::id())).max(1)
 }
 
 fn get_funcname_value(shell: &Shell) -> variables::ShellValue {
@@ -695,4 +633,93 @@ fn get_lineno(shell: &Shell) -> usize {
         .current_frame()
         .and_then(|frame| frame.current_line())
         .unwrap_or(DEFAULT_LINENO)
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use crate::engine::variables::ShellValueLiteral;
+    use anyhow::Result;
+
+    fn assign_scalar(shell: &mut Shell, name: &str, value: &str) -> Result<()> {
+        shell
+            .env_mut()
+            .get_mut(name)
+            .unwrap()
+            .1
+            .assign(ShellValueLiteral::Scalar(value.to_owned()), false)?;
+        Ok(())
+    }
+
+    fn scalar_value(shell: &Shell, name: &str) -> String {
+        shell.env_str(name).unwrap().into_owned()
+    }
+
+    #[compio::test]
+    async fn writable_dynamic_variables_apply_assignments() -> Result<()> {
+        let mut shell = Shell::builder()
+            .shell_name("original".to_owned())
+            .build()
+            .await?;
+
+        assign_scalar(&mut shell, "RANDOM", "4321")?;
+        let first = scalar_value(&shell, "RANDOM");
+        let second = scalar_value(&shell, "RANDOM");
+        assign_scalar(&mut shell, "RANDOM", "4321")?;
+        assert_eq!(scalar_value(&shell, "RANDOM"), first);
+        assert_eq!(scalar_value(&shell, "RANDOM"), second);
+
+        assign_scalar(&mut shell, "SECONDS", "-3")?;
+        let seconds = scalar_value(&shell, "SECONDS").parse::<i64>()?;
+        assert!((-3..=0).contains(&seconds));
+
+        shell
+            .env_mut()
+            .get_mut("BASH_ARGV0")
+            .unwrap()
+            .1
+            .assign(ShellValueLiteral::Scalar("-suffix".to_owned()), true)?;
+        assert_eq!(
+            shell.current_shell_name().as_deref(),
+            Some("original-suffix")
+        );
+
+        assign_scalar(&mut shell, "BASH_ARGV0", "renamed")?;
+        assert_eq!(scalar_value(&shell, "BASH_ARGV0"), "renamed");
+        assert_eq!(shell.current_shell_name().as_deref(), Some("renamed"));
+
+        Ok(())
+    }
+
+    #[compio::test]
+    async fn unsupported_and_readonly_dynamic_assignments_are_distinct() -> Result<()> {
+        let mut shell = Shell::builder().build().await?;
+
+        let unsupported = shell
+            .env_mut()
+            .get_mut("EPOCHSECONDS")
+            .unwrap()
+            .1
+            .assign(ShellValueLiteral::Scalar("1".to_owned()), false)
+            .unwrap_err();
+        assert_eq!(
+            unsupported.to_string(),
+            "not yet implemented: assignment is unsupported for this dynamic variable"
+        );
+
+        let readonly = shell
+            .env_mut()
+            .get_mut("BASHOPTS")
+            .unwrap()
+            .1
+            .assign(ShellValueLiteral::Scalar("1".to_owned()), false)
+            .unwrap_err();
+        assert!(matches!(
+            readonly.kind(),
+            error::ErrorKind::ReadonlyVariable
+        ));
+
+        Ok(())
+    }
 }

@@ -36,9 +36,22 @@ impl From<&crate::shell::args::CommandLineArgs> for UIOptions {
 }
 
 impl UIOptions {
-    /// 返回用于 `-s` 标准输入命令循环的选项。
+    /// 根据命令行参数和运行计划构建用户界面选项。
     #[must_use]
-    pub(crate) fn stdin_input_loop() -> Self {
+    pub(crate) fn from_args(
+        args: &crate::shell::args::CommandLineArgs,
+        interactive_session: bool,
+    ) -> Self {
+        if interactive_session {
+            Self::from(args)
+        } else {
+            Self::stdin_input_loop()
+        }
+    }
+
+    /// 返回用于非交互标准输入命令循环的选项。
+    #[must_use]
+    fn stdin_input_loop() -> Self {
         Self {
             interactive_session: false,
             terminal_shell_integration: false,

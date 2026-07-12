@@ -6,12 +6,12 @@ use std::{
 };
 
 use crate::engine::sys;
-use crate::engine::sys::traits::PathExt;
 
 /// Encapsulates the result of a path search.
 pub struct ExecutablePathSearch<PI, N> {
     paths: VecDeque<PI>,
     filename: N,
+    executable_extensions: Vec<String>,
 }
 
 impl<PI, N> Iterator for ExecutablePathSearch<PI, N>
@@ -29,7 +29,9 @@ where
             if path.is_dir() {
                 continue;
             }
-            if let Some(resolved) = sys::fs::resolve_executable(path) {
+            if let Some(resolved) =
+                sys::fs::resolve_executable_with_extensions(path, &self.executable_extensions)
+            {
                 return Some(resolved);
             }
         }
@@ -42,6 +44,7 @@ pub(crate) struct ExecutablePathPrefixSearch<P> {
     queued_items: VecDeque<PathBuf>,
     filename_prefix: String,
     case_insensitive: bool,
+    executable_extensions: Vec<String>,
 }
 
 impl<P> Iterator for ExecutablePathPrefixSearch<P>
@@ -73,16 +76,15 @@ where
                     }
 
                     let entry_path = entry.path();
-                    if let Ok(file_type) = entry.file_type() {
-                        if file_type.is_file()
-                            && sys::fs::has_executable_extension(entry_path.as_path())
-                        {
-                            self.queued_items.push_back(entry_path);
-                            continue;
-                        }
-                        if file_type.is_symlink() && entry_path.executable() {
-                            self.queued_items.push_back(entry_path);
-                        }
+                    if let Ok(file_type) = entry.file_type()
+                        && (file_type.is_file() || file_type.is_symlink())
+                        && entry_path.is_file()
+                        && sys::fs::has_executable_extension_with_extensions(
+                            entry_path.as_path(),
+                            &self.executable_extensions,
+                        )
+                    {
+                        self.queued_items.push_back(entry_path);
                     }
                 }
             }
@@ -107,16 +109,36 @@ where
     PI: AsRef<Path>,
     N: AsRef<Path>,
 {
+    search_for_executable_with_extensions(
+        paths,
+        filename,
+        sys::fs::default_executable_extensions().to_vec(),
+    )
+}
+
+/// 使用指定 PATHEXT 扩展名搜索可执行文件.
+pub fn search_for_executable_with_extensions<P, PI, N>(
+    paths: P,
+    filename: N,
+    executable_extensions: Vec<String>,
+) -> ExecutablePathSearch<PI, N>
+where
+    P: Iterator<Item = PI>,
+    PI: AsRef<Path>,
+    N: AsRef<Path>,
+{
     ExecutablePathSearch {
         paths: paths.collect(),
         filename,
+        executable_extensions,
     }
 }
 
-pub(crate) fn search_for_executable_with_prefix<P>(
+pub(crate) fn search_for_executable_with_prefix_and_extensions<P>(
     paths: P,
     filename_prefix: &str,
     case_insensitive: bool,
+    executable_extensions: Vec<String>,
 ) -> ExecutablePathPrefixSearch<P>
 where
     P: Iterator,
@@ -133,5 +155,6 @@ where
         queued_items: VecDeque::new(),
         filename_prefix: stored_prefix,
         case_insensitive,
+        executable_extensions,
     }
 }

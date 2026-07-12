@@ -264,7 +264,7 @@ impl DeclareCommand {
         }
 
         // Extract the variable name and the initial value being assigned (if any).
-        let (name, assigned_index, initial_value, name_is_array) =
+        let (name, assigned_index, initial_value, name_is_array, append) =
             Self::declaration_to_name_and_value(declaration)?;
 
         // Special-case: `local -`
@@ -283,11 +283,15 @@ impl DeclareCommand {
         }
 
         // Figure out where we should look.
-        let lookup = if create_var_local {
-            EnvironmentLookup::OnlyInCurrentLocal
-        } else {
-            EnvironmentLookup::Anywhere
-        };
+        let lookup = declaration_lookup(create_var_local, self.create_global);
+
+        let (initial_value, integer_append_evaluated) = self.evaluate_integer_assignment(
+            context.shell,
+            name.as_str(),
+            lookup,
+            initial_value,
+            append,
+        )?;
 
         // Look up the variable.
         if let Some(var) = context
@@ -305,8 +309,8 @@ impl DeclareCommand {
             self.apply_attributes_before_update(var)?;
 
             if let Some(initial_value) = initial_value {
-                // We append if the declaration included an explicit index.
-                var.assign(initial_value, assigned_index.is_some())?;
+                let append = !integer_append_evaluated && (append || assigned_index.is_some());
+                var.assign(initial_value, append)?;
             }
 
             self.apply_attributes_after_update(var, verb)?;
@@ -347,14 +351,24 @@ impl DeclareCommand {
         Ok(true)
     }
 
+    #[expect(clippy::type_complexity)]
     fn declaration_to_name_and_value(
         declaration: &crate::engine::CommandArg,
-    ) -> Result<(String, Option<String>, Option<ShellValueLiteral>, bool), crate::engine::Error>
-    {
+    ) -> Result<
+        (
+            String,
+            Option<String>,
+            Option<ShellValueLiteral>,
+            bool,
+            bool,
+        ),
+        crate::engine::Error,
+    > {
         let name;
         let assigned_index;
         let initial_value;
         let name_is_array;
+        let append;
 
         match declaration {
             crate::engine::CommandArg::String(s) => {
@@ -373,8 +387,10 @@ impl DeclareCommand {
                     name_is_array = false;
                 }
                 initial_value = None;
+                append = false;
             }
             crate::engine::CommandArg::Assignment(assignment) => {
+                append = assignment.append;
                 match &assignment.name {
                     ast::AssignmentName::VariableName(var_name) => {
                         name = var_name.to_owned();
@@ -417,7 +433,52 @@ impl DeclareCommand {
             }
         }
 
-        Ok((name, assigned_index, initial_value, name_is_array))
+        Ok((name, assigned_index, initial_value, name_is_array, append))
+    }
+
+    fn evaluate_integer_assignment(
+        &self,
+        shell: &mut crate::engine::Shell,
+        name: &str,
+        lookup: EnvironmentLookup,
+        value: Option<ShellValueLiteral>,
+        append: bool,
+    ) -> Result<(Option<ShellValueLiteral>, bool), crate::engine::Error> {
+        let Some(value) = value else {
+            return Ok((None, false));
+        };
+        let integer_enabled = self.make_integer.to_bool().unwrap_or_else(|| {
+            shell
+                .env()
+                .get_using_policy(name, lookup)
+                .is_some_and(ShellVariable::is_treated_as_integer)
+        });
+        if !integer_enabled {
+            return Ok((Some(value), false));
+        }
+
+        let ShellValueLiteral::Scalar(expression) = value else {
+            return error::unimp("integer array declaration assignment");
+        };
+        let right = crate::engine::arithmetic::eval_str(shell, expression.as_str())?;
+        let result = if append {
+            let left_expression = shell
+                .env()
+                .get_using_policy(name, lookup)
+                .and_then(|variable| {
+                    variable
+                        .resolve_value(shell)
+                        .try_get_cow_str(shell)
+                        .map(|value| value.into_owned())
+                })
+                .unwrap_or_else(|| "0".to_owned());
+            let left = crate::engine::arithmetic::eval_str(shell, left_expression.as_str())?;
+            left.wrapping_add(right)
+        } else {
+            right
+        };
+
+        Ok((Some(ShellValueLiteral::Scalar(result.to_string())), append))
     }
 
     fn display_matching_env_declarations(
@@ -475,8 +536,8 @@ impl DeclareCommand {
         if let Some(value) = self.make_readonly.to_bool() {
             filters.push(Box::new(move |(_, v)| v.is_readonly() == value));
         }
-        if let Some(value) = self.make_readonly.to_bool() {
-            filters.push(Box::new(move |(_, v)| v.is_trace_enabled() == value));
+        if let Some(value) = self.make_traced.to_bool() {
+            filters.push(Box::new(move |(_, v)| trace_attribute_matches(v, value)));
         }
         if let Some(value) = self.uppercase_value_on_assignment.to_bool() {
             filters.push(Box::new(move |(_, v)| {
@@ -635,6 +696,192 @@ impl DeclareCommand {
             }
         }
 
+        Ok(())
+    }
+}
+
+fn trace_attribute_matches(variable: &ShellVariable, expected: bool) -> bool {
+    variable.is_trace_enabled() == expected
+}
+
+fn declaration_lookup(create_var_local: bool, create_global: bool) -> EnvironmentLookup {
+    if create_global {
+        EnvironmentLookup::OnlyInGlobal
+    } else if create_var_local {
+        EnvironmentLookup::OnlyInCurrentLocal
+    } else {
+        EnvironmentLookup::Anywhere
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn declare_g_uses_global_scope_even_when_a_local_exists() {
+        assert!(matches!(
+            declaration_lookup(false, true),
+            EnvironmentLookup::OnlyInGlobal
+        ));
+    }
+
+    #[test]
+    fn trace_filter_comes_from_trace_flag() {
+        let command = parse_declare_args(["declare", "-t"].map(String::from)).unwrap();
+        assert_eq!(command.make_traced.to_bool(), Some(true));
+        assert_eq!(command.make_readonly.to_bool(), None);
+
+        let mut variable = ShellVariable::new(ShellValue::Unset(ShellValueUnsetType::Untyped));
+        assert!(!trace_attribute_matches(&variable, true));
+        variable.enable_trace();
+        assert!(trace_attribute_matches(&variable, true));
+
+        let command = parse_declare_args(["declare", "-t", "+t"].map(String::from)).unwrap();
+        assert_eq!(command.make_traced.to_bool(), Some(false));
+    }
+
+    #[compio::test]
+    async fn declare_g_updates_the_global_hidden_by_a_local() -> anyhow::Result<()> {
+        let mut shell = crate::engine::Shell::builder()
+            .builtins(crate::builtins::default_builtins())
+            .build()
+            .await?;
+        let params = shell.default_exec_params();
+        let result = shell
+            .run_string(
+                "GLOBAL_TEST=before; f() { local GLOBAL_TEST=local; declare -g GLOBAL_TEST=after; }; f",
+                &crate::engine::SourceInfo::from("(test)"),
+                &params,
+            )
+            .await?;
+
+        assert!(result.is_success());
+        let variable = shell
+            .env()
+            .get_using_policy("GLOBAL_TEST", EnvironmentLookup::OnlyInGlobal)
+            .unwrap();
+        assert_eq!(
+            variable.value().try_get_cow_str(&shell).as_deref(),
+            Some("after")
+        );
+        Ok(())
+    }
+
+    #[compio::test]
+    async fn nameref_assignment_expansion_and_unset_follow_target() -> anyhow::Result<()> {
+        let mut shell = crate::engine::Shell::builder()
+            .builtins(crate::builtins::default_builtins())
+            .build()
+            .await?;
+        let params = shell.default_exec_params();
+        let result = shell
+            .run_string(
+                "target=before; declare -n ref=target; ref=after",
+                &crate::engine::SourceInfo::from("(test)"),
+                &params,
+            )
+            .await?;
+        assert!(result.is_success());
+        assert_eq!(shell.env_str("target").as_deref(), Some("after"));
+        assert_eq!(shell.env_str("ref").as_deref(), Some("after"));
+        assert!(
+            shell
+                .env()
+                .get_using_policy("ref", EnvironmentLookup::Anywhere)
+                .unwrap()
+                .is_treated_as_nameref()
+        );
+
+        let result = shell
+            .run_string(
+                "unset -n ref",
+                &crate::engine::SourceInfo::from("(test)"),
+                &params,
+            )
+            .await?;
+        assert!(result.is_success());
+        assert!(shell.env().get("ref").is_none());
+        assert_eq!(shell.env_str("target").as_deref(), Some("after"));
+
+        shell
+            .run_string(
+                "declare -n ref=target; unset ref",
+                &crate::engine::SourceInfo::from("(test)"),
+                &params,
+            )
+            .await?;
+        assert!(shell.env().get("ref").is_some());
+        assert!(shell.env().get("target").is_none());
+        Ok(())
+    }
+
+    #[compio::test]
+    async fn nameref_expansion_supports_missing_and_array_element_targets() -> anyhow::Result<()> {
+        let mut shell = crate::engine::Shell::builder()
+            .builtins(crate::builtins::default_builtins())
+            .build()
+            .await?;
+        let params = shell.default_exec_params();
+        shell
+            .run_string(
+                "declare -n missing_ref=created; missing_ref=value; array[2]=two; declare -n element_ref='array[2]'",
+                &crate::engine::SourceInfo::from("(test)"),
+                &params,
+            )
+            .await?;
+
+        assert_eq!(shell.env_str("created").as_deref(), Some("value"));
+        assert_eq!(shell.env_str("element_ref").as_deref(), Some("two"));
+        let expanded =
+            crate::engine::expansion::basic_expand_word(&mut shell, &params, "${element_ref}")
+                .await?;
+        assert_eq!(expanded, "two");
+        Ok(())
+    }
+
+    #[compio::test]
+    async fn nameref_cycles_fail_expansion() -> anyhow::Result<()> {
+        let mut shell = crate::engine::Shell::builder()
+            .builtins(crate::builtins::default_builtins())
+            .build()
+            .await?;
+        let params = shell.default_exec_params();
+        shell
+            .run_string(
+                "declare -n a=b; declare -n b=a",
+                &crate::engine::SourceInfo::from("(test)"),
+                &params,
+            )
+            .await?;
+
+        let error = crate::engine::expansion::basic_expand_word(&mut shell, &params, "$a")
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("nameref cycle"));
+        Ok(())
+    }
+
+    #[compio::test]
+    async fn declare_integer_evaluates_expressions_bases_variables_and_append() -> anyhow::Result<()>
+    {
+        let mut shell = crate::engine::Shell::builder()
+            .builtins(crate::builtins::default_builtins())
+            .build()
+            .await?;
+        let params = shell.default_exec_params();
+        let result = shell
+            .run_string(
+                "base=4; declare -i x=1+2; declare -i y=base*3; declare -i radix=16#ff; declare -i x+=2#10",
+                &crate::engine::SourceInfo::from("(test)"),
+                &params,
+            )
+            .await?;
+
+        assert!(result.is_success());
+        assert_eq!(shell.env_str("x").as_deref(), Some("5"));
+        assert_eq!(shell.env_str("y").as_deref(), Some("12"));
+        assert_eq!(shell.env_str("radix").as_deref(), Some("255"));
         Ok(())
     }
 }

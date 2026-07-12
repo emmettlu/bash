@@ -8,17 +8,23 @@ impl crate::engine::Shell {
     /// Returns a value that can be used to write to the shell's currently configured
     /// standard output stream using `write!` et al.
     pub fn stdout(&self) -> impl std::io::Write + 'static {
-        self.open_files.try_stdout().cloned().unwrap_or_else(|| {
-            ioutils::FailingReaderWriter::new("standard output not available").into()
-        })
+        self.open_files
+            .try_stdout()
+            .and_then(|file| file.try_clone().ok())
+            .unwrap_or_else(|| {
+                ioutils::FailingReaderWriter::new("standard output not available").into()
+            })
     }
 
     /// Returns a value that can be used to write to the shell's currently configured
     /// standard error stream using `write!` et al.
     pub fn stderr(&self) -> impl std::io::Write + 'static {
-        self.open_files.try_stderr().cloned().unwrap_or_else(|| {
-            ioutils::FailingReaderWriter::new("standard error not available").into()
-        })
+        self.open_files
+            .try_stderr()
+            .and_then(|file| file.try_clone().ok())
+            .unwrap_or_else(|| {
+                ioutils::FailingReaderWriter::new("standard error not available").into()
+            })
     }
 
     /// Outputs `set -x` style trace output for a command. Intentionally does not return
@@ -58,12 +64,14 @@ impl crate::engine::Shell {
                 .parse::<super::ShellFd>()
             && let Some(file) = self.open_files.try_fd(fd)
         {
-            Some(file.clone())
+            Some(file)
         } else {
-            params.try_stderr(self)
+            params
+                .fd_overlay(self)
+                .try_fd(crate::engine::openfiles::OpenFiles::STDERR_FD)
         };
 
-        // If we have a valid trace file, write to it.
+        // 找到有效 trace fd 后只复制一次再写入.
         if let Some(trace_file) = trace_file
             && let Ok(mut trace_file) = trace_file.try_clone()
         {

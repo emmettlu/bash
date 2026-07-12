@@ -39,8 +39,11 @@ impl builtins::Command for PopdCommand {
         context: crate::engine::ExecutionContext<'_>,
     ) -> Result<crate::engine::ExecutionResult, Self::Error> {
         if let Some(popped) = context.shell.directory_stack_mut().pop() {
-            if !self.no_directory_change {
-                context.shell.set_working_dir(&popped)?;
+            if !self.no_directory_change
+                && let Err(error) = context.shell.set_working_dir(&popped)
+            {
+                restore_popped_directory(context.shell.directory_stack_mut(), popped);
+                return Err(error.into());
             }
 
             // Display dirs.
@@ -51,5 +54,26 @@ impl builtins::Command for PopdCommand {
         } else {
             Err(crate::builtins::dirs::DirError::DirStackEmpty)
         }
+    }
+}
+
+fn restore_popped_directory(
+    directory_stack: &mut Vec<std::path::PathBuf>,
+    popped: std::path::PathBuf,
+) {
+    directory_stack.push(popped);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn failed_directory_change_restores_popped_entry() {
+        let retained = std::path::PathBuf::from("retained-directory");
+        let popped = std::path::PathBuf::from("missing-directory");
+        let mut stack = vec![retained.clone()];
+        restore_popped_directory(&mut stack, popped.clone());
+        assert_eq!(stack, vec![retained, popped]);
     }
 }

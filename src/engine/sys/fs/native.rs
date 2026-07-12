@@ -9,21 +9,35 @@ use crate::engine::error;
 // Selectively re-export unsupported fallbacks that we don't override.
 pub(crate) use crate::engine::sys::unsupported::fs::MetadataExt;
 
-/// Cached list of executable extensions from the `PATHEXT` environment
-/// variable. Each entry retains its leading dot (e.g. `".exe"`) and is stored
-/// lowercased so case-insensitive comparisons can be done without allocating.
-///
-/// NOTE: This is cached for the process lifetime. Changes to `PATHEXT` made
-/// inside the running shell are not reflected here. Bash itself has no
-/// `PATHEXT` semantics, so this is generally acceptable for now.
+/// 宿主进程 PATHEXT 的缓存, 用于没有 Shell 环境上下文的调用路径.
+/// Shell PATH 搜索会显式传入当前 Shell 的 PATHEXT, 不使用此缓存.
 static PATHEXT_EXTENSIONS: LazyLock<Vec<String>> = LazyLock::new(|| {
-    std::env::var("PATHEXT")
-        .unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string())
-        .split(';')
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_ascii_lowercase())
-        .collect()
+    executable_extensions_from_pathext(
+        &std::env::var("PATHEXT").unwrap_or_else(|_| ".COM;.EXE;.BAT;.CMD".to_string()),
+    )
 });
+
+/// 将 PATHEXT 值解析为规范化的小写扩展名列表.
+pub fn executable_extensions_from_pathext(value: &str) -> Vec<String> {
+    value
+        .split(';')
+        .filter_map(|entry| {
+            let entry = entry.trim();
+            if entry.is_empty() {
+                None
+            } else if entry.starts_with('.') {
+                Some(entry.to_ascii_lowercase())
+            } else {
+                Some(format!(".{entry}").to_ascii_lowercase())
+            }
+        })
+        .collect()
+}
+
+/// 返回宿主进程 PATHEXT 对应的扩展名.
+pub fn default_executable_extensions() -> &'static [String] {
+    PATHEXT_EXTENSIONS.as_slice()
+}
 
 /// Returns the stem of a PATHEXT entry (with any leading `.` removed).
 ///
@@ -38,10 +52,15 @@ fn pathext_entry_stem(entry: &str) -> &str {
 /// Performs case-insensitive comparison against the cached PATHEXT entries
 /// without allocating.
 pub fn has_executable_extension(path: &Path) -> bool {
+    has_executable_extension_with_extensions(path, default_executable_extensions())
+}
+
+/// 使用指定 PATHEXT 扩展名判断路径是否可执行.
+pub fn has_executable_extension_with_extensions(path: &Path, extensions: &[String]) -> bool {
     path.extension().is_some_and(|ext| {
-        PATHEXT_EXTENSIONS
+        extensions
             .iter()
-            .any(|e| ext.eq_ignore_ascii_case(pathext_entry_stem(e)))
+            .any(|entry| ext.eq_ignore_ascii_case(pathext_entry_stem(entry)))
     })
 }
 
@@ -50,7 +69,11 @@ pub fn has_executable_extension(path: &Path) -> bool {
 /// Used both for the initial check in [`resolve_executable`] and for
 /// [`PathExt::executable`].
 fn is_executable_file(path: &Path) -> bool {
-    has_executable_extension(path) && path.is_file()
+    is_executable_file_with_extensions(path, default_executable_extensions())
+}
+
+fn is_executable_file_with_extensions(path: &Path, extensions: &[String]) -> bool {
+    has_executable_extension_with_extensions(path, extensions) && path.is_file()
 }
 
 /// Resolves an owned path to the actual on-disk executable file, if any.
@@ -59,13 +82,17 @@ fn is_executable_file(path: &Path) -> bool {
 /// unchanged (no allocation). Otherwise, each `PATHEXT` extension is appended
 /// in turn and the first existing file is returned.
 pub fn resolve_executable(path: PathBuf) -> Option<PathBuf> {
-    if is_executable_file(&path) {
+    resolve_executable_with_extensions(path, default_executable_extensions())
+}
+
+/// 使用指定 PATHEXT 扩展名解析可执行文件.
+pub fn resolve_executable_with_extensions(path: PathBuf, extensions: &[String]) -> Option<PathBuf> {
+    if is_executable_file_with_extensions(&path, extensions) {
         return Some(path);
     }
-    // Try appending each PATHEXT extension.
-    for ext in PATHEXT_EXTENSIONS.iter() {
+    for extension in extensions {
         let mut name = path.as_os_str().to_owned();
-        name.push(ext);
+        name.push(extension);
         let candidate = PathBuf::from(name);
         if candidate.is_file() {
             return Some(candidate);
@@ -148,7 +175,8 @@ pub fn open_null_file() -> Result<std::fs::File, error::Error> {
 
 /// Handles shell special file paths that do not exist as native Windows paths.
 pub fn try_open_special_file(path: &Path) -> Option<Result<std::fs::File, std::io::Error>> {
-    if path.ends_with("dev/null") && path.is_absolute() {
+    let normalized = path.to_string_lossy().replace('\\', "/");
+    if normalized == "/dev/null" {
         Some(open_null_file().map_err(std::io::Error::other))
     } else {
         None
@@ -459,6 +487,22 @@ mod tests {
         // Tolerant: entries without a leading dot are returned as-is.
         assert_eq!(pathext_entry_stem("exe"), "exe");
         assert_eq!(pathext_entry_stem(""), "");
+    }
+
+    #[test]
+    fn pathext_parser_normalizes_entries() {
+        assert_eq!(
+            executable_extensions_from_pathext(".EXE;CMD;; .Bat "),
+            vec![".exe", ".cmd", ".bat"]
+        );
+    }
+
+    #[test]
+    fn special_file_matching_is_exact() {
+        assert!(try_open_special_file(Path::new("/dev/null")).is_some());
+        assert!(try_open_special_file(Path::new(r"\dev\null")).is_some());
+        assert!(try_open_special_file(Path::new("relative/dev/null")).is_none());
+        assert!(try_open_special_file(Path::new("C:/dev/null")).is_none());
     }
 
     #[test]

@@ -1,27 +1,34 @@
 #[derive(Default)]
 pub(super) struct PlusMinusFlag {
-    enable: bool,
-    disable: bool,
+    value: Option<bool>,
 }
 
 impl PlusMinusFlag {
     pub(super) const fn is_some(&self) -> bool {
-        self.enable || self.disable
+        self.value.is_some()
     }
 
     pub(super) const fn to_bool(&self) -> Option<bool> {
-        match (self.enable, self.disable) {
-            (true, false) => Some(true),
-            (false, true) => Some(false),
-            _ => None,
-        }
+        self.value
     }
 
     pub(super) fn set(&mut self, enabled: bool) {
-        if enabled {
-            self.enable = true;
-        } else {
-            self.disable = true;
-        }
+        self.value = Some(enabled);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::PlusMinusFlag;
+
+    #[test]
+    fn last_plus_minus_flag_wins() {
+        let mut flag = PlusMinusFlag::default();
+        flag.set(true);
+        flag.set(false);
+        assert_eq!(flag.to_bool(), Some(false));
+
+        flag.set(true);
+        assert_eq!(flag.to_bool(), Some(true));
     }
 }

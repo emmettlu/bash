@@ -20,13 +20,31 @@ pub enum ParseError {
     #[error("syntax error at end of input")]
     ParsingAtEndOfInput,
 
+    /// 输入末尾发生解析错误, 并保留 PEG 期望 token 详情.
+    #[error("syntax error at end of input at line {} col {}: expected {}", .position.line, .position.column, .expected)]
+    ParsingAtEndOfInputWithExpected {
+        /// 输入末尾的源码位置.
+        position: crate::parser::SourcePosition,
+        /// PEG 在输入末尾报告的期望 token 集合.
+        expected: peg::error::ExpectedSet,
+    },
+
     /// An error occurred while tokenizing the input stream.
-    #[error("{} (detected near {})", .inner, .position.as_ref().map_or_else(|| String::from("<unknown position>"), |p| std::format!("line {} col {}", p.line, p.column)))]
+    #[error("{} (detected near line {} col {})", .inner, .position.line, .position.column)]
     Tokenizing {
         /// The inner error.
         inner: tokenizer::TokenizerError,
-        /// Optionally provides the position of the error.
-        position: Option<crate::parser::SourcePosition>,
+        /// The position of the error.
+        position: crate::parser::SourcePosition,
+    },
+
+    /// Parser 嵌套深度超过上限.
+    #[error("parser nesting limit {limit} exceeded at line {} col {}", .position.line, .position.column)]
+    NestingLimitExceeded {
+        /// 支持的最大嵌套深度.
+        limit: usize,
+        /// 超过上限的位置.
+        position: crate::parser::SourcePosition,
     },
 }
 
@@ -64,12 +82,30 @@ pub enum WordParseError {
     /// An error occurred while parsing a word.
     #[error("failed to parse word '{0}'")]
     Word(String, ParseErrorLocation),
+
+    /// Parser 嵌套深度超过上限.
+    #[error("parser nesting limit {limit} exceeded at line {} col {}", .position.line, .position.column)]
+    NestingLimitExceeded {
+        /// 支持的最大嵌套深度.
+        limit: usize,
+        /// 超过上限的位置.
+        position: crate::parser::SourcePosition,
+    },
 }
 
-/// Represents an error that occurred while parsing a (non-extended) test command.
+/// 表示解析非扩展 test 命令时发生的错误.
 #[derive(Debug, thiserror::Error)]
-#[error(transparent)]
-pub struct TestCommandParseError(#[from] peg::error::ParseError<usize>);
+pub enum TestCommandParseError {
+    /// Test 表达式不符合语法.
+    #[error(transparent)]
+    Parsing(#[from] peg::error::ParseError<usize>),
+    /// Parser 嵌套深度超过上限.
+    #[error("parser nesting limit {limit} exceeded")]
+    NestingLimitExceeded {
+        /// 支持的最大嵌套深度.
+        limit: usize,
+    },
+}
 
 /// Represents an error that occurred while parsing a key-binding specification.
 #[derive(Debug, thiserror::Error)]
@@ -100,6 +136,16 @@ pub(crate) fn convert_peg_parse_error(
             }
         } else {
             ParseError::ParsingNear(position)
+        }
+    } else if err.expected.tokens().next().is_some() {
+        let position = tokens
+            .last()
+            .map_or_else(crate::parser::SourcePosition::default, |token| {
+                token.location().end
+            });
+        ParseError::ParsingAtEndOfInputWithExpected {
+            position,
+            expected: err.expected.clone(),
         }
     } else {
         ParseError::ParsingAtEndOfInput

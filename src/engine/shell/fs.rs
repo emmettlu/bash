@@ -76,6 +76,8 @@ impl crate::engine::Shell {
             EnvironmentScope::Global,
         )?;
 
+        // 相对 PATH 项会随工作目录改变, 因此两类路径缓存都必须失效.
+        self.reset_path_caches();
         Ok(())
     }
 
@@ -115,7 +117,11 @@ impl crate::engine::Shell {
         let path_var = self.env.get_str("PATH", self).unwrap_or_default();
         let paths = crate::engine::sys::fs::split_paths(path_var.as_ref());
 
-        pathsearch::search_for_executable(paths, filename)
+        pathsearch::search_for_executable_with_extensions(
+            paths,
+            filename,
+            self.executable_extensions(),
+        )
     }
 
     /// Finds executables in the shell's current default PATH, with filenames matching the
@@ -132,10 +138,11 @@ impl crate::engine::Shell {
         let path_var = self.env.get_str("PATH", self).unwrap_or_default();
         let paths = crate::engine::sys::fs::split_paths(path_var.as_ref()).collect::<Vec<_>>();
 
-        pathsearch::search_for_executable_with_prefix(
+        pathsearch::search_for_executable_with_prefix_and_extensions(
             paths.into_iter(),
             filename_prefix,
             case_insensitive,
+            self.executable_extensions(),
         )
     }
 
@@ -146,18 +153,29 @@ impl crate::engine::Shell {
         case_insensitive: bool,
     ) -> Vec<String> {
         let path_value = self.env_str("PATH").unwrap_or_default().into_owned();
+        let path_ext_value = self
+            .env_str("PATHEXT")
+            .unwrap_or_else(|| ".COM;.EXE;.BAT;.CMD".into())
+            .into_owned();
         let cached_names = self.external_command_completion_cache.get_or_update(
             path_value,
+            path_ext_value,
             case_insensitive,
-            |path_value, case_insensitive| {
+            |path_value, path_ext_value, case_insensitive| {
                 let paths = crate::engine::sys::fs::split_paths(path_value);
-                let mut names =
-                    pathsearch::search_for_executable_with_prefix(paths, "", case_insensitive)
-                        .filter_map(|path| {
-                            path.file_name()
-                                .map(|name| name.to_string_lossy().to_string())
-                        })
-                        .collect::<Vec<_>>();
+                let executable_extensions =
+                    crate::engine::sys::fs::executable_extensions_from_pathext(path_ext_value);
+                let mut names = pathsearch::search_for_executable_with_prefix_and_extensions(
+                    paths,
+                    "",
+                    case_insensitive,
+                    executable_extensions,
+                )
+                .filter_map(|path| {
+                    path.file_name()
+                        .map(|name| name.to_string_lossy().to_string())
+                })
+                .collect::<Vec<_>>();
                 names.sort();
                 names.dedup();
                 names
@@ -208,6 +226,14 @@ impl crate::engine::Shell {
     where
         String: From<S>,
     {
+        let path_value = self.env_str("PATH").unwrap_or_default().into_owned();
+        let path_ext_value = self
+            .env_str("PATHEXT")
+            .unwrap_or_else(|| ".COM;.EXE;.BAT;.CMD".into())
+            .into_owned();
+        self.program_location_cache_mut()
+            .synchronize_path_values(&path_value, &path_ext_value);
+
         if let Some(cached_path) = self.program_location_cache().get(&candidate_name) {
             Some(cached_path)
         } else if let Some(found_path) = self.find_first_executable_in_path(&candidate_name) {
@@ -217,6 +243,19 @@ impl crate::engine::Shell {
         } else {
             None
         }
+    }
+
+    /// 清除命令位置和 executable completion cache.
+    pub fn reset_path_caches(&mut self) {
+        self.program_location_cache_mut().reset();
+        self.external_command_completion_cache.reset();
+    }
+
+    fn executable_extensions(&self) -> Vec<String> {
+        let path_ext = self
+            .env_str("PATHEXT")
+            .unwrap_or_else(|| ".COM;.EXE;.BAT;.CMD".into());
+        crate::engine::sys::fs::executable_extensions_from_pathext(path_ext.as_ref())
     }
 
     /// Gets the absolute form of the given path.
@@ -261,7 +300,7 @@ impl crate::engine::Shell {
             && parent == Path::new("/dev/fd")
             && let Some(filename) = path_to_open.file_name()
             && let Ok(fd_num) = filename.to_string_lossy().to_string().parse::<ShellFd>()
-            && let Some(open_file) = params.try_fd(self, fd_num)
+            && let Some(open_file) = params.fd_overlay(self).try_fd(fd_num)
         {
             return open_file.try_clone();
         }

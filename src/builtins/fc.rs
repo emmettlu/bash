@@ -296,19 +296,18 @@ impl FcCommand {
                 effective_count.saturating_sub(1)
             }
             std::cmp::Ordering::Greater => {
-                // Positive: 1-based index
                 let idx = (num - 1) as usize;
-                if idx < effective_count {
-                    idx
-                } else {
-                    // Out of range - use 0 (first item)
-                    0
+                if idx >= effective_count {
+                    return Err(error::ErrorKind::HistoryItemNotFound.into());
                 }
+                idx
             }
             std::cmp::Ordering::Less => {
-                // Negative: offset from end (relative to effective count)
-                let offset = (-num) as usize;
-                effective_count.saturating_sub(offset)
+                let offset = num.unsigned_abs() as usize;
+                if offset > effective_count {
+                    return Err(error::ErrorKind::HistoryItemNotFound.into());
+                }
+                effective_count - offset
             }
         };
 
@@ -365,4 +364,25 @@ impl FcCommand {
 /// Returns the effective history count (excluding the fc command itself).
 fn effective_history_count(history: &history::History) -> usize {
     history.count().saturating_sub(1)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_history() -> history::History {
+        let mut history = history::History::default();
+        for command in ["echo first", "echo second", "fc -l"] {
+            history.add(history::Item::new(command)).unwrap();
+        }
+        history
+    }
+
+    #[test]
+    fn out_of_range_position_does_not_fall_back_to_first_item() {
+        let history = sample_history();
+        assert!(FcCommand::resolve_position(&history, "99").is_err());
+        assert!(FcCommand::resolve_position(&history, "-99").is_err());
+        assert_eq!(FcCommand::resolve_position(&history, "1").unwrap(), 0);
+    }
 }

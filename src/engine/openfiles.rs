@@ -92,13 +92,6 @@ macro_rules! dispatch_write {
     };
 }
 
-impl Clone for OpenFile {
-    fn clone(&self) -> Self {
-        self.try_clone()
-            .expect("failed to duplicate open file during infallible clone")
-    }
-}
-
 impl std::fmt::Display for OpenFile {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -294,13 +287,6 @@ impl<'a> FdOverlay<'a> {
     }
 }
 
-impl Clone for OpenFiles {
-    fn clone(&self) -> Self {
-        self.try_clone_open_files()
-            .expect("failed to duplicate open files during infallible clone")
-    }
-}
-
 impl OpenFiles {
     /// File descriptor used for standard input.
     pub const STDIN_FD: ShellFd = 0;
@@ -332,7 +318,7 @@ impl OpenFiles {
     }
 
     /// 尝试复制所有打开文件条目, 保留显式关闭的 fd.
-    pub fn try_clone_open_files(&self) -> Result<Self, std::io::Error> {
+    pub fn try_clone(&self) -> Result<Self, std::io::Error> {
         let mut files = HashMap::with_capacity(self.files.len());
         for (fd, file) in &self.files {
             let cloned_file = file.as_ref().map(OpenFile::try_clone).transpose()?;
@@ -456,5 +442,23 @@ where
     fn from(iter: I) -> Self {
         let files = iter.map(|(fd, file)| (fd, Some(file))).collect();
         Self { files }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn try_clone_preserves_open_and_closed_fds() {
+        let mut files = OpenFiles::default();
+        files.set_fd(7, std::io::stdout().into());
+        files.remove_fd(8);
+
+        let cloned = files.try_clone().unwrap();
+
+        assert!(matches!(cloned.fd_entry(7), OpenFileEntry::Open(_)));
+        assert!(matches!(cloned.fd_entry(8), OpenFileEntry::NotPresent));
+        assert!(matches!(cloned.fd_entry(9), OpenFileEntry::NotSpecified));
     }
 }

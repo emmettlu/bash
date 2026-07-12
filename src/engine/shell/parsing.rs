@@ -52,8 +52,9 @@ fn parse_string_impl(
     s: String,
     parser_options: crate::parser::ParserOptions,
 ) -> Result<crate::parser::ast::Program, crate::parser::ParseError> {
+    let key_bytes = s.len();
     PARSE_STRING_CACHE.with(|cache| {
-        crate::engine::cache::get_or_try_insert_with(cache, (s, parser_options), |key| {
+        crate::engine::cache::get_or_try_insert_with(cache, (s, parser_options), key_bytes, |key| {
             let (s, parser_options) = key;
             let mut parser = create_parser(s.as_bytes(), parser_options);
 
@@ -69,4 +70,32 @@ pub(super) fn create_parser<R: Read>(
 ) -> crate::parser::Parser<std::io::BufReader<R>> {
     let reader = std::io::BufReader::new(r);
     crate::parser::Parser::new(reader, parser_options)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn normal_programs_are_cached() {
+        PARSE_STRING_CACHE.with(|cache| cache.borrow_mut().clear());
+
+        parse_string_impl(
+            "echo cached".to_owned(),
+            crate::parser::ParserOptions::default(),
+        )
+        .unwrap();
+
+        PARSE_STRING_CACHE.with(|cache| assert_eq!(cache.borrow().len(), 1));
+    }
+
+    #[test]
+    fn oversized_programs_are_not_cached() {
+        PARSE_STRING_CACHE.with(|cache| cache.borrow_mut().clear());
+        let program = std::format!("#{}", "x".repeat(crate::engine::cache::MAX_CACHE_KEY_BYTES));
+
+        parse_string_impl(program, crate::parser::ParserOptions::default()).unwrap();
+
+        PARSE_STRING_CACHE.with(|cache| assert_eq!(cache.borrow().len(), 0));
+    }
 }

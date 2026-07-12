@@ -1,9 +1,11 @@
 //! Facilities for tracking and persisting the shell's command history.
 
 use std::{
-    collections::HashMap,
+    collections::{HashMap, VecDeque},
+    ffi::OsString,
     io::{BufRead, Read, Write},
-    path::Path,
+    path::{Path, PathBuf},
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use crate::engine::error;
@@ -11,13 +13,81 @@ use crate::engine::error;
 /// Represents a unique identifier for a history item.
 type ItemId = i64;
 
+static TEMP_FILE_SEQUENCE: AtomicU64 = AtomicU64::new(0);
+
+fn parse_timestamp_boundary(line: &str) -> Option<ItemTimestamp> {
+    let seconds_since_epoch = line.strip_prefix('#')?.parse::<u64>().ok()?;
+    Some(ItemTimestamp::from_epoch(seconds_since_epoch))
+}
+
+fn push_imported_record(
+    imported: &mut VecDeque<(String, Option<ItemTimestamp>)>,
+    command_line: String,
+    timestamp: Option<ItemTimestamp>,
+    max_items: Option<usize>,
+) {
+    if max_items == Some(0) {
+        return;
+    }
+
+    imported.push_back((command_line, timestamp));
+    if let Some(max_items) = max_items
+        && imported.len() > max_items
+    {
+        imported.pop_front();
+    }
+}
+
+fn create_history_temp_file(target: &Path) -> std::io::Result<(std::fs::File, PathBuf)> {
+    let file_name = target.file_name().ok_or_else(|| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "history path has no file name",
+        )
+    })?;
+    let parent = target.parent().unwrap_or_else(|| Path::new("."));
+
+    for _ in 0..128 {
+        let sequence = TEMP_FILE_SEQUENCE.fetch_add(1, Ordering::Relaxed);
+        let mut temp_name = OsString::from(".");
+        temp_name.push(file_name);
+        temp_name.push(format!(".{}.{sequence}.tmp", std::process::id()));
+        let temp_path = parent.join(temp_name);
+
+        match std::fs::File::options()
+            .write(true)
+            .create_new(true)
+            .open(&temp_path)
+        {
+            Ok(temp_file) => {
+                if let Ok(metadata) = std::fs::metadata(target)
+                    && let Err(err) = temp_file.set_permissions(metadata.permissions())
+                {
+                    drop(temp_file);
+                    let _ = std::fs::remove_file(&temp_path);
+                    return Err(err);
+                }
+                return Ok((temp_file, temp_path));
+            }
+            Err(err) if err.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(err) => return Err(err),
+        }
+    }
+
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "could not create a unique history temporary file",
+    ))
+}
+
 /// Interface for querying and manipulating the shell's recorded history of commands.
-// TODO(history): support maximum item count
 #[derive(Clone, Default)]
 pub struct History {
     items: Vec<ItemId>,
     id_map: HashMap<ItemId, Item>,
     next_id: ItemId,
+    revision: u64,
+    non_append_revision: u64,
 }
 
 impl History {
@@ -30,49 +100,66 @@ impl History {
     ///
     /// * `reader` - The readable stream to import history from.
     pub fn import(reader: impl Read) -> Result<Self, error::Error> {
-        let mut history = Self::default();
+        Self::import_with_limit(reader, None)
+    }
 
+    /// 从流中导入 history, 并仅保留最后 `max_items` 条记录.
+    pub fn import_with_limit(
+        reader: impl Read,
+        max_items: Option<usize>,
+    ) -> Result<Self, error::Error> {
         let buf_reader = std::io::BufReader::new(reader);
+        let mut imported = VecDeque::new();
+        let mut extended_record: Option<(String, ItemTimestamp, bool)> = None;
 
-        let mut next_timestamp = None;
         for line_result in buf_reader.lines() {
             let line = match line_result {
                 Ok(line) => line,
-                // If we couldn't decode the line due to invalid data (perhaps it wasn't
-                // valid UTF8?), skip it and make a best-effort attempt to proceed on.
-                // We'll later warn the user.
+                // 无法解码的行可能包含无效 UTF-8, 跳过后继续尽力导入.
                 Err(err) if err.kind() == std::io::ErrorKind::InvalidData => {
                     log::warn!("unreadable history line; {err}");
                     continue;
                 }
-                // In the event of other kinds of errors, return an error result. We don't
-                // want to get stuck in a failing I/O loop.
-                Err(err) => {
-                    return Err(err.into());
-                }
+                // 其他 I/O 错误可能持续发生, 立即返回以避免失败循环.
+                Err(err) => return Err(err.into()),
             };
 
-            // Look for timestamp comments; ignore other comment lines.
-            if let Some(comment) = line.strip_prefix("#") {
-                if let Ok(seconds_since_epoch) = comment.trim().parse::<u64>() {
-                    next_timestamp = Some(ItemTimestamp::from_epoch(seconds_since_epoch));
-                } else {
-                    next_timestamp = None;
+            if let Some(timestamp) = parse_timestamp_boundary(&line) {
+                if let Some((command_line, timestamp, has_line)) = extended_record.take()
+                    && has_line
+                {
+                    push_imported_record(&mut imported, command_line, Some(timestamp), max_items);
                 }
-
+                extended_record = Some((String::new(), timestamp, false));
                 continue;
             }
 
-            let item = Item {
-                id: history.next_id,
-                command_line: line,
-                timestamp: next_timestamp.take(),
-                dirty: false,
-            };
-
-            history.add(item)?;
+            if let Some((command_line, _, has_line)) = &mut extended_record {
+                if *has_line {
+                    command_line.push('\n');
+                }
+                command_line.push_str(&line);
+                *has_line = true;
+            } else if !line.starts_with('#') {
+                push_imported_record(&mut imported, line, None, max_items);
+            }
         }
 
+        if let Some((command_line, timestamp, has_line)) = extended_record
+            && has_line
+        {
+            push_imported_record(&mut imported, command_line, Some(timestamp), max_items);
+        }
+
+        let mut history = Self::default();
+        for (command_line, timestamp) in imported {
+            history.add(Item {
+                id: 0,
+                command_line,
+                timestamp,
+                dirty: false,
+            })?;
+        }
         Ok(history)
     }
 
@@ -99,6 +186,7 @@ impl History {
             .get_mut(&id)
             .ok_or(error::ErrorKind::HistoryItemNotFound)?;
         *existing_item = item;
+        self.note_non_append_change();
         Ok(())
     }
 
@@ -111,6 +199,7 @@ impl History {
 
         let id = self.items.remove(n);
         self.id_map.remove(&id);
+        self.note_non_append_change();
         true
     }
 
@@ -127,6 +216,7 @@ impl History {
 
         self.items.push(item.id);
         self.id_map.insert(item.id, item);
+        self.revision = self.revision.wrapping_add(1);
 
         Ok(id)
     }
@@ -140,6 +230,7 @@ impl History {
     pub fn delete_item_by_id(&mut self, id: ItemId) -> Result<(), error::Error> {
         self.id_map.remove(&id);
         self.items.retain(|item_id| *item_id != id);
+        self.note_non_append_change();
 
         Ok(())
     }
@@ -148,6 +239,7 @@ impl History {
     pub fn clear(&mut self) -> Result<(), error::Error> {
         self.id_map.clear();
         self.items.clear();
+        self.note_non_append_change();
         Ok(())
     }
 
@@ -167,38 +259,124 @@ impl History {
         unsaved_items_only: bool,
         write_timestamps: bool,
     ) -> Result<(), error::Error> {
-        // Open the file
-        let mut file_options = std::fs::File::options();
-
+        let history_file_path = history_file_path.as_ref();
         if append {
-            file_options.append(true);
+            let mut file = std::fs::File::options()
+                .create(true)
+                .append(true)
+                .open(history_file_path)?;
+            self.flush_to_writer(&mut file, unsaved_items_only, write_timestamps)
         } else {
-            file_options.write(true).truncate(true);
+            self.flush_overwrite(history_file_path, unsaved_items_only, write_timestamps)
+        }
+    }
+
+    fn flush_to_writer(
+        &mut self,
+        writer: &mut impl Write,
+        unsaved_items_only: bool,
+        write_timestamps: bool,
+    ) -> Result<(), error::Error> {
+        let saved_item_ids = self.write_records(writer, unsaved_items_only, write_timestamps)?;
+        writer.flush()?;
+        self.mark_items_saved(&saved_item_ids);
+        Ok(())
+    }
+
+    fn flush_overwrite(
+        &mut self,
+        history_file_path: &Path,
+        unsaved_items_only: bool,
+        write_timestamps: bool,
+    ) -> Result<(), error::Error> {
+        self.flush_overwrite_with(
+            history_file_path,
+            unsaved_items_only,
+            write_timestamps,
+            |temp_path, target_path| std::fs::rename(temp_path, target_path),
+        )
+    }
+
+    fn flush_overwrite_with(
+        &mut self,
+        history_file_path: &Path,
+        unsaved_items_only: bool,
+        write_timestamps: bool,
+        replace: impl FnOnce(&Path, &Path) -> std::io::Result<()>,
+    ) -> Result<(), error::Error> {
+        let (mut temp_file, temp_path) = create_history_temp_file(history_file_path)?;
+        let write_result = (|| -> std::io::Result<Vec<ItemId>> {
+            let saved_item_ids =
+                self.write_records(&mut temp_file, unsaved_items_only, write_timestamps)?;
+            temp_file.flush()?;
+            temp_file.sync_all()?;
+            Ok(saved_item_ids)
+        })();
+        drop(temp_file);
+
+        let saved_item_ids = match write_result {
+            Ok(saved_item_ids) => saved_item_ids,
+            Err(err) => {
+                let _ = std::fs::remove_file(&temp_path);
+                return Err(err.into());
+            }
+        };
+
+        if let Err(err) = replace(&temp_path, history_file_path) {
+            let _ = std::fs::remove_file(&temp_path);
+            return Err(err.into());
         }
 
-        let mut file = file_options.create(true).open(history_file_path.as_ref())?;
+        self.mark_items_saved(&saved_item_ids);
+        Ok(())
+    }
+
+    fn write_records(
+        &self,
+        writer: &mut impl Write,
+        unsaved_items_only: bool,
+        write_timestamps: bool,
+    ) -> std::io::Result<Vec<ItemId>> {
+        let write_boundaries = write_timestamps
+            || self.items.iter().any(|item_id| {
+                self.id_map.get(item_id).is_some_and(|item| {
+                    (!unsaved_items_only || item.dirty) && item.command_line.contains('\n')
+                })
+            });
+        let mut saved_item_ids = Vec::new();
 
         for item_id in &self.items {
-            if let Some(item) = self.id_map.get_mut(item_id) {
-                if unsaved_items_only && !item.dirty {
-                    continue;
-                }
+            let Some(item) = self.id_map.get(item_id) else {
+                continue;
+            };
+            if unsaved_items_only && !item.dirty {
+                continue;
+            }
 
-                if write_timestamps && let Some(timestamp) = item.timestamp {
-                    writeln!(file, "#{}", timestamp.to_epoch_secs())?;
-                }
+            let mut record = Vec::with_capacity(item.command_line.len() + 32);
+            if write_boundaries {
+                let timestamp = item.timestamp.map_or(0, |value| value.to_epoch_secs());
+                record.extend_from_slice(format!("#{timestamp}\n").as_bytes());
+            }
+            record.extend_from_slice(item.command_line.as_bytes());
+            record.push(b'\n');
 
-                writeln!(file, "{}", item.command_line)?;
-
-                if unsaved_items_only {
-                    item.dirty = false;
-                }
+            // 每条记录只提交一个 buffer, 避免并发 append 时边界与命令分离.
+            writer.write_all(&record)?;
+            if item.dirty {
+                saved_item_ids.push(*item_id);
             }
         }
 
-        file.flush()?;
+        Ok(saved_item_ids)
+    }
 
-        Ok(())
+    fn mark_items_saved(&mut self, item_ids: &[ItemId]) {
+        for item_id in item_ids {
+            if let Some(item) = self.id_map.get_mut(item_id) {
+                item.dirty = false;
+            }
+        }
     }
 
     /// Searches through history using the given query.
@@ -232,6 +410,34 @@ impl History {
     /// Returns the number of items in the history.
     pub fn count(&self) -> usize {
         self.items.len()
+    }
+
+    /// 返回每次内容变化都会更新的版本号.
+    pub const fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    /// 返回仅在非追加变化时更新的版本号.
+    pub const fn non_append_revision(&self) -> u64 {
+        self.non_append_revision
+    }
+
+    /// 仅保留最新的 `max_items` 条记录.
+    pub fn truncate_to_max_items(&mut self, max_items: usize) {
+        if self.items.len() <= max_items {
+            return;
+        }
+
+        let remove_count = self.items.len() - max_items;
+        for id in self.items.drain(..remove_count) {
+            self.id_map.remove(&id);
+        }
+        self.note_non_append_change();
+    }
+
+    fn note_non_append_change(&mut self) {
+        self.revision = self.revision.wrapping_add(1);
+        self.non_append_revision = self.non_append_revision.wrapping_add(1);
     }
 }
 
@@ -479,5 +685,213 @@ impl<'a> Iterator for Search<'a> {
                 return None;
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn import_limit_keeps_newest_items() {
+        let history = History::import_with_limit("one\ntwo\nthree\n".as_bytes(), Some(2)).unwrap();
+        let commands = history
+            .iter()
+            .map(|item| item.command_line.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(commands, ["two", "three"]);
+    }
+
+    #[test]
+    fn append_and_non_append_revisions_are_distinct() {
+        let mut history = History::default();
+        history.add(Item::new("one")).unwrap();
+        let append_revision = history.revision();
+        assert_eq!(history.non_append_revision(), 0);
+
+        history.remove_nth_item(0);
+        assert!(history.revision() > append_revision);
+        assert_eq!(history.non_append_revision(), 1);
+    }
+
+    #[test]
+    fn truncation_keeps_newest_items() {
+        let mut history = History::default();
+        for command in ["one", "two", "three"] {
+            history.add(Item::new(command)).unwrap();
+        }
+
+        history.truncate_to_max_items(2);
+        let commands = history
+            .iter()
+            .map(|item| item.command_line.as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(commands, ["two", "three"]);
+    }
+
+    #[derive(Default)]
+    struct RecordingWriter {
+        payload: Vec<u8>,
+        write_count: usize,
+    }
+
+    impl Write for RecordingWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.write_count += 1;
+            self.payload.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    struct FailingWriter;
+
+    impl Write for FailingWriter {
+        fn write(&mut self, _buf: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::Error::other("写入失败"))
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[derive(Default)]
+    struct FailingFlushWriter {
+        payload: Vec<u8>,
+    }
+
+    impl Write for FailingFlushWriter {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            self.payload.extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> std::io::Result<()> {
+            Err(std::io::Error::other("刷新失败"))
+        }
+    }
+
+    #[test]
+    fn append_writes_each_record_as_one_buffer() {
+        let mut history = History::default();
+        history
+            .add(Item {
+                timestamp: Some(ItemTimestamp::from_epoch(1)),
+                ..Item::new("one")
+            })
+            .unwrap();
+        history
+            .add(Item {
+                timestamp: Some(ItemTimestamp::from_epoch(2)),
+                ..Item::new("two")
+            })
+            .unwrap();
+        let mut writer = RecordingWriter::default();
+
+        history.flush_to_writer(&mut writer, true, true).unwrap();
+
+        assert_eq!(writer.write_count, 2);
+        assert_eq!(writer.payload, b"#1\none\n#2\ntwo\n");
+        assert!(history.iter().all(|item| !item.dirty));
+    }
+
+    #[test]
+    fn multiline_records_roundtrip_with_extended_history_boundaries() {
+        let mut history = History::default();
+        for (timestamp, command) in [
+            (1, "one"),
+            (2, "if true; then\n  echo two\nfi"),
+            (3, "three"),
+        ] {
+            history
+                .add(Item {
+                    timestamp: Some(ItemTimestamp::from_epoch(timestamp)),
+                    ..Item::new(command)
+                })
+                .unwrap();
+        }
+        let scratch = tempfile::tempdir().unwrap();
+        let path = scratch.path().join("history");
+        std::fs::write(&path, "stale\n").unwrap();
+
+        history.flush(&path, false, false, false).unwrap();
+        let payload = std::fs::read(&path).unwrap();
+        let imported = History::import(std::fs::File::open(path).unwrap()).unwrap();
+        let commands = imported
+            .iter()
+            .map(|item| item.command_line.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(
+            payload,
+            b"#1\none\n#2\nif true; then\n  echo two\nfi\n#3\nthree\n"
+        );
+        assert_eq!(commands, ["one", "if true; then\n  echo two\nfi", "three"]);
+    }
+
+    #[test]
+    fn import_limit_counts_extended_records_instead_of_physical_lines() {
+        let history = History::import_with_limit(
+            b"#1\none\ncontinued\n#2\ntwo\n#3\nthree\n".as_slice(),
+            Some(2),
+        )
+        .unwrap();
+        let commands = history
+            .iter()
+            .map(|item| item.command_line.as_str())
+            .collect::<Vec<_>>();
+
+        assert_eq!(commands, ["two", "three"]);
+    }
+
+    #[test]
+    fn failed_write_preserves_dirty_markers() {
+        let mut history = History::default();
+        history.add(Item::new("one")).unwrap();
+
+        assert!(
+            history
+                .flush_to_writer(&mut FailingWriter, true, false)
+                .is_err()
+        );
+        assert!(history.get(0).unwrap().dirty);
+    }
+
+    #[test]
+    fn failed_flush_preserves_dirty_markers() {
+        let mut history = History::default();
+        history.add(Item::new("one")).unwrap();
+        let mut writer = FailingFlushWriter::default();
+
+        assert!(history.flush_to_writer(&mut writer, true, false).is_err());
+        assert_eq!(writer.payload, b"one\n");
+        assert!(history.get(0).unwrap().dirty);
+    }
+
+    #[test]
+    fn failed_atomic_replace_preserves_target_and_dirty_markers() {
+        let scratch = tempfile::tempdir().unwrap();
+        let target = scratch.path().join("history");
+        std::fs::write(&target, "original\n").unwrap();
+        let mut history = History::default();
+        history.add(Item::new("replacement")).unwrap();
+        let mut observed_temp_path = None;
+
+        let result =
+            history.flush_overwrite_with(&target, false, false, |temp_path, target_path| {
+                assert_eq!(temp_path.parent(), target_path.parent());
+                assert_eq!(std::fs::read_to_string(temp_path).unwrap(), "replacement\n");
+                observed_temp_path = Some(temp_path.to_owned());
+                Err(std::io::Error::other("替换失败"))
+            });
+
+        assert!(result.is_err());
+        assert_eq!(std::fs::read_to_string(&target).unwrap(), "original\n");
+        assert!(history.get(0).unwrap().dirty);
+        assert!(!observed_temp_path.unwrap().exists());
     }
 }

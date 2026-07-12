@@ -108,7 +108,7 @@ impl crate::engine::Shell {
         let context = commands::ExecutionContext {
             shell: self,
             command_name,
-            params: params.clone(),
+            params: params.try_clone()?,
         };
 
         let command_args = args

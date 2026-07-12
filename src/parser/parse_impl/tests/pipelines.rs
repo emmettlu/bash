@@ -1,7 +1,8 @@
 //! Tests for pipeline parsing.
 
-use super::{ParseResult, test_with_snapshot};
+use super::{ParseResult, parse, test_with_snapshot};
 use crate::assert_snapshot_redacted;
+use crate::parser::ast::{Command, IoFileRedirectTarget, IoRedirect, PipeKind};
 use anyhow::Result;
 
 #[test]
@@ -35,6 +36,31 @@ fn parse_pipe_with_stderr() -> Result<()> {
         result: &result
     });
     Ok(())
+}
+
+#[test]
+fn pipe_with_stderr_preserves_edge_kind() {
+    let result = parse("echo |& wc").unwrap();
+    let pipeline = &result.complete_commands[0].0[0].0.first;
+
+    assert!(matches!(
+        pipeline.pipe_kinds.as_slice(),
+        [PipeKind::StdoutAndStderr(_)]
+    ));
+}
+
+#[test]
+fn pipe_with_stderr_supports_extended_tests() {
+    let result = parse("[[ -n value ]] |& wc").unwrap();
+    let pipeline = &result.complete_commands[0].0[0].0.first;
+    let Command::ExtendedTest(_, Some(redirects)) = &pipeline.seq[0] else {
+        panic!("expected an extended test with a redirect");
+    };
+
+    assert!(matches!(
+        redirects.0.as_slice(),
+        [IoRedirect::File(Some(2), _, IoFileRedirectTarget::Fd(1))]
+    ));
 }
 
 #[test]

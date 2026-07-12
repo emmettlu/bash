@@ -12,8 +12,8 @@ anyhow = "1"
 bon = "3"
 
 compio = { version = "0", default-features = false, features = ["macros", "runtime"] }
-fancy-regex = "0"
-futures = "0"
+fancy-regex = { version = "0", default-features = false, features = ["perf", "std", "unicode"] }
+futures = { version = "0", default-features = false, features = ["async-await", "std"] }
 itertools = "0"
 log = "0"
 nanoargs = { version = "0", features = ["color"] }
